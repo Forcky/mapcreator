@@ -47,4 +47,4 @@ This project is not affiliated with or endorsed by Kunos Simulazioni. Assetto Co
 
 ## Licence
 
-Not yet chosen. All rights reserved until a licence is added. Third-party code ported into this repository keeps its own licence and notice (see `THIRD_PARTY_NOTICES.md` once it exists).
+Apache License 2.0: see `LICENSE`. Third-party material keeps its own licence and notice (see `THIRD_PARTY_NOTICES.md`). Built tracks carry the data licences of their sources (see `docs/data-sources.md`).

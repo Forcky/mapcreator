@@ -1,0 +1,32 @@
+# GraphHopper 11 for mapcreator's route previews: one car profile over an OSM extract.
+graphhopper:
+  datareader.file: /data/osm/australia-latest.osm.pbf
+  graph.location: /data/graph-car
+  # Not drivable: leaving them out keeps the graph small.
+  import.osm.ignored_highways: footway,cycleway,path,pedestrian,steps,bridleway,corridor
+  graph.encoded_values: car_access, car_average_speed, road_access, road_class, max_speed
+  profiles:
+    - name: car
+      custom_model_files: [car.json, mapcreator_car.json]
+  profiles_ch:
+    - profile: car
+  # The graph is paged from disk: serving Australia then needs well under 1 GB of heap.
+  graph.dataaccess.default_type: MMAP
+  routing.non_ch.max_waypoint_distance: 100000
+
+server:
+  application_connectors:
+    - type: http
+      port: 8989
+      bind_host: 0.0.0.0
+  admin_connectors:
+    - type: http
+      port: 8990
+      bind_host: 127.0.0.1
+  request_log:
+    appenders: []
+
+logging:
+  appenders:
+    - type: console
+      threshold: INFO

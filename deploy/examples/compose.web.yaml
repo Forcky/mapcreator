@@ -59,15 +59,27 @@ services:
       timeout: 5s
       retries: 3
 
-  # Route previews come from a self-hosted GraphHopper with a `car` profile, built from the
-  # Australia extract at download.geofabrik.de. Use any GraphHopper image or jar you have
-  # reviewed and pinned; it only needs to be reachable from `web` on the `routing` network.
-  # graphhopper:
-  #   image: <a GraphHopper image you have reviewed, pinned by digest>
-  #   networks: [routing]
-  #   read_only: true
-  #   cap_drop: [ALL]
-  #   security_opt: ["no-new-privileges:true"]
+  # Route previews: GraphHopper with a car profile (deploy/graphhopper). Import the graph first
+  # (see deploy/graphhopper/README.md) into ./router-data/graph-car.
+  graphhopper:
+    build:
+      context: ../graphhopper
+    image: mapcreator-router:local
+    restart: unless-stopped
+    environment:
+      JAVA_OPTS: "-Xmx700m"
+    volumes:
+      # Writable: GraphHopper keeps a lock file beside the graph.
+      - ./router-data:/data
+    networks: [routing]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
 
 networks:
   edge: {}
