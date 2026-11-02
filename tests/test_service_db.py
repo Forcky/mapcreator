@@ -60,6 +60,7 @@ def test_settings_from_env_parses_and_validates(tmp_path):
     {"MAPCREATOR_TURNSTILE_SECRET": "secret-without-a-site-key"},
     {"MAPCREATOR_DOWNLOAD_BASE": "/api/files"},
     {"MAPCREATOR_DOWNLOAD_BASE": "ftp://files.example.org"},
+    {"MAPCREATOR_PUBLIC_URL": "mapcreator.example.org"},
     {"MAPCREATOR_DB": "out/dl/jobs.sqlite3", "MAPCREATOR_STORAGE_DIR": "out/dl"},
 ])
 def test_settings_reject_bad_values(env):

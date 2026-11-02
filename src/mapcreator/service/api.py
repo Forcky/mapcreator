@@ -31,7 +31,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.datastructures import Headers, MutableHeaders
@@ -44,7 +44,7 @@ from mapcreator.service.db import JobStore, route_hash
 from mapcreator.service.routing import (DevRouter, GraphHopperRouter, OutOfArea, RoutePreview, Router,
                                         RouterUnavailable, RoutingError, check_region)
 from mapcreator.service.settings import ServiceSettings
-from mapcreator.service.storage import LocalStorage, Storage, check_key
+from mapcreator.service.storage import LocalStorage, Storage, check_key, download_headers
 from mapcreator.service.turnstile import MAX_TOKEN_LENGTH, CloudflareTurnstile, Verifier
 
 log = logging.getLogger(__name__)
@@ -378,8 +378,14 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
         log.info("job %s queued", record.id)
         return {"id": record.id, "status": record.status}
 
+    def absolute(url: str, request: Request) -> str:
+        """Download links leave the page (Content Manager fetches them itself), so they must be absolute."""
+        if not url.startswith("/"):
+            return url
+        return (settings.public_url or str(request.base_url)).rstrip("/") + url
+
     @app.get("/api/jobs/{job_id}")
-    def job_status(job_id: str) -> dict:
+    def job_status(job_id: str, request: Request) -> dict:
         record = store.get(job_id) if JOB_ID.match(job_id) else None
         if record is None:
             raise HTTPException(404, "There's no job with that id.")
@@ -396,7 +402,7 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
         }
         if record.status == "done" and record.result:
             out["summary"] = record.result.get("summary") or {}
-            out["download_url"] = storage.url(record.result["key"])
+            out["download_url"] = absolute(storage.url(record.result["key"]), request)
         elif record.status == "failed":
             out["error"] = record.error or "The build failed."
         return out
@@ -452,8 +458,22 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
     # ----- files -----
 
     if settings.serves_downloads:
-        settings.storage_dir.mkdir(parents=True, exist_ok=True)
-        app.mount(settings.download_base.rstrip("/"), StaticFiles(directory=settings.storage_dir), name="downloads")
+        downloads = settings.storage_dir.resolve()
+        downloads.mkdir(parents=True, exist_ok=True)
+
+        @app.api_route(settings.download_base.rstrip("/") + "/{key:path}", methods=["GET", "HEAD"],
+                       include_in_schema=False)
+        def download(key: str) -> FileResponse:
+            """A finished track, as an attachment Content Manager will install. Range requests work."""
+            try:
+                headers = download_headers(key)
+            except ValueError:
+                raise HTTPException(404, "There's no download here.") from None
+            path = downloads / key
+            if not path.is_file():
+                raise HTTPException(404, "There's no download here. It may have expired.")
+            return FileResponse(path, media_type=headers.pop("Content-Type"), headers=headers)
+
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app
 

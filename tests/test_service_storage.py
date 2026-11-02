@@ -52,3 +52,16 @@ def test_turnstile_fails_closed():
 
     assert not turnstile(down).verify("tok")
     assert not turnstile(lambda r: httpx.Response(200, json={"success": True})).verify("")
+
+
+def test_download_headers_name_a_quoted_zip():
+    from mapcreator.service.storage import download_headers
+
+    assert download_headers("abc123/my_road.zip") == {
+        "Content-Type": "application/zip",
+        "Content-Disposition": 'attachment; filename="my_road.zip"',
+    }
+    with pytest.raises(ValueError):
+        download_headers("abc123/my_road.txt")
+    with pytest.raises(ValueError):
+        download_headers("../my_road.zip")

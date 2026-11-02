@@ -40,6 +40,9 @@ class ServiceSettings:
     # starting with "/" makes the web app serve `storage_dir` itself, which only suits local runs.
     storage_dir: Path = Path("out/service/downloads")
     download_base: str = "/downloads"
+    # The site's public address, for absolute download links when this app serves them. Without it the
+    # address the request came in on is used, which is right locally but not always behind a proxy.
+    public_url: str | None = None
     # Abuse limits.
     jobs_per_ip_per_day: int = 5
     max_queued_jobs: int = 50
@@ -69,6 +72,8 @@ class ServiceSettings:
                 raise ValueError("the job database must not be inside the served download folder")
         elif not _is_http_url(self.download_base):
             raise ValueError("MAPCREATOR_DOWNLOAD_BASE must be a path starting with / or an http(s) URL")
+        if self.public_url is not None and not _is_http_url(self.public_url):
+            raise ValueError("MAPCREATOR_PUBLIC_URL must be an http(s) URL")
         if not self.ip_salt:
             raise ValueError("MAPCREATOR_IP_SALT must not be empty")
         for name in ("jobs_per_ip_per_day", "max_queued_jobs", "previews_per_ip_per_minute"):
@@ -99,6 +104,7 @@ class ServiceSettings:
             ("graphhopper_url", "GRAPHHOPPER_URL", str),
             ("storage_dir", "STORAGE_DIR", Path),
             ("download_base", "DOWNLOAD_BASE", str),
+            ("public_url", "PUBLIC_URL", str),
             ("jobs_per_ip_per_day", "JOBS_PER_IP_PER_DAY", int),
             ("max_queued_jobs", "MAX_QUEUED_JOBS", int),
             ("previews_per_ip_per_minute", "PREVIEWS_PER_IP_PER_MINUTE", int),

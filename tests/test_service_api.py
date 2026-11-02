@@ -321,3 +321,56 @@ def test_health_and_config(make):
     cfg = c.get("/api/config").json()
     assert cfg["regions"][0]["name"] == "Tasmania" and cfg["max_waypoints"] == 25
     assert cfg["max_length_km"] == 30.0 and cfg["turnstile_site_key"] == "site-key"
+
+
+def finished_download(tmp_path, **overrides) -> tuple[TestClient, str, bytes]:
+    """An app serving its own downloads, with one finished job whose zip is in place."""
+    settings = ServiceSettings(db_path=tmp_path / "jobs.sqlite3", storage_dir=tmp_path / "downloads",
+                               ip_salt="test-salt", worker_token=TOKEN, **overrides)
+    c = TestClient(create_app(settings, router=FakeRouter()), client=(IP, 50000))
+    job_id = submit(c, job(track_id="my_road")).json()["id"]
+    lease = claim(c)
+    data = b"PK\x03\x04" + bytes(range(256)) * 40
+    (tmp_path / "downloads" / job_id).mkdir(parents=True)
+    (tmp_path / "downloads" / job_id / "my_road.zip").write_bytes(data)
+    c.post(f"/api/worker/jobs/{job_id}/complete", headers=AUTH,
+           json={"worker_id": lease["worker_id"], "result": {"key": f"{job_id}/my_road.zip"}})
+    return c, job_id, data
+
+
+def test_download_urls_are_absolute(tmp_path):
+    c, job_id, _ = finished_download(tmp_path)
+    assert c.get(f"/api/jobs/{job_id}").json()["download_url"] == f"http://testserver/downloads/{job_id}/my_road.zip"
+
+
+def test_download_urls_use_the_public_url_when_set(tmp_path):
+    c, job_id, _ = finished_download(tmp_path, public_url="https://mapcreator.example.org/")
+    url = c.get(f"/api/jobs/{job_id}").json()["download_url"]
+    assert url == f"https://mapcreator.example.org/downloads/{job_id}/my_road.zip"
+
+
+def test_downloads_are_zip_attachments_content_manager_accepts(tmp_path):
+    c, job_id, data = finished_download(tmp_path)
+    url = f"/downloads/{job_id}/my_road.zip"
+    r = c.get(url)
+    assert r.status_code == 200 and r.content == data
+    assert r.headers["Content-Type"] == "application/zip"
+    assert r.headers["Content-Disposition"] == 'attachment; filename="my_road.zip"'
+    assert r.headers["Accept-Ranges"] == "bytes"
+
+    part = c.get(url, headers={"Range": "bytes=4-11"})
+    assert part.status_code == 206 and part.content == data[4:12]
+    assert part.headers["Content-Range"] == f"bytes 4-11/{len(data)}"
+
+    head = c.head(url)
+    assert head.status_code == 200 and head.content == b""
+    assert head.headers["Content-Disposition"] == 'attachment; filename="my_road.zip"'
+
+
+@pytest.mark.parametrize("path", ["/downloads/nothing/here.zip", "/downloads/x/../jobs.sqlite3",
+                                  "/downloads/%2e%2e/jobs.sqlite3", "/downloads/a/b.txt", "/downloads/"])
+def test_missing_downloads_are_plain_404s_not_pages(tmp_path, path):
+    c, _, _ = finished_download(tmp_path)
+    r = c.get(path)
+    assert r.status_code == 404
+    assert "text/html" not in r.headers.get("Content-Type", "")

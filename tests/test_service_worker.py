@@ -80,7 +80,7 @@ def test_worker_builds_uploads_and_reports(env):
     status = client.get(f"/api/jobs/{job_id}").json()
     assert status["status"] == "done", status
     assert status["summary"] == {"title": "Test Road", "length_m": 1000.0}
-    assert status["download_url"] == f"/downloads/{job_id}/test_road.zip"
+    assert status["download_url"] == f"http://testserver/downloads/{job_id}/test_road.zip"
     download = client.get(status["download_url"])
     assert download.status_code == 200
     assert zipfile.ZipFile(io.BytesIO(download.content)).namelist() == ["test_road/ATTRIBUTION.txt"]

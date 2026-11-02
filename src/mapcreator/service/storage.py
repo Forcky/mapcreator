@@ -8,12 +8,18 @@ key names; the database only ever holds the key.
 `LocalStorage` writes to a folder. It suits running the web app and a worker
 on one machine, where the web app serves that folder itself.
 
+Every download must carry `download_headers(key)`. Content Manager (the usual
+AC mod manager) installs from a URL, and it only trusts a quoted
+`Content-Disposition` filename ending in `.zip`. It also scrapes small HTML
+responses for a link to follow, so a download URL must always answer with
+the zip itself (or a plain redirect to it), never an HTML page.
+
 An S3-compatible store (S3, R2, MinIO) is the production shape and is still
 to do. It needs nothing beyond this interface:
-- `put` uploads with `Content-Type: application/zip` and a
-  `Content-Disposition: attachment` header, using credentials scoped to
+- `put` uploads with `download_headers(key)` set as the object's
+  Content-Type and Content-Disposition, using credentials scoped to
   write-only on one bucket prefix (the worker should not be able to list or
-  delete).
+  delete). Object stores answer Range requests themselves.
 - `url` returns either a public bucket URL (`<public base>/<key>`) or a
   short-lived presigned GET; the web app then needs read credentials only.
 - A bucket lifecycle rule expires old tracks; the job row keeps the key, so
@@ -45,6 +51,15 @@ def check_key(key: str) -> str:
     if not KEY_PATTERN.match(key) or any(part.strip(".") == "" for part in key.split("/")):
         raise ValueError(f"not a valid storage key: {key!r}")
     return key
+
+
+def download_headers(key: str) -> dict[str, str]:
+    """What a track download must say about itself, wherever it's served from (see the module notes)."""
+    name = check_key(key).rsplit("/", 1)[-1]
+    if not name.endswith(".zip"):
+        raise ValueError(f"tracks are zip files: {key!r}")
+    # Keys are plain ASCII segments, so the name never needs escaping inside the quotes.
+    return {"Content-Type": "application/zip", "Content-Disposition": f'attachment; filename="{name}"'}
 
 
 class LocalStorage:
