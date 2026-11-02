@@ -20,7 +20,9 @@ SURFACES = [
      "IS_PITLANE": "0", "VIBRATION_GAIN": "0", "VIBRATION_LENGTH": "0"},
     {"KEY": "GRASS", "FRICTION": "0.75", "DAMPING": "0", "WAV": "grass.wav", "WAV_PITCH": "0", "FF_EFFECT": "NULL",
      "DIRT_ADDITIVE": "1", "IS_VALID_TRACK": "0", "BLACK_FLAG_TIME": "0", "SIN_HEIGHT": "0.03", "SIN_LENGTH": "0.5",
-     "IS_PITLANE": "0", "VIBRATION_GAIN": "0.2", "VIBRATION_LENGTH": "0.6"},
+     "IS_PITLANE": "0", "VIBRATION_GAIN": "0.2", "VIBRATION_LENGTH": "0.6",
+     # Custom Shaders Patch: tell SurfacesFX this is grass (ignored by vanilla AC).
+     "_EXT_SURFACE_TYPE": "GRASS"},
 ]
 SURFACE_KEYS = tuple(s["KEY"] for s in SURFACES)
 
@@ -152,9 +154,27 @@ def hillshade(z: np.ndarray, cell: float) -> np.ndarray:
     return np.clip(rgb, 0, 255).astype(np.uint8)
 
 
+def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], version: str) -> str:
+    """Custom Shaders Patch track config (`extension/ext_config.ini`). Vanilla AC ignores it.
+
+    - Grass FX grows procedural grass on our grass materials. CSP's default
+      colour mask means it follows the green patches of the texture. The road
+      occludes it so none grows through the asphalt.
+    - Rain FX puddles and soaks the road and treats grass as rough.
+    """
+    return ini([
+        ("ABOUT", {"AUTHOR": "mapcreator", "VERSION": version}),
+        ("GRASS_FX", {"GRASS_MATERIALS": ", ".join(grass_materials),
+                      "OCCLUDING_MATERIALS": ", ".join(road_materials)}),
+        ("RAIN_FX", {"PUDDLES_MATERIALS": ", ".join(road_materials),
+                     "SOAKING_MATERIALS": ", ".join(road_materials),
+                     "ROUGH_MATERIALS": ", ".join(grass_materials)}),
+    ])
+
+
 def ui_track_json(*, name: str, description: str, tags: list[str], lat: float, lon: float, country: str,
                   city: str, length_m: float, width_m: tuple[float, float], run: str, version: str,
-                  year: int) -> str:
+                  year: int, priority: int | None = None) -> str:
     w0, w1 = width_m
     width = f"{w0:.1f}" if abs(w1 - w0) < 0.05 else f"{w0:.1f}-{w1:.1f}"
     data = {
@@ -164,7 +184,8 @@ def ui_track_json(*, name: str, description: str, tags: list[str], lat: float, l
         "geotags": [f"{lat:.5f}", f"{lon:.5f}"],
         "country": country,
         "city": city,
-        "length": str(int(round(length_m))),
+        # CM parses length with a unit (km / mi / m); a bare number isn't read.
+        "length": f"{length_m / 1000:.2f} km",
         "width": width,
         "pitboxes": "1",
         "run": run,
@@ -172,4 +193,6 @@ def ui_track_json(*, name: str, description: str, tags: list[str], lat: float, l
         "version": version,
         "year": year,
     }
+    if priority is not None:
+        data["priority"] = priority  # CM picks the highest-priority layout as the default
     return json.dumps(data, indent=2, ensure_ascii=True)

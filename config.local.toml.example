@@ -15,3 +15,4 @@
 
 # In-game test harness (Windows, development only):
 # ac_root = "C:/Program Files (x86)/Steam/steamapps/common/assettocorsa"
+# cm_path = "C:/Games/Content Manager/Content Manager.exe"

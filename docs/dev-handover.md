@@ -15,7 +15,7 @@ Everything that can be built and checked without the game is done. The next mile
 | scenery | `mapcreator scenery job.json` | Trees (canopy model or WorldCover) and LIST buildings, visual only | Done, branch `scenery` |
 | track | `mapcreator track job.json` | KN5s, AI lines, layouts, data and UI files, zip | Done, **never loaded in game** |
 | validate | `mapcreator validate job.json` | 70 static checks | Done |
-| `harness/` | `python harness/ac_harness.py …` | Install, race.ini, log and physics checks | Written, **untested** |
+| `harness/` | `python harness/ac_harness.py …` | CM showroom, install and launch; log, results and shared-memory checks | Written, **untested** |
 
 `mapcreator build job.json` runs every stage. The reference job is `examples/grasstree_hill.json`: Grasstree Hill Road (C324), Tasmania, 12.8 km, two layouts.
 
@@ -32,7 +32,7 @@ py -3 -m venv .venv
 Then:
 
 1. Copy the private marker list from the deployment repo to `.private-markers` in this folder. It's gitignored, and the privacy test uses it.
-2. Create `config.local.toml` from `config.local.toml.example` and set `ac_root` to the folder that contains `acs.exe`.
+2. Create `config.local.toml` from `config.local.toml.example`. Set `ac_root` (the folder that contains `acs.exe`) and `cm_path` (`Content Manager.exe`).
 3. Run `.venv\Scripts\python -m pytest -q`. Every test should pass.
 4. Run `.venv\Scripts\mapcreator build examples\grasstree_hill.json`. The first run downloads OSM data (about 45 s) and DEM tiles (about 30 MB). Later runs take about 30 s.
 
@@ -40,17 +40,41 @@ The output is `out\grasstree_hill\05_track\grasstree_hill\` and `grasstree_hill.
 
 ## First drive (M3)
 
-Follow `harness/README.md`. In short:
+Follow `harness/README.md`. It goes through Content Manager, which is what players use. In short:
 
-1. **Look before driving.** In Content Manager, open `grasstree_hill_forward.kn5` in the Custom Showroom. You should see the road, green verges and brown terrain, with no holes or spikes. `out\grasstree_hill\04_mesh\preview.obj` opens in any 3D viewer too.
-2. **Install:** run `python harness\ac_harness.py install out\grasstree_hill\05_track\grasstree_hill`, or drag the zip onto Content Manager.
-3. **Drive:** in Content Manager, Drive → Quick Drive → Practice, track "Grasstree Hill Road", layout north-east (forward), a road car.
-4. **While spawned:** run `python harness\ac_harness.py probe`. All four wheel loads should be above 100 N.
-5. **Drive start to finish.** Check that the timer starts and stops at the gates.
-6. **After quitting AC:** run `python harness\ac_harness.py check-log grasstree_hill`.
-7. **Repeat for the reverse layout,** then add an AI car (M4).
+1. `showroom`: look at the KN5 in CM's Custom Showroom before driving.
+2. `install-cm`: install the zip through CM, the same way users will.
+3. `launch`: start practice through `acmanager://race/config`, then press Drive.
+4. While driving, `probe`: all four wheels should be loaded at the spawn.
+5. Afterwards, `results` and `check-log`.
+6. Repeat for the reverse layout, then add an AI car (M4).
 
-If the track won't load: load an open-source generator's demo track (road-to-assetto) as a control, and compare with `mapcreator.core.kn5.read`.
+If the track won't load:
+
+1. Load an open-source generator's demo track (road-to-assetto) as a control.
+2. Compare the two KN5 files with `mapcreator.core.kn5.read`.
+
+## What Content Manager and CSP expect, and what we already do
+
+Taken from reading CM's source and CSP's docs (Nov 2026). None of it has been tried in game yet.
+
+- **Zip:** `<track_id>/` at the zip root.
+- **Layouts:** each layout needs both `models_<layout>.ini` and `ui/<layout>/ui_track.json`, or CM silently drops it. There's no root `ui/ui_track.json`. The forward layout carries `"priority": 1`, so it's the default.
+- **`ui_track.json`:**
+  - `geotags` must be two strings.
+  - `length` must carry a unit ("12.80 km"); CM ignores a bare number.
+  - CM also warns when the preview, outline or map is missing. We ship all of them.
+- **`extension/ext_config.ini`:**
+  - CSP's Grass FX grows grass on our grass and terrain materials, with the road occluding it.
+  - Rain FX puddles and soaks the road.
+  - Vanilla AC ignores it.
+- **`surfaces.ini`:** GRASS carries `_EXT_SURFACE_TYPE=GRASS` for CSP.
+- **Public install link:** `acmanager://install?url=<encoded zip URL>`. CM always asks the user to confirm.
+- **Download endpoint:**
+  - `application/zip`
+  - a quoted `filename="<id>.zip"`
+  - `Accept-Ranges`
+  - never an HTML page in between
 
 ## Questions only the game can answer
 

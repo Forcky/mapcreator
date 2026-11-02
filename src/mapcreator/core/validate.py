@@ -26,6 +26,8 @@ SPAWNS = ("AC_PIT_0", "AC_START_0", "AC_HOTLAP_START_0")
 SPAWN_HEIGHT = (0.15, 0.5)
 AI_HEIGHT = (0.3, 0.5)
 MIN_GATE_M = 6.0
+# Content Manager's own length pattern (TrackObjectBase): a number followed by a unit.
+CM_LENGTH = re.compile(r"^\W*(\d+(?:[\.,]\d+)?)\W*(?:(km|kilometers)|(mi|miles?)|m)\b")
 MIN_RADIUS_M = 5.0  # tighter than any real hairpin: a routing artefact
 
 
@@ -188,11 +190,13 @@ def track_folder(track_dir: Path) -> Report:
             rep.check(meta.get("pitboxes") == str(pits), f"{label}: pitboxes matches {pits} AC_PIT dummies")
             rep.check(isinstance(meta.get("geotags"), list) and all(isinstance(g, str) for g in meta["geotags"]),
                       f"{label}: geotags are strings")
-            rep.check(isinstance(meta.get("length"), str) and isinstance(meta.get("year"), int),
-                      f"{label}: length is a string and year an integer")
+            length_ok = isinstance(meta.get("length"), str) and re.match(
+                CM_LENGTH, meta["length"])
+            rep.check(bool(length_ok) and isinstance(meta.get("year"), int),
+                      f"{label}: length parses with a unit (as CM reads it) and year is an integer")
         if datas:
             merged = {"nodes": [n for d in datas for n in d["nodes"]], "materials": datas[0]["materials"]}
             _layout_checks(rep, label, merged, all_dummies, base / "ai" / "fast_lane.ai")
-    for rel in ("ATTRIBUTION.txt", "centreline.geojson"):
+    for rel in ("ATTRIBUTION.txt", "centreline.geojson", "extension/ext_config.ini"):
         rep.check((track_dir / rel).exists(), f"{rel} present")
     return rep

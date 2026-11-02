@@ -194,8 +194,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             name=name, description=description,
             tags=["point to point", "real road", country.lower(), region.name.lower()],
             lat=float(lat), lon=float(lon), country=country, city=city, length_m=road.length,
-            width_m=(float(width.min()), float(width.max())), run="point to point", version=__version__,
-            year=dt.date.today().year), encoding="ascii")
+            width_m=(float(width.min()), float(width.max())), run="point-to-point", version=__version__,
+            year=dt.date.today().year, priority=(1 if multi and not lay.reverse else None)), encoding="ascii")
         package.outline_png(xz).save(ui_dir / "outline.png")
         package.preview_png(shade, alpha, pframe, xz).save(ui_dir / "preview.png")
 
@@ -206,6 +206,11 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         }
 
     _write_attribution(track_dir, attributions, title)
+    ext = track_dir / "extension"
+    ext.mkdir()
+    (ext / "ext_config.ini").write_text(package.ext_config_ini(
+        grass_materials=[n for n in ("grass", "terrain") if n in mat_index],
+        road_materials=["road"], version=__version__), encoding="ascii")
     _write_centreline(track_dir, job, c, sec, region, lonlat)
 
     zip_path = out_root / f"{job.track_id}.zip"

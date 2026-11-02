@@ -2,28 +2,39 @@
 
 Assetto Corsa's licence covers personal use, so the game never runs as part of a public build. This harness is for the developer's own PC.
 
+It goes through **Content Manager (CM)**, which most players use to install and launch AC. Set `ac_root` and `cm_path` in `config.local.toml`.
+
 **Status:** written but **untested**. It gets its first run at milestone M3.
 
 ## First drive checklist (M3)
 
-1. Build and validate: `mapcreator build examples/grasstree_hill.json` (this runs every stage, `validate` included).
-2. Install: `python harness/ac_harness.py install out/grasstree_hill/05_track/grasstree_hill`.
-3. In Content Manager, pick the track and the **forward** layout, a road car such as the Abarth 500, and a practice session.
-   - Or run `python harness/ac_harness.py prepare grasstree_hill --layout forward` and start AC from the launcher.
-4. While on track: `python harness/ac_harness.py probe` should report all four wheel loads above 100 N at the spawn.
-5. Drive to the finish. Things to watch for:
-   - does the car spawn facing up the road?
-   - does the timer start at the first gate and stop at the second?
-   - any gaps, bumps or seams?
-   - is the camber believable?
-6. Quit AC, then run `python harness/ac_harness.py check-log grasstree_hill`.
-7. Repeat for the **reverse** layout.
-8. Add an AI opponent and check it drives to the finish (M4).
-9. Run `python harness/ac_harness.py restore` if you used `prepare`.
+1. Build and validate: `mapcreator build examples/grasstree_hill.json`.
+2. **Look first:** `python harness/ac_harness.py showroom out/grasstree_hill/05_track/grasstree_hill/grasstree_hill_forward.kn5` opens the model in CM's Custom Showroom.
+   - Check for the road, green verges, terrain, tree cards, houses and guard rails.
+   - There should be no holes, spikes or pink or black textures.
+3. **Install** one of two ways:
+   - `python harness/ac_harness.py install out/grasstree_hill/05_track/grasstree_hill` copies the folder and clears AC's AI cache.
+   - `python harness/ac_harness.py install-cm out/grasstree_hill/05_track/grasstree_hill.zip` makes CM ask to install it, the way users will.
+
+   CM should list "Grasstree Hill Road (north-east)" and "(south-west)". The north-east layout should be the default, with preview and outline and no red warnings.
+4. **Drive:** `python harness/ac_harness.py launch grasstree_hill --layout forward`, or pick it in CM's Quick Drive. Press Drive in the pits menu.
+5. **While on track:** `python harness/ac_harness.py probe` should show:
+   - status 2 (live)
+   - all four wheel loads above 100 N
+   - the car's position
+6. **Drive to the finish.** Watch for:
+   - Does the car spawn facing up the road?
+   - Does the A→B timer start and stop at the gates?
+   - Do guard rails and houses stop the car?
+   - Any gaps, bumps or seams? Is the camber believable?
+   - With CSP: is there Grass FX grass on the verges and none on the road?
+7. **After the session:** `python harness/ac_harness.py results` lists the times. It's still unconfirmed whether A→B runs appear as laps.
+8. **After quitting AC:** `python harness/ac_harness.py check-log grasstree_hill` checks `log.txt` and the CSP log.
+9. Repeat for `--layout reverse`, then add an AI opponent in Quick Drive and check it reaches the finish (M4).
 
 If the track doesn't load at all:
 
-1. Load road-to-assetto's demo track as a control. If that fails too, the problem is the environment, not our writer.
+1. Load road-to-assetto's demo track as a control. If that also fails, the problem is the environment, not our writer.
 2. Then compare the two KN5 files with `mapcreator.core.kn5.read`.
 
 ## What to record
@@ -31,6 +42,18 @@ If the track doesn't load at all:
 Write these into the private deployment notes:
 
 - the spawn facing (+Z or −Z) and height
+- whether the A→B timing shows in `race_out.json`
 - whether the AI completes the run
-- frame rate on the GTX 1660 Ti
-- every `log.txt` error
+- frame rate on the GTX 1660 Ti, with and without CSP
+- every log error
+
+## Later: automated checks with a CSP Lua app
+
+A Custom Shaders Patch Lua app can drive the whole check without a person:
+
+1. Press Drive with `ac.tryToStart`.
+2. Teleport the car every 200 m along the road with `physics.setCarPosition`.
+3. At each point, read wheel contact and whether the surface is valid track, and take a screenshot.
+4. Write the results to JSON and quit.
+
+The MIT-licensed `claude_bridge` app in stormbuster/assetto-corsa-mcp already does teleporting and screenshots this way. Teleporting is confirmed in offline practice only.
