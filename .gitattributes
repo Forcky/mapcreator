@@ -1,2 +1,4 @@
 # Vendored third-party files are stored byte for byte, so their recorded hashes stay checkable.
 src/mapcreator/service/static/vendor/** -text
+# Container and proxy config is read on Linux, where a stray CR breaks line continuations and Squid.
+deploy/** text eol=lf
