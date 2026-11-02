@@ -1,0 +1,30 @@
+# Example only: a build worker (mapcreator-worker). It needs the base package only;
+# the [service] extra (FastAPI, uvicorn) is for the web side.
+# Build from the repository root:
+#   docker build -f deploy/examples/Dockerfile.worker -t mapcreator-worker:local .
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN groupadd --system --gid 10001 mapcreator \
+ && useradd --system --uid 10001 --gid 10001 --home-dir /nonexistent --no-create-home \
+      --shell /usr/sbin/nologin mapcreator \
+ && install -d -o 10001 -g 10001 /cache /scratch
+
+WORKDIR /opt/mapcreator
+COPY pyproject.toml README.md ./
+COPY src ./src
+# The only network access at build time is pip fetching the package's dependencies
+# (rasterio's wheels bundle GDAL, so no system packages are needed).
+RUN pip install . && rm -rf /opt/mapcreator/src /opt/mapcreator/build
+
+USER 10001:10001
+# Scratch space for each job's work folder; mount a size-limited tmpfs here.
+ENV HOME=/scratch \
+    TMPDIR=/scratch \
+    XDG_CACHE_HOME=/scratch/.cache \
+    MAPCREATOR_CACHE_DIR=/cache
+CMD ["mapcreator-worker"]

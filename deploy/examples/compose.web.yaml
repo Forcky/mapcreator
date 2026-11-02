@@ -1,0 +1,72 @@
+# Example only, not tested as written: adapt it to your own host. Names under example.org,
+# the 192.0.2.x documentation address and everything in web.env are placeholders.
+#
+# The web app sits behind your TLS-terminating reverse proxy, in a DMZ. It never connects to a
+# worker: workers connect to it. Run from this folder:
+#   docker compose -f compose.web.yaml up -d --build
+#
+# web.env (not committed) holds the secrets, for example:
+#   MAPCREATOR_WORKER_TOKEN=<python -c "import secrets; print(secrets.token_urlsafe(32))">
+#   MAPCREATOR_IP_SALT=<another random value>
+#   MAPCREATOR_TURNSTILE_SECRET=<from your Cloudflare Turnstile widget>
+#   MAPCREATOR_TURNSTILE_SITE_KEY=<from the same widget>
+name: mapcreator-web
+
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/examples/Dockerfile.web
+    image: mapcreator-web:local
+    restart: unless-stopped
+    env_file: web.env
+    environment:
+      MAPCREATOR_PUBLIC_URL: https://mapcreator.example.org
+      MAPCREATOR_ROUTER: graphhopper
+      MAPCREATOR_GRAPHHOPPER_URL: http://graphhopper:8989
+      # Tracks are downloaded from object storage once it is supported (see storage.py). Until then
+      # the default (/downloads, served by this app) only works with a worker on the same host.
+      # MAPCREATOR_DOWNLOAD_BASE: https://downloads.example.org/tracks
+      # Your reverse proxy's address as this container sees it, and the header the proxy
+      # overwrites with the client's address. Anyone else's copy of that header is ignored.
+      MAPCREATOR_TRUSTED_PROXIES: 192.0.2.10
+      MAPCREATOR_CLIENT_IP_HEADER: X-Forwarded-For
+    volumes:
+      - jobs:/var/lib/mapcreator
+    ports:
+      # Published on loopback only, for the reverse proxy on the same host.
+      - "127.0.0.1:8000:8000"
+    networks: [edge, routing]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Route previews come from a self-hosted GraphHopper with a `car` profile, built from the
+  # Australia extract at download.geofabrik.de. Use any GraphHopper image or jar you have
+  # reviewed and pinned; it only needs to be reachable from `web` on the `routing` network.
+  # graphhopper:
+  #   image: <a GraphHopper image you have reviewed, pinned by digest>
+  #   networks: [routing]
+  #   read_only: true
+  #   cap_drop: [ALL]
+  #   security_opt: ["no-new-privileges:true"]
+
+networks:
+  edge: {}
+  # Internal: GraphHopper needs no internet access once its graph is built.
+  routing:
+    internal: true
+
+volumes:
+  jobs: {}

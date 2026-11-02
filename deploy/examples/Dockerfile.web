@@ -1,0 +1,28 @@
+# Example only: the public web front end, job queue and API (mapcreator-web).
+# Build from the repository root:
+#   docker build -f deploy/examples/Dockerfile.web -t mapcreator-web:local .
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# A fixed unprivileged user; the job database lives on a volume it owns.
+RUN groupadd --system --gid 10001 mapcreator \
+ && useradd --system --uid 10001 --gid 10001 --home-dir /nonexistent --no-create-home \
+      --shell /usr/sbin/nologin mapcreator \
+ && install -d -o 10001 -g 10001 /var/lib/mapcreator
+
+WORKDIR /opt/mapcreator
+COPY pyproject.toml README.md ./
+COPY src ./src
+# The only network access at build time is pip fetching the package's dependencies.
+RUN pip install ".[service]" && rm -rf /opt/mapcreator/src /opt/mapcreator/build
+
+USER 10001:10001
+ENV HOME=/tmp \
+    MAPCREATOR_DB=/var/lib/mapcreator/jobs.sqlite3 \
+    MAPCREATOR_STORAGE_DIR=/var/lib/mapcreator/downloads
+EXPOSE 8000
+CMD ["mapcreator-web", "--host", "0.0.0.0", "--port", "8000"]

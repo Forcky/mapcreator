@@ -1,0 +1,79 @@
+# Example only, not tested as written: adapt it to your own host. Names under example.org and
+# everything in worker.env are placeholders.
+#
+# A build worker that accepts no connections and can reach nothing but an allowlist:
+# - `worker` is only on `jobs`, an internal network with no route out.
+# - `egress` (Squid) is on `jobs` and `outside`. It forwards HTTPS to the hosts listed in
+#   egress-allowlist.txt and refuses private, loopback and link-local destinations
+#   (squid.conf), even when an allowed name resolves to one.
+# Run from this folder:
+#   docker compose -f compose.worker.yaml up -d --build
+#
+# worker.env (not committed) holds the secret:
+#   MAPCREATOR_WORKER_TOKEN=<the same token the web app has>
+name: mapcreator-worker
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  worker:
+    <<: *hardening
+    build:
+      context: ../..
+      dockerfile: deploy/examples/Dockerfile.worker
+    image: mapcreator-worker:local
+    restart: unless-stopped
+    env_file: worker.env
+    environment:
+      MAPCREATOR_API_BASE: https://mapcreator.example.org
+      # Python (httpx) and GDAL's libcurl both read these.
+      HTTPS_PROXY: http://egress:3128
+      https_proxy: http://egress:3128
+      GDAL_HTTP_PROXY: egress:3128
+      NO_PROXY: ""
+      # A local mirror of the Tasmania 2 m DEM is much faster than reading it over HTTPS:
+      # MAPCREATOR_TAS_DEM: /mirror/Tasmania_Statewide_2m_DEM_14-08-2021.tif
+    user: "10001:10001"
+    volumes:
+      - cache:/cache
+      # - <path to your DEM mirror>:/mirror:ro
+    tmpfs:
+      # Each job's work folder. Size it for your longest track.
+      - /scratch:size=8g,uid=10001,gid=10001,mode=0700
+    networks: [jobs]
+    depends_on: [egress]
+    mem_limit: 6g
+    cpus: 2.0
+    pids_limit: 256
+    # The first SIGTERM lets the current build finish; give it time before the SIGKILL.
+    stop_grace_period: 15m
+
+  egress:
+    <<: *hardening
+    # Pin a tag or digest you have reviewed.
+    image: ubuntu/squid:latest
+    restart: unless-stopped
+    volumes:
+      - ./squid.conf:/etc/squid/squid.conf:ro
+      - ./egress-allowlist.txt:/etc/squid/egress-allowlist.txt:ro
+    tmpfs:
+      - /var/spool/squid
+      - /var/log/squid
+      - /run
+    # Squid starts as root and switches to its own user, so it needs these two back.
+    cap_add: [SETUID, SETGID]
+    networks: [jobs, outside]
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+
+networks:
+  jobs:
+    internal: true
+  outside: {}
+
+volumes:
+  cache: {}

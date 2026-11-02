@@ -1,0 +1,21 @@
+# Keep local configuration, secrets and data out of container build contexts.
+.git
+.venv
+venv
+**/__pycache__
+*.egg-info
+build
+dist
+.pytest_cache
+config.local.toml
+.private-markers
+.env
+*.env
+data
+out
+cache
+harness
+tests
+docs
+examples
+deploy

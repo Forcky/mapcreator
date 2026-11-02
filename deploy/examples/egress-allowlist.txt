@@ -1,0 +1,19 @@
+# Hosts the build worker may reach through the egress proxy (Squid dstdomain format:
+# one per line; a leading dot also allows subdomains). Lines starting with # are comments.
+
+# The web app's job API. Placeholder: use your own.
+mapcreator.example.org
+
+# Object storage the worker uploads finished tracks to. Placeholder: use your own.
+storage.example.org
+
+# Tasmania 2 m DEM (cloud-optimised GeoTIFF), unless you mount a local mirror.
+data.source.coop
+
+# theLIST services (Tasmanian government open data).
+services.thelist.tas.gov.au
+
+# OpenStreetMap. Overpass is for light development use only; production should read a
+# local Geofabrik extract, after which overpass-api.de can be removed from this list.
+overpass-api.de
+download.geofabrik.de
