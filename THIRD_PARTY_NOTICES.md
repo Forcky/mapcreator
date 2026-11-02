@@ -27,7 +27,7 @@ The KN5, `fast_lane.ai` and track-folder writers in `src/mapcreator/core/` were 
 | [gottschalkfelix4-source/road-to-assetto](https://github.com/gottschalkfelix4-source/road-to-assetto) | Apache-2.0 | KN5 layout, material values, in-game load-test approach |
 | [KinG-InFeT/blender-assetto-corsa-track-generator](https://github.com/KinG-InFeT/blender-assetto-corsa-track-generator) | Apache-2.0 | Multi-layout folder structure |
 | [johnzara/ac-track-studio](https://github.com/johnzara/ac-track-studio) | MIT | `fast_lane.ai` v7 layout, AI line height above the road, DDS mip encoding |
-| [gro-ove/actools](https://github.com/gro-ove/actools) (`AcTools/Kn5File`, `AcTools/AiFile`, `AcManager/Tools`) | MS-PL | Cross-checking the KN5 and AI layouts against Content Manager's reader; CM's install, launch and ui_track.json rules |
+| [gro-ove/actools](https://github.com/gro-ove/actools) (`AcTools/Kn5File`, `AcTools/AiFile`, `AcManager/Tools`, `AcTools.ExtraKn5Utils/Helpers/AcTreeModelConverter.cs`) | MS-PL | Cross-checking the KN5 and AI layouts against Content Manager's reader; CM's install, launch and ui_track.json rules; the layout of Custom Shaders Patch Tree FX models, which `core/treefx.py` re-implements |
 | [stormbuster/assetto-corsa-mcp](https://github.com/stormbuster/assetto-corsa-mcp) | MIT | The teleport-and-check approach of the CSP probe app (`harness/csp_app/mc_probe`), written separately from the CSP Lua SDK docs |
 
 ## Data

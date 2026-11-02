@@ -47,7 +47,7 @@ A job with `"layouts": "both"` produces:
 | `1GRASS_V###L/R` (verge and skirt) | GRASS |
 | `1GRASS_T###` (terrain) | GRASS |
 | `1WALL_RAIL_L/R###` (invisible, `isRenderable` 0) and `1WALL_BUILDINGS` | solid barrier (no KEY: any physics mesh named WALL) |
-| `RAIL_*`, `TREES_*`, `BUILDING_ROOF_*` | visual only (no leading digit) |
+| `RAIL_*`, `TREES_*`, `BUILDING_ROOF_*`, `WATER_*` | visual only (no leading digit) |
 
 - Each physics mesh name matches exactly one KEY. There is deliberately no `WALL` KEY, because defining one is reported to make walls driveable.
 - **Logic dummies:**
@@ -55,6 +55,23 @@ A job with `"layouts": "both"` produces:
   - `AC_PIT_0` and `AC_START_0` sit 8 m before the start gate; `AC_HOTLAP_START_0` sits 30 m before it.
   - Spawns are 0.3 m above the road and face the driving direction. **To confirm in game:** height and facing.
 - **Pits:** `pitboxes` in `ui_track.json` must equal the number of `AC_PIT_n` dummies (1).
+
+## Custom Shaders Patch (`extension/`)
+
+Vanilla AC ignores this folder. `ext_config.ini` holds:
+
+- **Grass FX and Rain FX:** grass grows on the grass and terrain materials, and the road gets puddles.
+- **Water:** `[INCLUDE: common/materials_track.ini]` and `[Material_Water]` give the `water` material CSP's water shader, as `LAKE` or `SEA`. Vanilla AC shows a flat, glossy blue-green surface.
+- **Tree FX:** `[TREES]` with `LIST_0=trees/trees.txt` and `SURFACE_MATERIALS=terrain, grass`, so CSP stands each tree on the ground.
+  - The KN5's tree cards are drawn as well. A commented-out `[MESH_ADJUSTMENT_TREE_CARDS]` (`MESHES = TREES_?`, `IS_RENDERABLE = 0`) would hide them under CSP.
+
+`extension/trees/`:
+
+- **`trees.txt`:** one line per tree: `tree: <model>.bin; pos=x, y, z; angle = <deg>; size = <mult>; width = <mult>`.
+  - The position is the tree's base, in AC coordinates.
+  - `size` scales the model's own height; `width` scales it horizontally only.
+  - The `configure:` lines at the top switch off CSP's own random variation.
+- **`<model>.bin`:** a zip of `tree.ini`, one `.mesh` per LOD and the DDS textures. The byte layout is in `core/treefx.py`. It was re-implemented from Content Manager's tree converter, which is the reference writer.
 
 ## AI line (`ai/fast_lane.ai`, version 7)
 

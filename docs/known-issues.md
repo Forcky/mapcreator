@@ -13,6 +13,11 @@ These need the in-game harness on a machine with Assetto Corsa (`docs/dev-handov
 - triangle winding and the front-face convention as AC renders them (the code is self-consistent and matches the KN5 references, but nothing has been drawn in game yet)
 - what `map.ini`'s `SCALE_FACTOR` means to the game's track map
 - what the AI line's `direction` field does
+- the Tree FX model files: written to the converter's layout and read back by our own parser, but not yet loaded by CSP. Still unknown:
+  - the meaning of the trailer's `4`;
+  - how CSP treats a list position's height when surface alignment is on;
+  - whether `size` scales exactly as assumed (model height × size).
+- with CSP running, each tree is drawn twice (its card and its 3D model) until the cards are hidden; see `docs/dev-handover.md`
 - whether the AI drives the generated `fast_lane.ai` sensibly through hairpins
 - in the harness (`harness/`), checked against Content Manager's source and the CSP SDK but never run:
   - whether the probe app loads with its manifest (it now declares a small window, as every CSP app found does)

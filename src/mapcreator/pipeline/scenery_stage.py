@@ -4,6 +4,10 @@ Trees come from the region's individual-crown canopy model when one is
 configured (Tasmania's 2 m CHM mirror), otherwise from ESA WorldCover tree
 cover. Buildings come from the region's footprint layer. Everything here is
 visual only.
+
+Every tree is drawn twice: as cards in the KN5, which every player sees, and as
+a 3D model in a Custom Shaders Patch Tree FX list (`treefx/`), which only CSP
+reads. The track stage packs the list and models into the track's extension folder.
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ import shapely
 
 from mapcreator.config import Settings
 from mapcreator.core import mesh as base_mesh
-from mapcreator.core import scenery, sprites
+from mapcreator.core import scenery, sprites, treefx
 from mapcreator.core.scene import Material, Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import mesh_stage, profile_stage, section_stage
@@ -97,6 +101,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     meshes += scenery.building_meshes(buildings, dem.sample, frame, rng)
 
     out = work.stage(STAGE)
+    fx = _tree_fx(trees, ground, frame, rng, out)
     textures = {"trees": out / "trees.png", "walls": out / "walls.png"}
     sprites.tree_atlas().save(textures["trees"])
     sprites.weatherboard().save(textures["walls"])
@@ -112,12 +117,35 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     return {
         "trees": len(trees),
         "tree_source": source,
+        "tree_fx_models": fx,
         "buildings": len(buildings),
         "buildings_source": buildings_note or "ok",
         "meshes": len(meshes),
         "vertices": int(sum(len(m.positions) for m in meshes)),
         "triangles": int(sum(len(m.triangles) for m in meshes)),
     }
+
+
+def _tree_fx(trees: scenery.Trees, ground: np.ndarray, frame, rng: np.random.Generator, out) -> list[str]:
+    """3D models for Tree FX and a placement for every tree: a model that suits its height, scaled to it."""
+    fx = out / "treefx"
+    if fx.exists():
+        for old in fx.iterdir():
+            old.unlink()
+    fx.mkdir(exist_ok=True)
+    models = treefx.library()
+    names = list(models)
+    tex = treefx.texture_files()
+    for name, model in models.items():
+        (fx / f"{name}.bin").write_bytes(treefx.model_bin(model, tex))
+    n = len(trees)
+    model = treefx.assign(trees.height, names, rng)
+    own_height = np.array([models[name].box[0] for name in names])
+    np.savez(fx / "placement.npz",
+             pos=frame.to_ac(trees.xy[:, 0], trees.xy[:, 1], ground) if n else np.zeros((0, 3)),
+             model=model, size=np.clip(trees.height / own_height[model], 0.3, 3.0) if n else np.zeros(0),
+             angle=rng.uniform(0, 360, n), width=rng.uniform(0.85, 1.15, n), names=np.array(names))
+    return names
 
 
 def _attr(module: str):

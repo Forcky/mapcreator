@@ -35,23 +35,43 @@ def test_thinning_keeps_everything_near_the_road_and_less_far_away():
     assert far_kept == pytest.approx(0.25, abs=0.03)
 
 
-def test_tree_cards_are_two_crossed_double_sided_quads():
+def test_tree_cards_are_three_double_sided_quads_with_rounded_normals():
     trees = scenery.Trees(np.array([[500_350.0, 5_200_020.0], [500_450.0, 5_199_970.0]]), np.array([20.0, 12.0]))
     meshes = scenery.tree_meshes(trees, np.array([10.0, 12.0]), FRAME, CENTRE, np.random.default_rng(2))
     assert len(meshes) == 1
     m = meshes[0]
     assert m.name.startswith("TREES_") and not m.name[0].isdigit()  # visual only
-    assert len(m.positions) == 2 * 8 and len(m.triangles) == 2 * 8
+    per = 4 * scenery.CARD_PLANES
+    assert len(m.positions) == 2 * per and len(m.triangles) == 2 * per
     m.validate()
-    # Base sunk below the ground, top at ground + height.
-    assert m.positions[:8, 1].min() == pytest.approx(10.0 - scenery.SINK_M, abs=1e-3)
-    assert m.positions[:8, 1].max() == pytest.approx(10.0 + 20.0, abs=1e-3)
+    # Base sunk below the ground, top at ground + height (the first tree's cards come first in each plane).
+    first = np.concatenate([np.arange(k * 8, k * 8 + 4) for k in range(scenery.CARD_PLANES)])
+    assert m.positions[first, 1].min() == pytest.approx(10.0 - scenery.SINK_M, abs=1e-3)
+    assert m.positions[first, 1].max() == pytest.approx(10.0 + 20.0, abs=1e-3)
     # Every triangle appears in both windings.
     fwd = {tuple(sorted(t)) for t in m.triangles.tolist()}
     assert len(fwd) == len(m.triangles) // 2
+    # Normals are unit, lean up everywhere, and lean out towards each card's edges.
+    nrm = m.normals.astype(float)
+    assert np.allclose(np.linalg.norm(nrm, axis=1), 1, atol=1e-5) and (nrm[:, 1] > 0.4).all()
+    pos = m.positions.astype(float)
+    for card in range(2 * scenery.CARD_PLANES):
+        q = slice(card * 4, card * 4 + 4)
+        centre = pos[q].mean(axis=0)
+        out = ((pos[q] - centre)[:, [0, 2]] * nrm[q][:, [0, 2]]).sum(axis=1)
+        assert (out > 0).all()
     # Cards never reach past the road edge (half width 3.5 m by default).
     e, n, _ = FRAME.from_ac(m.positions.astype(float))
     assert np.abs(n - 5_200_000).min() >= 3.5 - 1e-6
+
+
+def test_short_trees_get_wattles_and_young_trees_not_tall_eucalypts():
+    rng = np.random.default_rng(4)
+    short = sprites.card_variants(np.full(2000, 7.0), rng)
+    tall = sprites.card_variants(np.full(2000, 25.0), rng)
+    kinds = np.array(sprites.CARD_KINDS)
+    assert set(kinds[short]) <= {"euc_young", "euc_dense", "wattle", "sheoak"}
+    assert "wattle" not in set(kinds[tall]) and "euc_tall" in set(kinds[tall])
 
 
 def test_buildings_get_walls_and_roofs_and_skip_the_road():
@@ -90,7 +110,7 @@ def test_dxt5_keeps_alpha():
 
 
 def test_tree_uv_cells_tile_the_atlas():
-    cells = [sprites.tree_uv_cell(v) for v in range(sprites.TREE_GRID ** 2)]
+    cells = [sprites.tree_uv_cell(v) for v in range(sprites.TREE_VARIANTS)]
     assert all(0 <= u0 < u1 <= 1 and 0 <= v0 < v1 <= 1 for u0, v0, u1, v1 in cells)
     assert len(set(cells)) == len(cells)
 
