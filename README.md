@@ -16,7 +16,7 @@ Developers picking this up on a machine with Assetto Corsa: start with `docs/dev
 3. It generates the road, verges, terrain, scenery, timing gates and an AI line.
 4. It writes a ready-to-install track: a KN5 model plus the `data/`, `ai/` and `ui/` folders.
 
-Each stage writes its output to disk and can be rerun on its own. See [docs/architecture.md](docs/architecture.md) for the parts, [docs/data-flows.md](docs/data-flows.md) for what moves between them and what is kept, and [docs/deploy.md](docs/deploy.md) for running the hosted service.
+Each stage writes its output to disk and can be rerun on its own. See [docs/architecture.md](docs/architecture.md) for the parts, [docs/data-flows.md](docs/data-flows.md) for what moves between them and what is kept, [docs/deploy.md](docs/deploy.md) for running the hosted service, and [docs/known-issues.md](docs/known-issues.md) for what's known not to work yet.
 
 ## Data principles
 
