@@ -21,13 +21,19 @@ dependencies = [
 
 [project.optional-dependencies]
 plots = ["matplotlib>=3.9"]
-dev = ["pytest>=8", "matplotlib>=3.9"]
+# The hosted web front end and job API. Build workers need only the base package.
+service = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
+dev = ["pytest>=8", "matplotlib>=3.9", "fastapi>=0.115"]
 
 [project.scripts]
 mapcreator = "mapcreator.cli.main:main"
+mapcreator-web = "mapcreator.service.api:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"mapcreator.service" = ["static/*.html", "static/*.js", "static/*.css", "static/vendor/*/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

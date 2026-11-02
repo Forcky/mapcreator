@@ -60,6 +60,15 @@ class ServiceSettings:
             raise ValueError("MAPCREATOR_GRAPHHOPPER_URL must be an http(s) URL when the router is graphhopper")
         if self.worker_token is not None and len(self.worker_token) < MIN_TOKEN_LENGTH:
             raise ValueError(f"MAPCREATOR_WORKER_TOKEN must be at least {MIN_TOKEN_LENGTH} characters")
+        if bool(self.turnstile_secret) != bool(self.turnstile_site_key):
+            raise ValueError("set both MAPCREATOR_TURNSTILE_SECRET and MAPCREATOR_TURNSTILE_SITE_KEY, or neither")
+        if self.serves_downloads:
+            if self.download_base.rstrip("/") == "" or self.download_base.startswith("/api"):
+                raise ValueError("MAPCREATOR_DOWNLOAD_BASE must not be / or under /api")
+            if self.storage_dir.resolve() in self.db_path.resolve().parents:
+                raise ValueError("the job database must not be inside the served download folder")
+        elif not _is_http_url(self.download_base):
+            raise ValueError("MAPCREATOR_DOWNLOAD_BASE must be a path starting with / or an http(s) URL")
         if not self.ip_salt:
             raise ValueError("MAPCREATOR_IP_SALT must not be empty")
         for name in ("jobs_per_ip_per_day", "max_queued_jobs", "previews_per_ip_per_minute"):
