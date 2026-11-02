@@ -39,6 +39,9 @@ services:
       MAPCREATOR_S3_ENDPOINT: https://<account id>.r2.cloudflarestorage.com
       MAPCREATOR_S3_BUCKET: mapcreator-tracks
       MAPCREATOR_DOWNLOAD_BASE: https://downloads.example.org
+      # Roads (and buildings outside Tasmania) from the local OSM index, built elsewhere with
+      # `python -m mapcreator.providers.osm.index build`. Overpass isn't on the egress allowlist.
+      MAPCREATOR_OSM_INDEX: /osm/australia.sqlite
       # Local mirrors (scripts/mirror.py) are much faster than reading over HTTPS, and the canopy
       # model can only be read from a mirror:
       # MAPCREATOR_TAS_DEM: /mirror/Tasmania_Statewide_2m_DEM_14-08-2021.tif
@@ -46,6 +49,8 @@ services:
     user: "10001:10001"
     volumes:
       - cache:/cache
+      # The folder holding australia.sqlite. Read-only: the index is opened immutable.
+      - ./osm:/osm:ro
       # - <path to your DEM mirror>:/mirror:ro
     tmpfs:
       # Each job's work folder. Size it for your longest track.

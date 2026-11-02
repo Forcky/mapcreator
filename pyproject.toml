@@ -25,6 +25,8 @@ plots = ["matplotlib>=3.9"]
 service = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
 # Object storage (S3, Cloudflare R2, MinIO) for finished tracks.
 s3 = ["boto3>=1.34"]
+# Building the local OSM index from a .osm.pbf extract. Workers only query the index and don't need it.
+osm = ["osmium>=4"]
 dev = ["pytest>=8", "matplotlib>=3.9", "fastapi>=0.115"]
 
 [project.scripts]

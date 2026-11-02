@@ -2,9 +2,10 @@
 
 Regions are checked in order, best data first:
 - Tasmania has 2 m LiDAR elevation, a canopy model and building footprints.
-- Anywhere else in Australia falls back to national data: GA's ~30 m DEM-S
-  and ESA WorldCover trees, with no building layer yet. That region works in
-  the MGA zone of the route's start.
+- Anywhere else in Australia falls back to national data: GA's ~30 m DEM-S,
+  ESA WorldCover trees, and OSM building footprints when a local OSM index is
+  configured (none without one). That region works in the MGA zone of the
+  route's start.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Callable
 from pyproj import Transformer
 
 from mapcreator.config import Settings
-from mapcreator.providers.base import OSM, Attribution
+from mapcreator.providers.base import OSM, OSM_BUILDINGS, Attribution
 
 # A DEM coarser than this can't resolve a road's camber or the drop beside it.
 FINE_DEM_M = 5.0
@@ -98,6 +99,20 @@ TASMANIA = Region(
 AUSTRALIA_BBOX = (112.0, -44.0, 154.0, -9.0)
 
 
+def _osm_buildings(epsg: int) -> Callable[[tuple, Settings], list]:
+    """Footprints from the local OSM index, in the region's CRS. Without an index there are none:
+    public Overpass is for light development use, so it isn't asked for buildings at all."""
+
+    def buildings(bbox: tuple, settings: Settings) -> list:
+        if not settings.osm_index:
+            return []
+        from mapcreator.providers.osm import index
+
+        return index.buildings(settings.osm_index, bbox, epsg)
+
+    return buildings
+
+
 def mga_zone(lon: float) -> int:
     """UTM/MGA zone number for a longitude (Australia spans zones 49 to 56)."""
     return int(math.floor((lon + 180) / 6)) + 1
@@ -115,7 +130,8 @@ def australia(zone: int) -> Region:
     from mapcreator.providers.ga.dem_s import ATTRIBUTION as DEM_S
 
     return Region(key=f"au{zone}", name="Australia", epsg=epsg, bbox=AUSTRALIA_BBOX, elevation=elevation,
-                  attributions=(OSM, DEM_S), height_datum="AHD (approximately; SRTM-derived)")
+                  attributions=(OSM, DEM_S), buildings=_osm_buildings(epsg), buildings_attribution=OSM_BUILDINGS,
+                  height_datum="AHD (approximately; SRTM-derived)")
 
 
 # What users are told is supported (names and extents for the map page): Tasmania with

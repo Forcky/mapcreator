@@ -28,6 +28,14 @@ OSM = Attribution(
     note="The enriched centreline ships as centreline.geojson under ODbL.",
 )
 
+# Footprints from the local OSM index, extruded into scenery (a Produced Work, so attribution is enough).
+OSM_BUILDINGS = Attribution(
+    dataset="Building footprints",
+    holder="© OpenStreetMap contributors",
+    licence="ODbL 1.0",
+    licence_url="https://www.openstreetmap.org/copyright",
+)
+
 TAS_DEM = Attribution(
     dataset='"Tasmania 2 metre DEM" from theLIST',
     holder="© State of Tasmania",

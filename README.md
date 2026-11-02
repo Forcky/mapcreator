@@ -4,7 +4,7 @@ Generate drivable [Assetto Corsa](https://www.assettocorsa.it/) tracks from real
 
 **Status:** the full pipeline builds installable tracks and passes its static checks, but **no track has been loaded in the game yet**. That's the next milestone.
 
-- **Coverage:** Tasmania has detailed data (2 m LiDAR elevation, canopy and building footprints). The rest of Australia uses a national fallback (30 m elevation, ESA WorldCover trees).
+- **Coverage:** Tasmania has detailed data (2 m LiDAR elevation, canopy and building footprints). The rest of Australia uses a national fallback (30 m elevation, ESA WorldCover trees, and OSM building footprints when a local OSM index is set up).
 - **Hosted service:** a skeleton (map page, job queue, build worker) is in `src/mapcreator/service/`.
 
 Developers picking this up on a machine with Assetto Corsa: start with `docs/dev-handover.md`.
@@ -38,6 +38,8 @@ mapcreator-worker --api http://127.0.0.1:8000       # in a second terminal, with
 ```
 
 On PowerShell, set the token with `$env:MAPCREATOR_WORKER_TOKEN = "..."`. Locally, route previews use the public Overpass server (fine for light use, not for the public), finished tracks are served from `out/service/downloads`, and the worker reads its data settings from `config.local.toml` like the CLI. Every service setting is a `MAPCREATOR_*` environment variable; see `src/mapcreator/service/settings.py`. Container examples are in `deploy/examples/`.
+
+**OSM data for anything beyond light local use:** build workers (and dev route previews) should read OpenStreetMap from a local index rather than public Overpass. Build it once from Geofabrik's Australia extract with `python -m mapcreator.providers.osm.index build australia-latest.osm.pbf australia.sqlite` (needs the `osm` extra), then set `MAPCREATOR_OSM_INDEX` (or `osm_index` in `config.local.toml`) to its path. It also gives the rest of Australia OSM building footprints. See `docs/dev-handover.md`.
 
 ## Not affiliated
 

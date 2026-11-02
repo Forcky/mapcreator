@@ -1,4 +1,8 @@
-"""Stage 1: snap the job's waypoints to OSM and write the routed polyline with its tags."""
+"""Stage 1: snap the job's waypoints to OSM and write the routed polyline with its tags.
+
+Roads come from the local OSM index when `osm_index` is set (production), else from Overpass
+(development); see `providers/osm/roads.py`.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,7 @@ from mapcreator.core.centreline import cumulative
 from mapcreator.job import Job
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.providers.osm import graph as osm_graph
-from mapcreator.providers.osm import overpass
+from mapcreator.providers.osm import roads as osm_roads
 from mapcreator.regions import same_region
 
 STAGE = "01_route"
@@ -21,9 +25,10 @@ KEEP_TAGS = ("highway", "ref", "name", "lanes", "width", "surface", "oneway", "m
 
 
 def _bbox(job: Job, margin_deg: float) -> tuple[float, float, float, float]:
+    """West, south, east, north around the waypoints, in degrees."""
     lons = [w.lon for w in job.waypoints]
     lats = [w.lat for w in job.waypoints]
-    return min(lats) - margin_deg, min(lons) - margin_deg, max(lats) + margin_deg, max(lons) + margin_deg
+    return min(lons) - margin_deg, min(lats) - margin_deg, max(lons) + margin_deg, max(lats) + margin_deg
 
 
 def runs(route: osm_graph.Route) -> list[dict]:
@@ -47,7 +52,7 @@ def runs(route: osm_graph.Route) -> list[dict]:
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     region = same_region([(w.lon, w.lat) for w in job.waypoints])
 
-    data = overpass.fetch(overpass.query_for_bbox(*_bbox(job, 0.02)), settings)
+    data = osm_roads.for_bbox(_bbox(job, 0.02), settings)
     to_xy = region.to_xy()
     g = osm_graph.build(data, to_xy)
     wx, wy = to_xy.transform([w.lon for w in job.waypoints], [w.lat for w in job.waypoints])

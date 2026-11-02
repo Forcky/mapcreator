@@ -4,9 +4,10 @@ The browser wants a quick answer while someone drags markers about, so this
 is separate from the build's own routing (`pipeline/route_stage.py`), which
 runs later on the worker and is the one that counts. Two implementations:
 
-- `DevRouter` reuses the build's OSM graph over an Overpass server. Fine for
-  trying the service on one machine; far too slow, and too heavy on a shared
-  public server, to face the public.
+- `DevRouter` reuses the build's OSM graph, reading roads from the local OSM
+  index when `osm_index` is set, else from an Overpass server. Fine for trying
+  the service on one machine; too slow for a public map, and with Overpass,
+  too heavy on a shared public server.
 - `GraphHopperRouter` asks a self-hosted GraphHopper with a `car` profile.
 
 Region checks happen before either router is asked anything, so a point in
@@ -27,6 +28,7 @@ from mapcreator.core.centreline import cumulative
 from mapcreator.job import Waypoint
 from mapcreator.providers.osm import graph as osm_graph
 from mapcreator.providers.osm import overpass
+from mapcreator.providers.osm import roads as osm_roads
 from mapcreator.regions import REGIONS, OutOfArea, Region, region_for
 
 __all__ = ["DevRouter", "GraphHopperRouter", "NoRoute", "OutOfArea", "RoutePreview", "Router", "RouterUnavailable",
@@ -82,16 +84,16 @@ def _preview(lon: Sequence[float], lat: Sequence[float], length_m: float) -> Rou
 
 
 class DevRouter:
-    """The build's own OSM routing, over Overpass. For local development only."""
+    """The build's own OSM routing, over the local OSM index or Overpass. For local development only."""
 
-    # Overpass is asked for every road in the points' bounding box, so keep the box modest.
+    # Every road in the points' bounding box is read and built into a graph, so keep the box modest.
     MAX_SPAN_DEG = 0.75
     MARGIN_DEG = 0.02
 
     def __init__(self, settings: config.Settings | None = None, *,
                  fetch: Callable[[str, config.Settings], dict] = overpass.fetch):
         self._settings = settings
-        self._fetch = fetch
+        self._fetch = fetch  # used only when roads come from Overpass
 
     def preview(self, waypoints: Sequence[Waypoint]) -> RoutePreview:
         region = check_region(waypoints)
@@ -100,12 +102,14 @@ class DevRouter:
         if max(lons) - min(lons) > self.MAX_SPAN_DEG or max(lats) - min(lats) > self.MAX_SPAN_DEG:
             raise NoRoute("The points are too far apart for a preview.")
         m = self.MARGIN_DEG
-        query = overpass.query_for_bbox(min(lats) - m, min(lons) - m, max(lats) + m, max(lons) + m)
+        bbox = (min(lons) - m, min(lats) - m, max(lons) + m, max(lats) + m)
         settings = self._settings or config.load()
         try:
-            data = self._fetch(query, settings)
+            data = osm_roads.for_bbox(bbox, settings, fetch=self._fetch)
         except httpx.HTTPError as e:
             raise RouterUnavailable("The map data service didn't answer. Try again in a minute.") from e
+        except osm_roads.INDEX_ERRORS as e:
+            raise RouterUnavailable("The map data isn't available right now. Try again later.") from e
         to_xy = region.to_xy()
         wx, wy = to_xy.transform(lons, lats)
         try:
