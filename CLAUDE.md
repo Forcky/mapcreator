@@ -1,6 +1,6 @@
 # mapcreator: notes for Claude Code
 
-Generates Assetto Corsa tracks from real roads using open data. Read `README.md`, `docs/architecture.md` and `docs/data-sources.md` first.
+Generates Assetto Corsa tracks from real roads using open data. Read `README.md`, `docs/architecture.md` and `docs/data-sources.md` first. **Picking up development on a machine with Assetto Corsa? Read `docs/dev-handover.md`.**
 
 ## This repo is written to be published
 - **No private information, ever:** hostnames, IP addresses, subnets, tunnel or account IDs, secret names, personal paths, or anything about the maintainer's own infrastructure. Deployment specifics live in a separate private repo.
