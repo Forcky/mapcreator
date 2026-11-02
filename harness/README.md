@@ -10,7 +10,7 @@ It goes through **Content Manager (CM)**, which most players use to install and 
 
 1. Build and validate: `.venv\Scripts\mapcreator build examples/grasstree_hill.json`. Run everything here from the repository root with the venv's own `python` (or activate the venv first): a bare `python` is often the Microsoft Store stub, without numpy or scipy.
 2. **Look first:** `.venv\Scripts\python harness/ac_harness.py showroom out/grasstree_hill/05_track/grasstree_hill/grasstree_hill_forward.kn5` opens the model in CM's Custom Showroom.
-   - Check for the road, green verges, terrain, tree cards, houses and guard rails.
+   - Check for the road, green verges, terrain, trees (with Custom Shaders Patch), houses and guard rails.
    - There should be no holes, spikes or pink or black textures.
 3. **Install** one of two ways:
    - `.venv\Scripts\python harness/ac_harness.py install out/grasstree_hill/05_track/grasstree_hill` copies the folder and clears AC's AI cache.

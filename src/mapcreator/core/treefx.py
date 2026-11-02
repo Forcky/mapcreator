@@ -1,9 +1,8 @@
 """3D trees for Custom Shaders Patch Tree FX: procedural models, the `.bin` model format and the tree list.
 
 Tree FX (CSP 0.1.79 and later) draws instanced 3D trees with LODs and distant billboards, listed in a text
-file under the track's `extension/` folder. Vanilla AC ignores it, so the KN5 keeps its tree cards for
-players without CSP. With CSP both are drawn unless `ext_config.ini` hides the cards (see
-`package.ext_config_ini`).
+file under the track's `extension/` folder. These are a track's only trees: the KN5 has none, so vanilla AC
+(without CSP) shows none.
 
 The models are generated here (eucalypts and a wattle), so there's no licensing question. CSP ships no tree
 models of its own.

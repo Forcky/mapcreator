@@ -17,7 +17,6 @@ These need the in-game harness on a machine with Assetto Corsa (`docs/dev-handov
   - the meaning of the trailer's `4`;
   - how CSP treats a list position's height when surface alignment is on;
   - whether `size` scales exactly as assumed (model height × size).
-- with CSP running, each tree is drawn twice (its card and its 3D model) until the cards are hidden; see `docs/dev-handover.md`
 - whether the AI drives the generated `fast_lane.ai` sensibly through hairpins
 - in the harness (`harness/`), checked against Content Manager's source and the CSP SDK but never run:
   - whether the probe app loads with its manifest (it now declares a small window, as every CSP app found does)

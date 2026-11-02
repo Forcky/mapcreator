@@ -72,7 +72,7 @@ Each stage reads the folders before it and writes its own, so any stage can be r
 | profile | `02_profile` | the route; the region's DEM | `centreline.npz` (smoothed 3D centreline, grades), profile plot when matplotlib is installed |
 | section | `03_section` | the centreline; OSM width and lanes; the DEM across the road | `section.npz` (half-widths, camber, crown) |
 | mesh | `04_mesh` | centreline, section, DEM; WorldCover's permanent water | road, verge, terrain and wall meshes, water surfaces (`water.json`: bodies, levels, LAKE or SEA), AC dummies |
-| scenery | `04b_scenery` | centreline, section; canopy model or WorldCover; building footprints | tree cards, extruded buildings; 3D tree models and every tree's placement for Tree FX (`treefx/`) |
+| scenery | `04b_scenery` | centreline, section; canopy model or WorldCover; building footprints | extruded buildings; 3D tree models and every tree's placement for Tree FX (`treefx/`) |
 | track | `05_track` | everything above | the KN5 model, `fast_lane.ai` per layout, ini files, `ui_track.json`, preview images, `ATTRIBUTION.txt`, `centreline.geojson` (ODbL), `extension/` (CSP config, `trees/` with the Tree FX list and models), the zip |
 | validate | `06_validate` | the track folder | `report.json`: static checks. Any failure fails the job (the page gets the generic message) |
 

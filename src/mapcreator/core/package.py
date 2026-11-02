@@ -156,8 +156,7 @@ def hillshade(z: np.ndarray, cell: float) -> np.ndarray:
 
 def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], version: str,
                    water_materials: list[str] | None = None, water_type: str = "LAKE",
-                   tree_list: str | None = None, tree_surfaces: list[str] | None = None,
-                   card_meshes: str | None = None) -> str:
+                   tree_list: str | None = None, tree_surfaces: list[str] | None = None) -> str:
     """Custom Shaders Patch track config (`extension/ext_config.ini`). Vanilla AC ignores it.
 
     - Grass FX grows procedural grass on our grass materials. CSP's default
@@ -167,9 +166,7 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
     - Water surfaces get CSP's water shader (waves, reflections), as LAKE or SEA. The shader's template
       comes from CSP's own common/materials_track.ini.
     - Tree FX draws the 3D trees in `tree_list` (relative to the extension folder), standing them on
-      `tree_surfaces`. The KN5's tree cards (`card_meshes`) are still drawn as well; the section that
-      would hide them under CSP is written commented out, ready to switch on once the 3D trees are
-      checked in game.
+      `tree_surfaces`. They are the track's only trees.
     """
     water = [("INCLUDE: common/materials_track.ini", {}),
              ("Material_Water", {"Materials": ", ".join(water_materials), "Type": water_type})] if water_materials else []
@@ -183,16 +180,6 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
                      "SOAKING_MATERIALS": ", ".join(road_materials),
                      "ROUGH_MATERIALS": ", ".join(grass_materials)}),
     ] + trees)
-    if tree_list and card_meshes:
-        text += CRLF.join([
-            "; The flat tree cards in the KN5 are drawn as well as the 3D trees above, for players without",
-            "; Custom Shaders Patch. To hide the cards while CSP is running, remove the semicolons below.",
-            "; [MESH_ADJUSTMENT_TREE_CARDS]",
-            f"; MESHES = {card_meshes}",
-            "; IS_RENDERABLE = 0",
-            "; CAST_SHADOWS = 0",
-            "",
-        ])
     return text
 
 

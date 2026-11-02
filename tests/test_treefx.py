@@ -144,13 +144,10 @@ def test_tree_list_lines():
     assert "tree: euc_tall.bin; pos=10.00, 2.00, 3.00; angle = 300; size = 1.250; width = 0.900" in lines
 
 
-def test_ext_config_lists_trees_and_leaves_the_card_switch_off():
+def test_ext_config_lists_the_trees():
     text = package.ext_config_ini(grass_materials=["grass", "terrain"], road_materials=["road"], version="t",
-                                  tree_list="trees/trees.txt", tree_surfaces=["terrain", "grass"],
-                                  card_meshes="TREES_?")
+                                  tree_list="trees/trees.txt", tree_surfaces=["terrain", "grass"])
     assert "[TREES]\r\nLIST_0=trees/trees.txt\r\nSURFACE_MATERIALS=terrain, grass" in text
-    assert "; [MESH_ADJUSTMENT_TREE_CARDS]\r\n; MESHES = TREES_?\r\n; IS_RENDERABLE = 0" in text
-    live = [line for line in text.split("\r\n") if not line.startswith(";")]
-    assert "[MESH_ADJUSTMENT_TREE_CARDS]" not in live
+    assert "MESH_ADJUSTMENT" not in text
     bare = package.ext_config_ini(grass_materials=["grass"], road_materials=["road"], version="t")
     assert "TREES" not in bare

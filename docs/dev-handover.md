@@ -114,11 +114,9 @@ These are written down as defaults in the code. Change them in one place if the 
 | Does the AI drive the computed line? | computed, 0.4 m above the road | `core/ai_line.py` |
 | Is AC's z = −north (rotation, not mirror)? | yes | `core/scene.py` `Z_SIGN` |
 | Is the DEM camber believable? (14% of C324 reads above 7%, capped at 7%) | capped at 7% | `core/section.py` |
-| Frame rate with ~860k triangles (terrain 565k + 36k trees as three-plane cards + 251 buildings) on a GTX 1660 Ti | unknown | `core/scenery.py` `TREE_BANDS` thins trees |
-| Do the alpha-tested tree cards look right (ksPerPixelAT, DXT5), and do their rounded normals shade the crowns without going dark side-on? | they should | `core/sprites.py`, `core/scenery.py` `NORMAL_LEAN_*` |
+| Frame rate with a ~570k-triangle KN5 (terrain 565k + 251 buildings) plus ~36k Tree FX trees on a GTX 1660 Ti | unknown | `core/scenery.py` `TREE_BANDS` and `MAX_TREES_PER_KM` thin trees |
 | Does water show as water: CSP's shader with CSP, a glossy flat surface without? | it should | `core/water.py`, `core/package.py` `ext_config_ini` |
 | Do the Tree FX 3D trees load (CSP 0.1.79+), stand on the ground and face the light the right way? | they should | `core/treefx.py` (winding, `size`) |
-| With CSP, the cards and the 3D trees overlap. Which looks better: both, or 3D only? (uncomment `[MESH_ADJUSTMENT_TREE_CARDS]` in the track's `extension/ext_config.ini` to try 3D only) | both | `core/package.py` `ext_config_ini` |
 | Do guard rails stop the car? (invisible `1WALL_RAIL_*` colliders, 5.4 km on C324) | they should | `core/roadside.py` |
 | Do houses stop the car? (`1WALL_BUILDINGS`) | they should | `core/scenery.py` |
 | Do both layouts show in Content Manager with names and previews? | they should | `pipeline/track_stage.py` |

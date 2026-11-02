@@ -1,17 +1,12 @@
-"""Scenery geometry: trees as crossed cards and buildings as extruded footprints.
-
-Trees are visual only: cars pass through them. That's a known v1 limitation;
-trunk colliders can come later. Building walls are a physics `1WALL_*` mesh,
-so cars stop at houses.
+"""Scenery: where the trees stand, and buildings as extruded footprints.
 
 Trees:
-- Each tree is three vertical cards 60 degrees apart, with triangles wound both
-  ways, so they read from any angle under AC's back-face culling.
-- Normals lean out from the trunk towards each card's edges and up, more at the
-  top: the crown shades like a rounded mass, lit on the sun side, instead of a
-  flat sheet. Normals don't depend on the side a card is seen from, so both faces
-  share vertices: 12 per tree.
-- Custom Shaders Patch also gets 3D trees at the same positions (see `treefx`).
+- Chosen here (positions and heights, thinned with distance from the road and to a per-km budget).
+- Drawn by Custom Shaders Patch Tree FX as 3D models (see `treefx`). The KN5 has no trees of its own,
+  so players without CSP see none.
+- Visual only: cars pass through them. Trunk colliders can come later.
+
+Building walls are a physics `1WALL_*` mesh, so cars stop at houses.
 
 Buildings:
 - Near-rectangular footprints get a gable roof along their long axis;
@@ -27,8 +22,8 @@ import numpy as np
 import shapely
 from scipy.spatial import cKDTree
 
-from mapcreator.core.scene import MAX_VERTICES, Z_SIGN, LocalFrame, Mesh
-from mapcreator.core.sprites import CARD_ASPECT, ROOF_COLOURS, card_variants, tree_uv_cell
+from mapcreator.core.scene import MAX_VERTICES, LocalFrame, Mesh
+from mapcreator.core.sprites import ROOF_COLOURS
 
 # Distance bands from the centreline: (up to metres, share of trees kept).
 TREE_BANDS = ((60.0, 1.0), (150.0, 0.55), (250.0, 0.25))
@@ -38,11 +33,7 @@ CLEAR_OF_VERGE_M = 2.0
 BUILDING_REACH_M = 250.0
 STOREY_M = 3.0
 SINK_M = 0.4
-CHUNK_M = 300.0
 MAX_TREES_PER_KM = 2500  # keeps dense forest within a frame-rate budget
-CARD_PLANES = 3
-# Card normals: how far they lean out towards the card's edges at its foot and at its top.
-NORMAL_LEAN_FOOT, NORMAL_LEAN_TOP = (0.75, 0.45), (0.5, 0.85)  # (sideways, up)
 
 
 @dataclass
@@ -111,64 +102,6 @@ def cap_trees(trees: Trees, centre_xy: np.ndarray, length_m: float, rng: np.rand
     keep = np.zeros(len(trees), dtype=bool)
     keep[order[:budget]] = True
     return trees.subset(keep)
-
-
-def tree_meshes(trees: Trees, ground: np.ndarray, frame: LocalFrame, centre_xy: np.ndarray,
-                rng: np.random.Generator, material: str = "trees", road_half: float = 3.5) -> list[Mesh]:
-    """Tree cards chunked along the road. A card is never wider than twice the tree's distance to
-    the road edge, so foliage can reach the edge but never hangs a card across the lanes."""
-    if len(trees) == 0:
-        return []
-    dist, station = cKDTree(centre_xy).query(trees.xy, workers=-1)
-    s = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(centre_xy, axis=0).T))])
-    chunk = (s[station] // CHUNK_M).astype(int)
-    per_mesh = MAX_VERTICES // (4 * CARD_PLANES)
-    yaw = rng.uniform(0, np.pi, len(trees))
-    width = trees.height * CARD_ASPECT * rng.uniform(0.88, 1.12, len(trees))
-    width = np.minimum(width, 2 * np.maximum(dist - road_half, 0.5))
-    variant = card_variants(trees.height, rng)
-    out = []
-    for k in np.unique(chunk):
-        idx = np.flatnonzero(chunk == k)
-        for part, start in enumerate(range(0, len(idx), per_mesh)):
-            sel = idx[start:start + per_mesh]
-            name = f"TREES_{k:03d}" + (f"_{part}" if len(idx) > per_mesh else "")
-            out.append(_cards(name, material, trees.xy[sel], ground[sel] - SINK_M, trees.height[sel] + SINK_M,
-                              width[sel], yaw[sel], variant[sel], frame))
-    return out
-
-
-def _cards(name, material, xy, z0, h, w, yaw, variant, frame: LocalFrame) -> Mesh:
-    """CARD_PLANES cards per tree. Each card's 4 vertices serve both faces (one triangle pair per winding),
-    which works because the normals don't depend on the side a card is seen from."""
-    n = len(xy)
-    cells = np.array([tree_uv_cell(int(v)) for v in variant])  # u0, v0, u1, v1 (v = 0 at the top)
-    quad_uv = np.stack([np.column_stack([cells[:, 0], cells[:, 3]]), np.column_stack([cells[:, 2], cells[:, 3]]),
-                        np.column_stack([cells[:, 2], cells[:, 1]]), np.column_stack([cells[:, 0], cells[:, 1]])],
-                       axis=1)
-    up = np.array([0.0, 1.0, 0.0])
-    pos, uv, nrm = [], [], []
-    for plane in range(CARD_PLANES):
-        a = yaw + plane * np.pi / CARD_PLANES
-        along = np.column_stack([np.cos(a), np.sin(a)])
-        d = along * (w / 2)[:, None]
-        corners = [(xy - d, z0), (xy + d, z0), (xy + d, z0 + h), (xy - d, z0 + h)]
-        pos.append(np.stack([frame.to_ac(c[:, 0], c[:, 1], hh) for c, hh in corners], axis=1))  # (n, 4, 3)
-        uv.append(quad_uv)
-        side = np.column_stack([along[:, 0], np.zeros(n), Z_SIGN * along[:, 1]])  # in AC axes, horizontal
-        lean = []
-        for sign, (s, u) in ((-1, NORMAL_LEAN_FOOT), (1, NORMAL_LEAN_FOOT), (1, NORMAL_LEAN_TOP), (-1, NORMAL_LEAN_TOP)):
-            v = sign * s * side + u * up
-            lean.append(v / np.linalg.norm(v, axis=1, keepdims=True))
-        nrm.append(np.stack(lean, axis=1))
-    positions = np.concatenate([p.reshape(-1, 3) for p in pos])
-    uvs = np.concatenate([q.reshape(-1, 2) for q in uv])
-    normals = np.concatenate([q.reshape(-1, 3) for q in nrm])
-    v = np.arange(CARD_PLANES * n)[:, None] * 4 + np.arange(4)[None, :]  # one row per card
-    front = np.concatenate([v[:, [0, 1, 2]], v[:, [0, 2, 3]]])
-    back = front[:, [0, 2, 1]]
-    return Mesh(name, material, positions.astype(np.float32), normals.astype(np.float32), uvs.astype(np.float32),
-                np.concatenate([front, back]).astype(np.int64))
 
 
 # -- buildings ---------------------------------------------------------------
