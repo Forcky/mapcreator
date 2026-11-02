@@ -150,9 +150,14 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
     rep.check(bool(radius.min() >= MIN_RADIUS_M),
               f"{label}: tightest bend radius {radius.min():.1f} m (needs >= {MIN_RADIUS_M:.0f} m)")
     if "AC_START_0" in dummies:
+        # The AI line's own direction where the car stands: a chord from the line's start would cut across
+        # a hairpin there and fail a spawn that faces exactly the right way.
         fwd = dummies["AC_START_0"]["matrix"][2, :3]
-        ai_dir = line.pos[min(40, len(line.pos) - 1)] - line.pos[0]
-        ai_dir /= np.linalg.norm(ai_dir)
+        spawn = dummies["AC_START_0"]["matrix"][3, :3]
+        i = int(np.argmin(np.linalg.norm((line.pos - spawn)[:, [0, 2]], axis=1)))
+        lo, hi = max(i - 2, 0), min(i + 2, len(line.pos) - 1)
+        ai_dir = line.pos[hi] - line.pos[lo]
+        ai_dir /= max(float(np.linalg.norm(ai_dir)), 1e-9)
         rep.check(float(fwd @ ai_dir) > 0.8, f"{label}: spawn faces the AI line's direction")
 
 
