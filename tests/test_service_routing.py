@@ -10,6 +10,7 @@ from mapcreator.service.routing import (DevRouter, GraphHopperRouter, NoRoute, O
 
 HOBART = [Waypoint(lon=147.301, lat=-42.8001), Waypoint(lon=147.319, lat=-42.7999)]
 MELBOURNE = Waypoint(lon=144.96, lat=-37.81)
+AUCKLAND = Waypoint(lon=174.76, lat=-36.85)
 
 
 def straight_road() -> dict:
@@ -21,7 +22,10 @@ def straight_road() -> dict:
 
 def test_check_region_names_the_supported_regions():
     assert check_region(HOBART).key == "tas"
-    with pytest.raises(OutOfArea, match="Point 2 .*Tasmania"):
+    assert check_region([MELBOURNE]).key == "au55"  # the national fallback
+    with pytest.raises(OutOfArea, match="Point 2 .*Tasmania, Australia"):
+        check_region([HOBART[0], AUCKLAND])
+    with pytest.raises(OutOfArea, match="same region"):
         check_region([HOBART[0], MELBOURNE])
 
 

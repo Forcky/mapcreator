@@ -118,6 +118,11 @@ def australia(zone: int) -> Region:
                   attributions=(OSM, DEM_S), height_datum="AHD (approximately; SRTM-derived)")
 
 
+# What users are told is supported (names and extents for the map page): Tasmania with
+# detailed data, and the rest of Australia on the national fallback.
+REGIONS = (TASMANIA, australia(55))
+
+
 class OutOfArea(ValueError):
     pass
 

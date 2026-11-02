@@ -12,7 +12,8 @@ from mapcreator.service.settings import ServiceSettings
 TOKEN = "w" * 40
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 IP = "203.0.113.7"
-MELBOURNE = {"lon": 144.96, "lat": -37.81}
+MELBOURNE = {"lon": 144.96, "lat": -37.81}  # supported (national data) but a different region from Hobart
+AUCKLAND = {"lon": 174.76, "lat": -36.85}  # outside the supported area
 
 
 class FakeRouter:
@@ -104,9 +105,15 @@ def test_invalid_jobs_get_a_plain_message(client, body):
 
 
 def test_out_of_area_names_the_supported_regions(client):
+    r = submit(client, {**job(), "waypoints": [job()["waypoints"][0], AUCKLAND]})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "Point 2 is outside the supported area. Supported regions: Tasmania, Australia."
+
+
+def test_points_in_different_regions_are_refused(client):
     r = submit(client, {**job(), "waypoints": [job()["waypoints"][0], MELBOURNE]})
     assert r.status_code == 422
-    assert r.json()["detail"] == "Point 2 is outside the supported area. Supported regions: Tasmania."
+    assert r.json()["detail"] == "All points must be in the same region."
 
 
 def test_queue_cap(make):

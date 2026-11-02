@@ -200,7 +200,7 @@ def test_run_pipeline_runs_every_stage_in_order(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli, "STAGES", {name: stage(name) for name in cli.STAGES})
     out = run_pipeline(Job.model_validate(JOB), tmp_path)
-    assert [r[0] for r in ran] == ["route", "profile", "section", "mesh", "track", "validate"]
+    assert [r[0] for r in ran] == ["route", "profile", "section", "mesh", "scenery", "track", "validate"]
     assert all(r[1] == tmp_path and r[2] == tmp_path / "test_road" for r in ran)
     assert out.zip_path == tmp_path / "test_road" / "05_track" / "test_road.zip"
     assert out.summary == {"title": "Test Road", "length_m": 1234.5, "region": "tas",

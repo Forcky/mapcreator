@@ -15,8 +15,11 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-TEXT_SUFFIXES = {".py", ".md", ".toml", ".json", ".txt", ".yaml", ".yml", ".ini", ".cfg", ".example", ".html",
-                 ".js", ".css", ".sh", ".ps1", ""}
+# Every tracked file is scanned except known binary formats.
+BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".ico", ".dds", ".kn5", ".zip", ".npz", ".npy", ".tif", ".tiff",
+                   ".pbf", ".pdf", ".woff", ".woff2"}
+# The whole reserved blocks may appear (e.g. an egress proxy refusing them); addresses inside them may not.
+ALLOWED = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 
 GENERIC = [
     (r"\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "private IPv4 (10/8)"),
@@ -37,7 +40,7 @@ def _tracked_files() -> list[Path]:
     except (OSError, subprocess.CalledProcessError):
         pytest.skip("git not available")
     files = [ROOT / line for line in out.splitlines() if line]
-    return [f for f in files if f.is_file() and (f.suffix in TEXT_SUFFIXES or f.name.startswith("."))]
+    return [f for f in files if f.is_file() and f.suffix.lower() not in BINARY_SUFFIXES]
 
 
 def _extra_markers() -> list[str]:
@@ -58,6 +61,8 @@ def test_no_private_information():
             text = f.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
+        for block in ALLOWED:
+            text = text.replace(block, "")
         for rx, why in patterns:
             for m in rx.finditer(text):
                 line = text.count("\n", 0, m.start()) + 1

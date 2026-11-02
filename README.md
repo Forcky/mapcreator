@@ -2,7 +2,12 @@
 
 Generate drivable [Assetto Corsa](https://www.assettocorsa.it/) tracks from real roads, using only open data that may legally be redistributed.
 
-**Status:** planning. No code yet. Tasmania, Australia is the first region, with more Australian states to follow.
+**Status:** the full pipeline builds installable tracks and passes its static checks, but **no track has been loaded in the game yet**. That's the next milestone.
+
+- **Coverage:** Tasmania has detailed data (2 m LiDAR elevation, canopy and building footprints). The rest of Australia uses a national fallback (30 m elevation, ESA WorldCover trees).
+- **Hosted service:** a skeleton (map page, job queue, build worker) is in `src/mapcreator/service/`.
+
+Developers picking this up on a machine with Assetto Corsa: start with `docs/dev-handover.md`.
 
 ## How it works
 

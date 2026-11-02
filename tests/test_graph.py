@@ -51,3 +51,9 @@ def test_unreachable_and_far_waypoints_raise():
         graph.route(g, np.array([[10.0, 0.0], [150.0, 100.0]]))
     with pytest.raises(graph.RouteError, match="from the nearest drivable road"):
         graph.route(g, np.array([[10.0, 0.0], [1000.0, 1000.0]]))
+
+
+def test_route_too_long_is_a_user_facing_route_error():
+    from mapcreator.pipeline.route_stage import RouteTooLong
+
+    assert issubclass(RouteTooLong, graph.RouteError)

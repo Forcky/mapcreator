@@ -13,6 +13,10 @@ from mapcreator.providers.osm import overpass
 from mapcreator.regions import same_region
 
 STAGE = "01_route"
+class RouteTooLong(osm_graph.RouteError):
+    """A user-facing error: the route between the waypoints is longer than the job allows."""
+
+
 KEEP_TAGS = ("highway", "ref", "name", "lanes", "width", "surface", "oneway", "maxspeed", "bridge", "tunnel", "layer")
 
 
@@ -51,7 +55,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
 
     length = float(cumulative(route.xy)[-1])
     if length > job.max_length_km * 1000:
-        raise ValueError(f"route is {length / 1000:.1f} km; the limit is {job.max_length_km:g} km")
+        raise RouteTooLong(f"The route is {length / 1000:.1f} km; the limit is {job.max_length_km:g} km.")
 
     sharp = sharp_turns(route.xy)
     lon, lat = region.to_lonlat().transform(route.xy[:, 0], route.xy[:, 1])
