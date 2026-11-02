@@ -43,9 +43,12 @@ All settings are `MAPCREATOR_*` environment variables (see `src/mapcreator/servi
 
 Set `MAPCREATOR_TRUSTED_PROXIES` to your reverse proxy's address and `MAPCREATOR_CLIENT_IP_HEADER` to the header it overwrites with the client's address. The web app ignores that header from anyone else. Your reverse proxy should also cap request bodies and send `Strict-Transport-Security`.
 
+## OSM data
+
+The worker reads OpenStreetMap from a local index, not from Overpass, which isn't on its egress allowlist. Build the index from Geofabrik's Australia extract on another machine (`docs/dev-handover.md` has the steps), copy `australia.sqlite` into `osm/` next to `compose.worker.yaml`, and the example mounts it read-only at `/osm` with `MAPCREATOR_OSM_INDEX` pointing at it. Building needs pyosmium, which the worker image leaves out; reading needs only SQLite. Without the file, every build fails with a generic error and the worker's log names the missing index. To refresh, copy the new index into `osm/` under a temporary name and rename it over the old one, so no build ever opens a half-copied file.
+
 ## Still to do
 
 - **Object storage.** The worker can only write to a local folder today (`LocalStorage`), so the web app and a worker must share a host until an S3-compatible `Storage` exists. `storage.py` describes what it needs.
 - **GraphHopper.** Bring your own image or jar with a `car` profile built from the Geofabrik Australia extract. The example only reserves its place.
-- **Local OSM extract.** The pipeline still reads OSM from Overpass, which is for light development use. Once it reads a local Geofabrik extract, remove `overpass-api.de` from the allowlist.
 - **DNS.** Containers on an internal Docker network can still resolve names through Docker's resolver. If that matters to you, run the worker host with a resolver that only answers for allowlisted names.

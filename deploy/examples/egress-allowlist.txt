@@ -13,7 +13,6 @@ data.source.coop
 # theLIST services (Tasmanian government open data).
 services.thelist.tas.gov.au
 
-# OpenStreetMap. Overpass is for light development use only; production should read a
-# local Geofabrik extract, after which overpass-api.de can be removed from this list.
-overpass-api.de
-download.geofabrik.de
+# No OpenStreetMap hosts: the worker reads OSM from the local index mounted at /osm
+# (MAPCREATOR_OSM_INDEX). The index is built from a Geofabrik extract on another machine,
+# and public Overpass is for light development use only.

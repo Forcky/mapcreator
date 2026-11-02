@@ -34,11 +34,16 @@ services:
       https_proxy: http://egress:3128
       GDAL_HTTP_PROXY: egress:3128
       NO_PROXY: ""
+      # Roads (and buildings outside Tasmania) from the local OSM index, built elsewhere with
+      # `python -m mapcreator.providers.osm.index build`. Overpass isn't on the egress allowlist.
+      MAPCREATOR_OSM_INDEX: /osm/australia.sqlite
       # A local mirror of the Tasmania 2 m DEM is much faster than reading it over HTTPS:
       # MAPCREATOR_TAS_DEM: /mirror/Tasmania_Statewide_2m_DEM_14-08-2021.tif
     user: "10001:10001"
     volumes:
       - cache:/cache
+      # The folder holding australia.sqlite. Read-only: the index is opened immutable.
+      - ./osm:/osm:ro
       # - <path to your DEM mirror>:/mirror:ro
     tmpfs:
       # Each job's work folder. Size it for your longest track.
