@@ -12,7 +12,7 @@ from mapcreator.job import Job, public_track_id
 from mapcreator.service.api import create_app
 from mapcreator.service.db import JobStore, route_hash
 from mapcreator.service.settings import ServiceSettings
-from mapcreator.service.storage import LocalStorage, S3Storage, storage_for
+from mapcreator.service.storage import LocalStorage, PublicStorage, S3Storage, storage_for
 
 TOKEN = "w" * 40
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -136,8 +136,42 @@ def test_storage_for_picks_the_configured_backend(tmp_path, monkeypatch):
     assert isinstance(st, S3Storage) and made["kw"]["endpoint_url"] == "https://example.r2.example.org"
 
 
+def test_public_storage_links_without_a_key_and_never_writes(tmp_path):
+    s = ServiceSettings(db_path=tmp_path / "j.sqlite3", ip_salt="s", storage="public",
+                        download_base="https://downloads.example.org/")
+    st = storage_for(s)
+    assert isinstance(st, PublicStorage)
+    assert st.url("abc/mc_road_12345678.zip") == "https://downloads.example.org/abc/mc_road_12345678.zip"
+    st.delete("abc/mc_road_12345678.zip")  # the bucket's lifecycle rule expires it
+    with pytest.raises(ValueError):
+        st.delete("../escape.zip")
+    with pytest.raises(RuntimeError, match="only links"):
+        st.put(tmp_path / "t.zip", "abc/mc_road_12345678.zip")
+
+
+def test_a_keyless_web_app_links_to_the_bucket_and_still_expires_old_jobs(tmp_path):
+    settings = ServiceSettings(db_path=tmp_path / "jobs.sqlite3", ip_salt="s", worker_token=TOKEN,
+                               storage="public", download_base="https://downloads.example.org")
+    app = create_app(settings, router=None)
+    clock = Clock()
+    app.state.store.clock = clock
+    c = TestClient(app, client=("203.0.113.9", 50000))
+    job_id = c.post("/api/jobs", json={"job": job().model_dump(mode="json")}).json()["id"]
+    lease = c.post("/api/worker/claim", headers=AUTH).json()
+    key = f"{job_id}/{lease['job']['track_id']}.zip"
+    c.post(f"/api/worker/jobs/{job_id}/complete", headers=AUTH,
+           json={"worker_id": lease["worker_id"], "result": {"key": key}})
+    assert c.get(f"/api/jobs/{job_id}").json()["download_url"] == f"https://downloads.example.org/{key}"
+
+    clock.t += 31 * DAY
+    c.post("/api/worker/claim", headers=AUTH)  # the prune runs; the bucket's lifecycle rule does the deleting
+    assert c.get(f"/api/jobs/{job_id}").status_code == 404
+
+
 @pytest.mark.parametrize("overrides", [
     {"storage": "ftp"},
+    {"storage": "public", "download_base": "/downloads"},  # needs the bucket's public URL
+    {"storage": "public", "download_base": "https://d.example.org", "s3_access_key_id": "id"},  # holds no key
     {"storage": "s3", "s3_bucket": "t", "download_base": "https://d.example.org"},  # no endpoint
     {"storage": "s3", "s3_endpoint": "https://e.example.org", "s3_bucket": "t", "download_base": "/downloads"},
     {"keep_days": 0},

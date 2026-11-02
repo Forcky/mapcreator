@@ -61,6 +61,8 @@ class ServiceSettings:
     ip_hash_days: float = 2.0
     # Where finished zips live: "local" (storage_dir) or "s3" (any S3-compatible store, e.g. R2).
     # For s3, download_base is the bucket's public https address (a custom domain on R2).
+    # "public" is for a web app that only links to an object store it holds no key for: it builds
+    # URLs under download_base, and the bucket's lifecycle rule does the expiring.
     storage: str = "local"
     s3_endpoint: str | None = None
     s3_bucket: str | None = None
@@ -77,13 +79,16 @@ class ServiceSettings:
             raise ValueError(f"MAPCREATOR_WORKER_TOKEN must be at least {MIN_TOKEN_LENGTH} characters")
         if bool(self.turnstile_secret) != bool(self.turnstile_site_key):
             raise ValueError("set both MAPCREATOR_TURNSTILE_SECRET and MAPCREATOR_TURNSTILE_SITE_KEY, or neither")
-        if self.storage not in ("local", "s3"):
-            raise ValueError(f"MAPCREATOR_STORAGE must be local or s3, not {self.storage!r}")
-        if self.storage == "s3":
-            if not (_is_http_url(self.s3_endpoint) and self.s3_bucket):
-                raise ValueError("s3 storage needs MAPCREATOR_S3_ENDPOINT (http(s)) and MAPCREATOR_S3_BUCKET")
-            if not _is_http_url(self.download_base):
-                raise ValueError("with s3 storage, MAPCREATOR_DOWNLOAD_BASE must be the bucket's public http(s) URL")
+        if self.storage not in ("local", "s3", "public"):
+            raise ValueError(f"MAPCREATOR_STORAGE must be local, s3 or public, not {self.storage!r}")
+        if self.storage == "s3" and not (_is_http_url(self.s3_endpoint) and self.s3_bucket):
+            raise ValueError("s3 storage needs MAPCREATOR_S3_ENDPOINT (http(s)) and MAPCREATOR_S3_BUCKET")
+        if self.storage in ("s3", "public") and not _is_http_url(self.download_base):
+            raise ValueError(f"with {self.storage} storage, MAPCREATOR_DOWNLOAD_BASE must be the bucket's "
+                             "public http(s) URL")
+        if self.storage == "public" and (self.s3_access_key_id or self.s3_secret_access_key):
+            raise ValueError("public storage holds no key: unset MAPCREATOR_S3_ACCESS_KEY_ID and "
+                             "MAPCREATOR_S3_SECRET_ACCESS_KEY, or use s3 storage")
         if self.keep_days <= 0 or self.ip_hash_days <= 0:
             raise ValueError("MAPCREATOR_KEEP_DAYS and MAPCREATOR_IP_HASH_DAYS must be positive")
         if self.serves_downloads:

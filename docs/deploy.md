@@ -64,9 +64,9 @@ Bind mounts on Docker Desktop for Windows are much slower than a Docker volume. 
 Each step below is a decision or an account for the operator to set up. They aren't automated:
 
 1. **Object storage.**
-   - A bucket with a public custom domain for downloads.
-   - Two scoped keys: write for the worker, delete for the web app's retention.
-   - Settings: `MAPCREATOR_STORAGE=s3`, `MAPCREATOR_S3_*`, `MAPCREATOR_DOWNLOAD_BASE`.
+   - A bucket with a public custom domain for downloads, and a lifecycle rule that deletes objects a few days after `MAPCREATOR_KEEP_DAYS`.
+   - One key, for the worker, scoped to that bucket. Worker settings: `MAPCREATOR_STORAGE=s3`, `MAPCREATOR_S3_*`, `MAPCREATOR_DOWNLOAD_BASE`.
+   - The web app holds no key: `MAPCREATOR_STORAGE=public` and `MAPCREATOR_DOWNLOAD_BASE`. Most stores can't issue a delete-only key, and a key that can delete can also overwrite downloads, which matters on the internet-facing host. (`s3` on the web side works too, if you'd rather it deleted expired tracks itself.)
 2. **Secrets.**
    - Worker token: `MAPCREATOR_WORKER_TOKEN`, the same on both sides, at least 32 characters.
    - IP salt: `MAPCREATOR_IP_SALT`.

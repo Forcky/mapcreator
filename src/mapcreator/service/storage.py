@@ -24,6 +24,12 @@ MinIO), via boto3 (optional extra `s3`). How it's meant to be used:
   short-lived presigned GET; the web app then needs read credentials only.
 - A bucket lifecycle rule expires old tracks; the job row keeps the key, so
   an expired download should be reported as such, not as a broken link.
+
+`PublicStorage` is for a web app that shouldn't hold a key at all. On a
+public-facing host, any key that can delete from a bucket can also overwrite
+what it serves, so a compromised web app could swap a download for something
+else. `PublicStorage` only builds `<public base>/<key>` URLs, and leaves
+expiry to the bucket's lifecycle rule.
 """
 
 from __future__ import annotations
@@ -124,8 +130,26 @@ class S3Storage:
         self.client.delete_object(Bucket=self.bucket, Key=check_key(key))
 
 
+class PublicStorage:
+    """Links to downloads in a store this process can't write to. See the module docstring."""
+
+    def __init__(self, public_base: str):
+        self.public_base = public_base.rstrip("/")
+
+    def put(self, local_path: Path, key: str) -> None:
+        raise RuntimeError("public storage only links to downloads; the worker uploads with s3 storage")
+
+    def url(self, key: str) -> str:
+        return f"{self.public_base}/{quote(check_key(key))}"
+
+    def delete(self, key: str) -> None:
+        check_key(key)  # nothing to do: the bucket's lifecycle rule expires it
+
+
 def storage_for(settings) -> Storage:
     """The storage a service process should use, from its settings."""
+    if settings.storage == "public":
+        return PublicStorage(settings.download_base)
     if settings.storage == "s3":
         return S3Storage(bucket=settings.s3_bucket, public_base=settings.download_base,
                          endpoint=settings.s3_endpoint, region=settings.s3_region,

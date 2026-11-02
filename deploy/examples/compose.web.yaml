@@ -25,11 +25,11 @@ services:
       MAPCREATOR_ROUTER: graphhopper
       MAPCREATOR_GRAPHHOPPER_URL: http://graphhopper:8989
       # Tracks live in an S3-compatible bucket (e.g. Cloudflare R2) served from a public custom domain.
-      # The web app only builds URLs and deletes expired tracks; keys go in .env, not here:
-      #   MAPCREATOR_S3_ACCESS_KEY_ID / MAPCREATOR_S3_SECRET_ACCESS_KEY (scoped to this bucket)
-      MAPCREATOR_STORAGE: s3
-      MAPCREATOR_S3_ENDPOINT: https://<account id>.r2.cloudflarestorage.com
-      MAPCREATOR_S3_BUCKET: mapcreator-tracks
+      # The web app only builds URLs, so it holds no key: a key that can delete expired tracks could
+      # also overwrite live downloads. The bucket's lifecycle rule (a few days past KEEP_DAYS) expires
+      # them instead. To have the web app delete them itself, use MAPCREATOR_STORAGE: s3 with
+      # MAPCREATOR_S3_ENDPOINT, MAPCREATOR_S3_BUCKET and a key in web.env.
+      MAPCREATOR_STORAGE: public
       MAPCREATOR_DOWNLOAD_BASE: https://downloads.example.org
       # Retention: finished jobs and their downloads go after 30 days, client-IP hashes after 2.
       MAPCREATOR_KEEP_DAYS: "30"
