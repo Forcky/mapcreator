@@ -17,6 +17,16 @@
   const PREVIEW_DELAY_MS = 400;
   const POLL_MS = 5000;
   const JOB_HASH = /^#job=([A-Za-z0-9_-]{16,64})$/;
+  // What each build stage does, in words (the API reports the stage's name, number and count).
+  const STAGE_TEXT = {
+    route: "finding the road",
+    profile: "measuring the hills",
+    section: "shaping the road surface",
+    mesh: "building the road and terrain",
+    scenery: "placing trees and buildings",
+    track: "packaging the track",
+    validate: "checking the track",
+  };
 
   const $ = (id) => document.getElementById(id);
   const el = {
@@ -35,6 +45,7 @@
     submit: $("submit"),
     job: $("job"),
     jobStatus: $("job-status"),
+    builderOffline: $("builder-offline"),
     summary: $("job-summary"),
     download: $("download"),
     downloadLink: $("download-link"),
@@ -519,11 +530,17 @@
   }
 
   function showJob(job) {
+    const offline = job.builder_online === false
+      ? " The track builder is offline right now, so it will start when the builder is back."
+      : "";
+    const stage = job.stage && STAGE_TEXT[job.stage.name]
+      ? ` Step ${job.stage.number} of ${job.stage.of}: ${STAGE_TEXT[job.stage.name]}.`
+      : " This usually takes a few minutes.";
     const messages = {
-      queued: job.queue_position
+      queued: (job.queue_position
         ? `Waiting in the queue: number ${job.queue_position}.`
-        : "Waiting in the queue.",
-      running: "Building your track. This usually takes a few minutes.",
+        : "Waiting in the queue.") + offline,
+      running: `Building your track.${stage}${offline}`,
       done: "Your track is ready.",
       failed: `The build failed. ${job.error || ""}`.trim(),
     };
@@ -534,6 +551,16 @@
       el.contentManagerLink.href = contentManagerLink(url);
       el.download.hidden = false;
       showSummary(job.summary || {});
+    }
+  }
+
+  // Warn before anyone submits if no builder has been heard from lately. Nothing to say if this fails.
+  async function checkBuilder() {
+    try {
+      const status = await api("/api/status");
+      el.builderOffline.hidden = status.builder_online !== false;
+    } catch (_) {
+      el.builderOffline.hidden = true;
     }
   }
 
@@ -621,6 +648,7 @@
     }
     if (state.config.turnstile_site_key) loadTurnstile(state.config.turnstile_site_key);
     updateSubmit();
+    checkBuilder();
 
     const resumed = JOB_HASH.exec(window.location.hash);
     if (resumed) trackJob(resumed[1]);

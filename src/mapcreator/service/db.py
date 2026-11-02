@@ -6,6 +6,10 @@ process answer status polls while a claim is being written, and every change
 that must be atomic (claiming, requeueing) runs inside `BEGIN IMMEDIATE`, so
 two workers can never take the same job.
 
+The worker also reports which build stage it's on with each heartbeat, and
+any authenticated worker request records when a worker was last heard from,
+so the page can say whether jobs are being built at all.
+
 Each claim gets a fresh random `worker_id`. A worker must present it to
 heartbeat, complete or fail the job, so a worker that went quiet and had its
 job handed to someone else can't overwrite the new attempt's result.
@@ -44,7 +48,12 @@ CREATE TABLE IF NOT EXISTS jobs (
     heartbeat_at REAL,
     finished_at REAL,
     result_json TEXT,
-    error TEXT
+    error TEXT,
+    stage TEXT
+);
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs (status, created_at);
 CREATE INDEX IF NOT EXISTS jobs_route_hash ON jobs (route_hash, status);
@@ -78,6 +87,7 @@ class JobRecord:
     finished_at: float | None
     result: dict | None
     error: str | None
+    stage: str | None = None
 
     @classmethod
     def _from_row(cls, row: sqlite3.Row) -> JobRecord:
@@ -87,6 +97,7 @@ class JobRecord:
             created_at=row["created_at"], started_at=row["started_at"], heartbeat_at=row["heartbeat_at"],
             finished_at=row["finished_at"],
             result=json.loads(row["result_json"]) if row["result_json"] else None, error=row["error"],
+            stage=row["stage"],
         )
 
 
@@ -99,6 +110,9 @@ class JobStore:
         with self._connect() as con:
             con.execute("PRAGMA journal_mode = WAL")
             con.executescript(SCHEMA)
+            # Databases from before stage reporting. ADD COLUMN is cheap and keeps every row.
+            if "stage" not in {r["name"] for r in con.execute("PRAGMA table_info(jobs)")}:
+                con.execute("ALTER TABLE jobs ADD COLUMN stage TEXT")
 
     # A connection per call: cheap for SQLite, and safe from FastAPI's thread pool.
     @contextmanager
@@ -151,7 +165,7 @@ class JobStore:
             now = self.clock()
             con.execute(
                 "UPDATE jobs SET status = 'running', worker_id = ?, attempts = attempts + 1, started_at = ?, "
-                "heartbeat_at = ? WHERE id = ?",
+                "heartbeat_at = ?, stage = NULL WHERE id = ?",
                 (secrets.token_urlsafe(16), now, now, row["id"]),
             )
             claimed = con.execute("SELECT * FROM jobs WHERE id = ?", (row["id"],)).fetchone()
@@ -165,20 +179,22 @@ class JobStore:
             )
         return cur.rowcount == 1
 
-    def heartbeat(self, job_id: str, worker_id: str) -> bool:
+    def heartbeat(self, job_id: str, worker_id: str, stage: str | None = None) -> bool:
         """False when this worker no longer holds the job (it was requeued, or finished)."""
-        return self._update_running(job_id, worker_id, "heartbeat_at = ?", (self.clock(),))
+        if stage is None:
+            return self._update_running(job_id, worker_id, "heartbeat_at = ?", (self.clock(),))
+        return self._update_running(job_id, worker_id, "heartbeat_at = ?, stage = ?", (self.clock(), stage))
 
     def complete(self, job_id: str, worker_id: str, result: dict) -> bool:
         now = self.clock()
         return self._update_running(job_id, worker_id,
-                                    "status = 'done', heartbeat_at = ?, finished_at = ?, result_json = ?",
+                                    "status = 'done', heartbeat_at = ?, finished_at = ?, result_json = ?, stage = NULL",
                                     (now, now, json.dumps(result)))
 
     def fail(self, job_id: str, worker_id: str, error: str) -> bool:
         now = self.clock()
         return self._update_running(job_id, worker_id,
-                                    "status = 'failed', heartbeat_at = ?, finished_at = ?, error = ?",
+                                    "status = 'failed', heartbeat_at = ?, finished_at = ?, error = ?, stage = NULL",
                                     (now, now, error))
 
     def requeue_stale(self, stale_after_s: float, *, max_attempts: int = MAX_ATTEMPTS) -> tuple[int, int]:
@@ -192,12 +208,13 @@ class JobStore:
         cutoff = now - stale_after_s
         with self._transaction() as con:
             failed = con.execute(
-                "UPDATE jobs SET status = 'failed', worker_id = NULL, finished_at = ?, error = ? "
+                "UPDATE jobs SET status = 'failed', worker_id = NULL, finished_at = ?, error = ?, stage = NULL "
                 "WHERE status = 'running' AND heartbeat_at < ? AND attempts >= ?",
                 (now, STALE_ERROR, cutoff, max_attempts),
             ).rowcount
             requeued = con.execute(
-                "UPDATE jobs SET status = 'queued', worker_id = NULL, started_at = NULL, heartbeat_at = NULL "
+                "UPDATE jobs SET status = 'queued', worker_id = NULL, started_at = NULL, heartbeat_at = NULL, "
+                "stage = NULL "
                 "WHERE status = 'running' AND heartbeat_at < ?",
                 (cutoff,),
             ).rowcount
@@ -219,6 +236,17 @@ class JobStore:
             con.execute("DELETE FROM jobs WHERE status IN ('done', 'failed') AND finished_at < ?", (now - keep_s,))
             con.execute("UPDATE jobs SET ip_hash = '' WHERE ip_hash != '' AND created_at < ?", (now - ip_hash_s,))
         return [json.loads(r["result_json"]) for r in old if r["result_json"]]
+
+    def worker_seen(self) -> None:
+        """Record that a worker just made an authenticated request."""
+        with self._connect() as con:
+            con.execute("INSERT INTO meta (key, value) VALUES ('worker_seen', ?) "
+                        "ON CONFLICT (key) DO UPDATE SET value = excluded.value", (self.clock(),))
+
+    def worker_last_seen(self) -> float | None:
+        with self._connect() as con:
+            row = con.execute("SELECT value FROM meta WHERE key = 'worker_seen'").fetchone()
+        return row["value"] if row else None
 
     def count_queued(self) -> int:
         with self._connect() as con:

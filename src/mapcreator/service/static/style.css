@@ -200,6 +200,14 @@ code {
   font-weight: 600;
 }
 
+.notice {
+  margin: 0.75rem 0;
+  padding: 0.6rem 0.8rem;
+  border-left: 4px solid var(--focus);
+  background: #fff8e1;
+  color: var(--fg);
+}
+
 .error {
   margin: 1rem 0 0;
   padding: 0.6rem 0.8rem;

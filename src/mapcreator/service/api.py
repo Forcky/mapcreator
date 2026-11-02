@@ -27,7 +27,7 @@ from collections import deque
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -39,6 +39,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from mapcreator import __version__
 from mapcreator.job import MAX_WAYPOINTS, Job, Waypoint, public_track_id
+from mapcreator.pipeline import STAGE_NAMES
 from mapcreator.regions import REGIONS
 from mapcreator.service.db import JobStore, route_hash
 from mapcreator.service.routing import (DevRouter, GraphHopperRouter, OutOfArea, RoutePreview, Router,
@@ -56,6 +57,9 @@ WORKER_PREFIX = "/api/worker"
 MAX_BODY_BYTES = 64 * 1024
 MAX_ERROR_CHARS = 500
 MAX_SUMMARY_BYTES = 16 * 1024
+# An idle worker asks for work every 15 s and a busy one heartbeats every 30 s, so a worker that hasn't
+# been heard from in this long is offline (stopped, or its machine or network is down).
+BUILDER_ONLINE_S = 120.0
 
 # Hosts the map page loads from: the OpenFreeMap style, tiles, glyphs and sprites, and theLIST's
 # topographic tiles. Listed by name so nothing else can be fetched, even by injected markup.
@@ -82,6 +86,10 @@ class WorkerLease(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     worker_id: str = Field(pattern=r"^[A-Za-z0-9_-]{16,64}$")
+
+
+class HeartbeatRequest(WorkerLease):
+    stage: Literal[STAGE_NAMES] | None = None  # the build stage now running
 
 
 class JobResult(BaseModel):
@@ -356,10 +364,19 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
 
     # ----- public -----
 
+    def builder_online() -> bool:
+        seen = store.worker_last_seen()
+        return seen is not None and store.clock() - seen < BUILDER_ONLINE_S
+
     @app.get("/api/health")
     def health() -> dict:
         store.count_queued()  # proves the database answers
         return {"status": "ok"}
+
+    @app.get("/api/status")
+    def service_status() -> dict:
+        """Whether tracks are being built right now, for the page to warn before someone submits."""
+        return {"builder_online": builder_online(), "queued": store.count_queued()}
 
     @app.get("/api/config")
     def client_config() -> dict:
@@ -418,10 +435,17 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
             "started_at": _iso(record.started_at),
             "finished_at": _iso(record.finished_at),
             "queue_position": store.queue_position(record),
+            "stage": None,
+            "builder_online": None,
             "summary": None,
             "download_url": None,
             "error": None,
         }
+        if record.status == "running" and record.stage in STAGE_NAMES:
+            out["stage"] = {"name": record.stage, "number": STAGE_NAMES.index(record.stage) + 1,
+                            "of": len(STAGE_NAMES)}
+        if record.status in ("queued", "running"):
+            out["builder_online"] = builder_online()
         if record.status == "done" and record.result:
             out["summary"] = record.result.get("summary") or {}
             out["download_url"] = absolute(storage.url(record.result["key"]), request)
@@ -447,6 +471,7 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
 
     @app.post(WORKER_PREFIX + "/claim", include_in_schema=False, response_model=None)
     def worker_claim() -> Response | dict:
+        store.worker_seen()
         maybe_prune()
         store.requeue_stale(settings.stale_after_minutes * 60)
         record = store.claim_next()
@@ -459,13 +484,15 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
         return HTTPException(409, "This worker no longer holds the job.")
 
     @app.post(WORKER_PREFIX + "/jobs/{job_id}/heartbeat", include_in_schema=False)
-    def worker_heartbeat(job_id: str, body: WorkerLease) -> dict:
-        if not store.heartbeat(job_id, body.worker_id):
+    def worker_heartbeat(job_id: str, body: HeartbeatRequest) -> dict:
+        store.worker_seen()
+        if not store.heartbeat(job_id, body.worker_id, body.stage):
             raise _lost()
         return {"ok": True}
 
     @app.post(WORKER_PREFIX + "/jobs/{job_id}/complete", include_in_schema=False)
     def worker_complete(job_id: str, body: CompleteRequest) -> dict:
+        store.worker_seen()
         if not store.complete(job_id, body.worker_id, body.result.model_dump()):
             raise _lost()
         log.info("job %s done", job_id)
@@ -473,6 +500,7 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
 
     @app.post(WORKER_PREFIX + "/jobs/{job_id}/fail", include_in_schema=False)
     def worker_fail(job_id: str, body: FailRequest) -> dict:
+        store.worker_seen()
         if not store.fail(job_id, body.worker_id, _clean_error(body.error)):
             raise _lost()
         log.info("job %s failed", job_id)

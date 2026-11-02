@@ -54,10 +54,12 @@ class BuildOutput:
     summary: dict
 
 
-Pipeline = Callable[[Job, Path], BuildOutput]
+# (job, work folder, on_stage): on_stage is called with each stage's name as it starts.
+Pipeline = Callable[[Job, Path, Callable[[str], None]], BuildOutput]
 
 
-def run_pipeline(job: Job, work_root: Path) -> BuildOutput:
+def run_pipeline(job: Job, work_root: Path,
+                 on_stage: Callable[[str], None] = lambda name: None) -> BuildOutput:
     """Every stage of `mapcreator build`, in order, writing under `work_root`.
 
     Data locations (cache, DEM mirror, Overpass) come from this machine's own
@@ -73,6 +75,7 @@ def run_pipeline(job: Job, work_root: Path) -> BuildOutput:
     results = {}
     for name, stage in STAGES.items():
         log.info("stage %s", name)
+        on_stage(name)
         results[name] = stage(job, settings, work)
     track = results["track"]
     summary = {
@@ -120,9 +123,10 @@ class WorkerApi:
         r = self._post("/claim")
         return None if self._expect(r, 200, 204) == 204 else r.json()
 
-    def heartbeat(self, job_id: str, worker_id: str) -> bool:
+    def heartbeat(self, job_id: str, worker_id: str, stage: str | None = None) -> bool:
         """False when the job has been taken away from this worker."""
-        return self._expect(self._post(f"/jobs/{job_id}/heartbeat", {"worker_id": worker_id}), 200, 409) == 200
+        body = {"worker_id": worker_id} if stage is None else {"worker_id": worker_id, "stage": stage}
+        return self._expect(self._post(f"/jobs/{job_id}/heartbeat", body), 200, 409) == 200
 
     def complete(self, job_id: str, worker_id: str, result: dict) -> bool:
         r = self._post(f"/jobs/{job_id}/complete", {"worker_id": worker_id, "result": result})
@@ -134,7 +138,10 @@ class WorkerApi:
 
 
 class Heartbeat(threading.Thread):
-    """Tells the web app the job is still alive, and notices if it was taken away."""
+    """Tells the web app the job is still alive and which stage it's on, and notices if it was taken away.
+
+    A new stage is reported straight away rather than at the next interval, so the page keeps up.
+    """
 
     def __init__(self, api: WorkerApi, job_id: str, worker_id: str, interval_s: float):
         super().__init__(name=f"heartbeat-{job_id}", daemon=True)
@@ -143,12 +150,22 @@ class Heartbeat(threading.Thread):
         self._worker_id = worker_id
         self._interval_s = interval_s
         self._halt = threading.Event()  # not `_stop`: Thread uses that name itself
+        self._wake = threading.Event()
+        self._stage: str | None = None
         self.lost = False
 
+    def set_stage(self, name: str) -> None:
+        self._stage = name
+        self._wake.set()
+
     def run(self) -> None:
-        while not self._halt.wait(self._interval_s):
+        while True:
+            self._wake.wait(self._interval_s)
+            self._wake.clear()
+            if self._halt.is_set():
+                return
             try:
-                if not self._api.heartbeat(self._job_id, self._worker_id):
+                if not self._api.heartbeat(self._job_id, self._worker_id, self._stage):
                     log.warning("job %s was taken away from this worker", self._job_id)
                     self.lost = True
                     return
@@ -157,6 +174,7 @@ class Heartbeat(threading.Thread):
 
     def halt(self) -> None:
         self._halt.set()
+        self._wake.set()
         self.join(timeout=self._interval_s + 5)
 
 
@@ -216,7 +234,7 @@ def _build_one(claim: dict, api: WorkerApi, pipeline: Pipeline, storage: Storage
     beat.start()
     try:
         (work / "job.json").write_text(job.model_dump_json(indent=2), encoding="utf-8")
-        out = pipeline(job, work)
+        out = pipeline(job, work, beat.set_stage)
         if beat.lost:
             return  # someone else has the job now; their result is the one that counts
         key = f"{job_id}/{job.track_id}.zip"

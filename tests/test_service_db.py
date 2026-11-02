@@ -176,3 +176,45 @@ def test_counts_and_route_lookups(store, clock):
     store.complete(rec.id, rec.worker_id, {"key": "k"})
     assert store.find_done_by_route_hash(h).id == a.id
     assert store.find_active_by_route_hash(h) is None
+
+
+def test_heartbeats_carry_the_stage_and_a_new_claim_clears_it(store, clock):
+    store.create(job(), ip_hash="h")
+    first = store.claim_next()
+    assert store.heartbeat(first.id, first.worker_id, "mesh") and store.get(first.id).stage == "mesh"
+    assert store.heartbeat(first.id, first.worker_id) and store.get(first.id).stage == "mesh"  # unchanged
+    clock.t += 3600
+    assert store.requeue_stale(60) == (1, 0) and store.get(first.id).stage is None
+    second = store.claim_next()
+    assert second.stage is None and not store.heartbeat(first.id, first.worker_id, "track")
+
+
+def test_workers_are_remembered_when_they_call(store, clock):
+    assert store.worker_last_seen() is None
+    store.worker_seen()
+    clock.t += 10
+    assert store.worker_last_seen() == clock.t - 10
+    store.worker_seen()
+    assert store.worker_last_seen() == clock.t
+
+
+def test_a_database_from_before_stage_reporting_is_upgraded_in_place(tmp_path, clock):
+    import sqlite3
+
+    path = tmp_path / "old.sqlite3"
+    con = sqlite3.connect(path)
+    con.executescript("""
+        CREATE TABLE jobs (id TEXT PRIMARY KEY, status TEXT NOT NULL, job_json TEXT NOT NULL,
+            route_hash TEXT NOT NULL, ip_hash TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, worker_id TEXT,
+            created_at REAL NOT NULL, started_at REAL, heartbeat_at REAL, finished_at REAL, result_json TEXT,
+            error TEXT);
+    """)
+    con.execute("INSERT INTO jobs (id, status, job_json, route_hash, ip_hash, created_at) "
+                "VALUES ('old-job-0123456789', 'queued', ?, 'r', 'h', 1)", (job().model_dump_json(),))
+    con.commit()
+    con.close()
+    store = JobStore(path, clock=clock)
+    record = store.claim_next()
+    assert record.id == "old-job-0123456789" and record.stage is None
+    assert store.heartbeat(record.id, record.worker_id, "route") and store.get(record.id).stage == "route"
+    JobStore(path, clock=clock)  # opening it again changes nothing

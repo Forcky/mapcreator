@@ -50,7 +50,7 @@ def pipeline_that(action=None, seen: dict | None = None):
     """A stand-in for the build: optionally act, then write a small zip."""
     seen = {} if seen is None else seen
 
-    def pipeline(job, work: Path) -> BuildOutput:
+    def pipeline(job, work: Path, on_stage=lambda name: None) -> BuildOutput:
         seen["work"] = work
         seen["job_json"] = json.loads((work / "job.json").read_text(encoding="utf-8"))
         if action:
@@ -118,6 +118,25 @@ def test_internal_errors_stay_internal(env):
     assert not seen["work"].exists()
 
 
+def test_reports_each_stage_and_the_job_page_shows_it(env):
+    _, client, _, store = env
+    job_id = client.post("/api/jobs", json={"job": JOB}).json()["id"]
+    seen = []
+
+    def stages(job, work: Path, on_stage) -> BuildOutput:
+        for name in ("route", "mesh"):
+            on_stage(name)
+            time.sleep(0.15)  # a heartbeat goes out at once with the new stage
+            seen.append(client.get(f"/api/jobs/{job_id}").json()["stage"])
+        return pipeline_that()(job, work)
+
+    work(env, stages, heartbeat_s=30.0)
+    assert seen == [{"name": "route", "number": 1, "of": 7}, {"name": "mesh", "number": 4, "of": 7}]
+    done = client.get(f"/api/jobs/{job_id}").json()
+    assert done["status"] == "done" and done["stage"] is None and done["builder_online"] is None
+    assert store.get(job_id).stage is None
+
+
 def test_heartbeats_while_building(env):
     store = env[3]
     job_id = submit(env)
@@ -156,7 +175,7 @@ def test_jobs_are_validated_again_on_the_worker():
         reports.append((request.url.path, json.loads(request.content)))
         return httpx.Response(200, json={"ok": True})
 
-    def never(job, work):
+    def never(job, work, on_stage):
         raise AssertionError("the pipeline must not run")
 
     settings = ServiceSettings(worker_token=TOKEN, ip_salt="s")
@@ -208,3 +227,25 @@ def test_run_pipeline_runs_every_stage_in_order(monkeypatch, tmp_path):
     assert out.zip_path == tmp_path / "test_road" / "05_track" / "test_road.zip"
     assert out.summary == {"title": "Test Road", "length_m": 1234.5, "region": "tas",
                            "layouts": [{"name": "Test Road (N)", "length_m": 1234.5}], "zip_mb": 1.2}
+
+
+def test_the_page_can_tell_whether_a_builder_is_online(env):
+    _, client, _, store = env
+    assert client.get("/api/status").json() == {"builder_online": False, "queued": 0}
+    job_id = client.post("/api/jobs", json={"job": JOB}).json()["id"]
+    assert client.get(f"/api/jobs/{job_id}").json()["builder_online"] is False
+    lease = client.post("/api/worker/claim", headers={"Authorization": f"Bearer {TOKEN}"}).json()
+    assert client.get("/api/status").json() == {"builder_online": True, "queued": 0}
+    assert client.get(f"/api/jobs/{job_id}").json()["builder_online"] is True
+    bad = client.post(f"/api/worker/jobs/{job_id}/heartbeat", headers={"Authorization": f"Bearer {TOKEN}"},
+                      json={"worker_id": lease["worker_id"], "stage": "rm -rf"})
+    assert bad.status_code == 422
+    store.clock = lambda: time.time() + 3600  # an hour of silence
+    assert client.get("/api/status").json()["builder_online"] is False
+
+
+def test_the_stage_names_match_the_cli():
+    from mapcreator.cli.main import STAGES
+    from mapcreator.pipeline import STAGE_NAMES
+
+    assert tuple(STAGES) == STAGE_NAMES
