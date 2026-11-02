@@ -154,15 +154,20 @@ def hillshade(z: np.ndarray, cell: float) -> np.ndarray:
     return np.clip(rgb, 0, 255).astype(np.uint8)
 
 
-def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], version: str) -> str:
+def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], version: str,
+                   water_materials: list[str] | None = None, water_type: str = "LAKE") -> str:
     """Custom Shaders Patch track config (`extension/ext_config.ini`). Vanilla AC ignores it.
 
     - Grass FX grows procedural grass on our grass materials. CSP's default
       colour mask means it follows the green patches of the texture. The road
       occludes it so none grows through the asphalt.
     - Rain FX puddles and soaks the road and treats grass as rough.
+    - Water surfaces get CSP's water shader (waves, reflections), as LAKE or SEA. The shader's template
+      comes from CSP's own common/materials_track.ini.
     """
-    return ini([
+    water = [("INCLUDE: common/materials_track.ini", {}),
+             ("Material_Water", {"Materials": ", ".join(water_materials), "Type": water_type})] if water_materials else []
+    return ini(water + [
         ("ABOUT", {"AUTHOR": "mapcreator", "VERSION": version}),
         ("GRASS_FX", {"GRASS_MATERIALS": ", ".join(grass_materials),
                       "OCCLUDING_MATERIALS": ", ".join(road_materials)}),

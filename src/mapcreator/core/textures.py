@@ -147,4 +147,14 @@ def steel(size: int = 256, seed: int = 21) -> Image.Image:
     return Image.fromarray(_mix(np.array([168.0, 172.0, 174.0]), v, np.array([0.25, 0.25, 0.25])))
 
 
-LIBRARY = {"asphalt": asphalt, "road_marked": road_marked, "grass": grass, "ground": ground, "steel": steel}
+def water(size: int = 512, seed: int = 31) -> Image.Image:
+    """Deep blue-green with soft ripples: what vanilla AC shows (CSP draws its own water shader instead)."""
+    ripple = tileable_noise(size, beta=2.4, seed=seed)
+    base = np.array([38, 74, 84], dtype=float)
+    light = np.array([70, 112, 120], dtype=float)
+    rgb = base + (light - base) * np.clip(ripple * 0.5 + 0.5, 0, 1)[..., None]
+    return Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), "RGB")
+
+
+LIBRARY = {"asphalt": asphalt, "road_marked": road_marked, "grass": grass, "ground": ground, "steel": steel,
+           "water": water}

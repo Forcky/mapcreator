@@ -247,23 +247,33 @@ def _lattice(region, ring_xy: np.ndarray, centre_xy: np.ndarray) -> np.ndarray:
     return pts[d_edge > 2.5]
 
 
-def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame, *,
-                   uv_m: float = 8.0) -> list[Mesh]:
-    """Terrain from the skirt's outer edge out to `corridor_m`, chunked under the vertex limit."""
-    # Footprint outline, every ribbon vertex on it: down the left edge, across the last
-    # row, back up the right edge, across the first row. Including the end rows in
-    # full means the terrain meets the road's ends without a crack.
+def _outline(rb: Ribbon) -> tuple[np.ndarray, np.ndarray]:
+    """Footprint outline, every ribbon vertex on it: down the left edge, across the last row, back up the
+    right edge, across the first row. Including the end rows in full means the terrain meets the road's
+    ends without a crack. Returns the ring (easting, northing) and its heights."""
     rows, cols = rb.e.shape
     idx = ([(r, 0) for r in range(rows)] + [(rows - 1, c) for c in range(1, cols)]
            + [(r, cols - 1) for r in range(rows - 2, -1, -1)] + [(0, c) for c in range(cols - 2, 0, -1)])
     ri, ci = np.array(idx).T
-    ring = np.column_stack([rb.e[ri, ci], rb.n[ri, ci]])
-    ring_h = rb.h[ri, ci]
-    footprint = shapely.Polygon(ring).buffer(0)
+    return np.column_stack([rb.e[ri, ci], rb.n[ri, ci]]), rb.h[ri, ci]
 
+
+def terrain_region(rb: Ribbon, corridor_m: float):
+    """(corridor, footprint): the terrain covers the corridor around the road minus the ribbon's footprint."""
+    ring, _ = _outline(rb)
+    footprint = shapely.Polygon(ring).buffer(0)
     centre_cols = rb.road_cols.start + 2
     centre_xy = np.column_stack([rb.e[:, centre_cols], rb.n[:, centre_cols]])
-    corridor = shapely.LineString(centre_xy).buffer(corridor_m, quad_segs=16)
+    return shapely.LineString(centre_xy).buffer(corridor_m, quad_segs=16), footprint
+
+
+def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame, *,
+                   uv_m: float = 8.0) -> list[Mesh]:
+    """Terrain from the skirt's outer edge out to `corridor_m`, chunked under the vertex limit."""
+    ring, ring_h = _outline(rb)
+    corridor, footprint = terrain_region(rb, corridor_m)
+    centre_cols = rb.road_cols.start + 2
+    centre_xy = np.column_stack([rb.e[:, centre_cols], rb.n[:, centre_cols]])
     region = corridor.difference(footprint)
 
     lattice = _lattice(region, ring, centre_xy)

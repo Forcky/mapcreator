@@ -30,6 +30,7 @@ MATERIAL_PROPS = {
     "walls": {"ksAmbient": 0.4, "ksDiffuse": 0.6, "ksSpecular": 0.05, "ksSpecularEXP": 10.0},
     "roof": {"ksAmbient": 0.38, "ksDiffuse": 0.55, "ksSpecular": 0.2, "ksSpecularEXP": 20.0},
     "rail": {"ksAmbient": 0.4, "ksDiffuse": 0.55, "ksSpecular": 0.35, "ksSpecularEXP": 30.0},
+    "water": {"ksAmbient": 0.25, "ksDiffuse": 0.35, "ksSpecular": 0.8, "ksSpecularEXP": 90.0},
 }
 ALPHA_REF = 0.5
 
@@ -209,9 +210,13 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     _write_attribution(track_dir, attributions, title)
     ext = track_dir / "extension"
     ext.mkdir()
+    water_file = work.root / mesh_stage.STAGE / "water.json"
+    water_type = json.loads(water_file.read_text(encoding="utf-8")).get("type") if water_file.exists() else None
     (ext / "ext_config.ini").write_text(package.ext_config_ini(
         grass_materials=[n for n in ("grass", "terrain") if n in mat_index],
-        road_materials=["road"], version=__version__), encoding="ascii")
+        road_materials=["road"], version=__version__,
+        water_materials=["water"] if "water" in mat_index else [], water_type=water_type or "LAKE"),
+        encoding="ascii")
     _write_centreline(track_dir, job, c, sec, region, lonlat, attributions)
 
     zip_path = out_root / f"{job.track_id}.zip"
