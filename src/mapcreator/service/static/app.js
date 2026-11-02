@@ -38,6 +38,7 @@
     summary: $("job-summary"),
     download: $("download"),
     downloadLink: $("download-link"),
+    contentManagerLink: $("cm-link"),
     error: $("error"),
   };
 
@@ -142,9 +143,21 @@
     return input ? input.value : undefined;
   }
 
-  // Only our own paths and https links become download links.
-  function isSafeUrl(url) {
-    return typeof url === "string" && (/^https:\/\/[^\s]+$/.test(url) || /^\/(?!\/)[^\s]*$/.test(url));
+  // The API's download URL as an absolute http(s) URL, or null if it is anything else.
+  function downloadUrl(raw) {
+    if (typeof raw !== "string") return null;
+    let url;
+    try {
+      url = new URL(raw, window.location.href);
+    } catch (_) {
+      return null;
+    }
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+  }
+
+  // Content Manager downloads the zip from this URL itself, and asks before it installs anything.
+  function contentManagerLink(url) {
+    return `acmanager://install?url=${encodeURIComponent(url)}`;
   }
 
   function showError(message) {
@@ -481,8 +494,10 @@
       failed: `The build failed. ${job.error || ""}`.trim(),
     };
     el.jobStatus.textContent = messages[job.status] || "Unknown status.";
-    if (job.status === "done" && isSafeUrl(job.download_url)) {
-      el.downloadLink.href = job.download_url;
+    const url = job.status === "done" ? downloadUrl(job.download_url) : null;
+    if (url) {
+      el.downloadLink.href = url;
+      el.contentManagerLink.href = contentManagerLink(url);
       el.download.hidden = false;
       showSummary(job.summary || {});
     }

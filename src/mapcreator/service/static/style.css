@@ -395,6 +395,19 @@ input[type="radio"] {
   border-top: 1px solid var(--border);
 }
 
+.downloads {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0.25rem;
+}
+
+.downloads .hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 .summary {
   display: grid;
   grid-template-columns: auto 1fr;

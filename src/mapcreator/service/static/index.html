@@ -75,8 +75,12 @@
         <h3 class="subhead">Your track</h3>
         <p id="job-status" role="status" aria-live="polite"></p>
         <dl id="job-summary" class="summary" hidden></dl>
-        <p id="download" hidden><a id="download-link" class="button button-primary" href="#" download>Download the track (.zip)</a></p>
-        <p class="hint">Unzip it into <code>assettocorsa/content/tracks</code>. Built tracks work in the original Assetto Corsa on PC.</p>
+        <div id="download" class="downloads" hidden>
+          <a id="cm-link" class="button button-primary" href="#">Install with Content Manager</a>
+          <a id="download-link" class="button" href="#" download>Download the track (.zip)</a>
+          <p class="hint">Content Manager asks you to confirm before it installs the track.</p>
+        </div>
+        <p class="hint">To install by hand, unzip the download into <code>assettocorsa/content/tracks</code>. Built tracks work in the original Assetto Corsa on PC.</p>
       </div>
 
       <p id="error" class="error" role="alert" hidden></p>
