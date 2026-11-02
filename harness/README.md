@@ -8,17 +8,17 @@ It goes through **Content Manager (CM)**, which most players use to install and 
 
 ## First drive checklist (M3)
 
-1. Build and validate: `mapcreator build examples/grasstree_hill.json`.
-2. **Look first:** `python harness/ac_harness.py showroom out/grasstree_hill/05_track/grasstree_hill/grasstree_hill_forward.kn5` opens the model in CM's Custom Showroom.
+1. Build and validate: `.venv\Scripts\mapcreator build examples/grasstree_hill.json`. Run everything here from the repository root with the venv's own `python` (or activate the venv first): a bare `python` is often the Microsoft Store stub, without numpy or scipy.
+2. **Look first:** `.venv\Scripts\python harness/ac_harness.py showroom out/grasstree_hill/05_track/grasstree_hill/grasstree_hill_forward.kn5` opens the model in CM's Custom Showroom.
    - Check for the road, green verges, terrain, tree cards, houses and guard rails.
    - There should be no holes, spikes or pink or black textures.
 3. **Install** one of two ways:
-   - `python harness/ac_harness.py install out/grasstree_hill/05_track/grasstree_hill` copies the folder and clears AC's AI cache.
-   - `python harness/ac_harness.py install-cm out/grasstree_hill/05_track/grasstree_hill.zip` makes CM ask to install it, the way users will.
+   - `.venv\Scripts\python harness/ac_harness.py install out/grasstree_hill/05_track/grasstree_hill` copies the folder and clears AC's AI cache.
+   - `.venv\Scripts\python harness/ac_harness.py install-cm out/grasstree_hill/05_track/grasstree_hill.zip` makes CM ask to install it, the way users will.
 
    CM should list "Grasstree Hill Road (north-east)" and "(south-west)". The north-east layout should be the default, with preview and outline and no red warnings.
-4. **Drive:** `python harness/ac_harness.py launch grasstree_hill --layout forward`, or pick it in CM's Quick Drive. Press Drive in the pits menu.
-5. **While on track:** `python harness/ac_harness.py probe` should show:
+4. **Drive:** `.venv\Scripts\python harness/ac_harness.py launch grasstree_hill --layout forward`, or pick it in CM's Quick Drive. Press Drive in the pits menu.
+5. **While on track:** `.venv\Scripts\python harness/ac_harness.py probe` should show:
    - status 2 (live)
    - all four wheel loads above 100 N
    - the car's position
@@ -28,8 +28,8 @@ It goes through **Content Manager (CM)**, which most players use to install and 
    - Do guard rails and houses stop the car?
    - Any gaps, bumps or seams? Is the camber believable?
    - With CSP: is there Grass FX grass on the verges and none on the road?
-7. **After the session:** `python harness/ac_harness.py results` lists the times. It's still unconfirmed whether A→B runs appear as laps.
-8. **After quitting AC:** `python harness/ac_harness.py check-log grasstree_hill` checks `log.txt` and the CSP log.
+7. **After the session:** `.venv\Scripts\python harness/ac_harness.py results` lists the times. It's still unconfirmed whether A→B runs appear as laps.
+8. **After quitting AC:** `.venv\Scripts\python harness/ac_harness.py check-log grasstree_hill` checks `log.txt` and the CSP log.
 9. Repeat for `--layout reverse`, then add an AI opponent in Quick Drive and check it reaches the finish (M4).
 
 If the track doesn't load at all:
@@ -57,11 +57,11 @@ Write these into the private deployment notes:
 To run it:
 
 ```powershell
-python harness/ac_harness.py probe-install                     # once: copy the app into AC's apps/lua
-python harness/ac_harness.py probe-points out/grasstree_hill/05_track/grasstree_hill --layout forward --every 200 --quit --screenshots-every 10
-python harness/ac_harness.py launch grasstree_hill --layout forward
+.venv\Scripts\python harness/ac_harness.py probe-install                     # once: copy the app into AC's apps/lua
+.venv\Scripts\python harness/ac_harness.py probe-points out/grasstree_hill/05_track/grasstree_hill --layout forward --every 200 --quit --screenshots-every 10
+.venv\Scripts\python harness/ac_harness.py launch grasstree_hill --layout forward
 # ...the app drives itself through every point, writes results.json and quits AC
-python harness/ac_harness.py probe-report                      # PASS or a list of problem points
+.venv\Scripts\python harness/ac_harness.py probe-report                      # PASS or a list of problem points
 ```
 
 - Results and screenshots land in `Documents/Assetto Corsa/mapcreator_probe/`.

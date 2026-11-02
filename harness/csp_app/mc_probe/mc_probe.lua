@@ -14,10 +14,11 @@
 -- stormbuster/assetto-corsa-mcp's MIT-licensed bridge; see THIRD_PARTY_NOTICES.md.
 
 local dir = ac.getFolder(ac.FolderID.ACDocuments) .. '/mapcreator_probe'
-local SETTLE_FRAMES = 20
+-- Wait this long in sim time after each teleport: the car drops ~0.5 m and must settle before it's read.
+local SETTLE_S = 1.2
 
 local state = 'loading'
-local points, results, index, wait = nil, {}, 1, 0
+local points, results, index, wait = nil, {}, 1, nil
 local options = { quit = false, screenshots_every = 0 }
 
 local function save(name, value)
@@ -51,7 +52,8 @@ local function record(p)
   end
   local above = car.position + vec3(0, 20, 0)
   local hit = physics.raycastTrack(above, vec3(0, -1, 0), 60)
-  local track = ac.worldCoordinateToTrack(car.position)
+  -- Lateral offset and progress along the AI spline; not every CSP version has this call. UNTESTED.
+  local track = ac.worldCoordinateToTrack and ac.worldCoordinateToTrack(car.position) or nil
   results[#results + 1] = {
     i = index,
     requested = p.pos,
@@ -59,8 +61,8 @@ local function record(p)
     wheels = wheels,
     wheels_outside = car.wheelsOutside,
     raycast_m = hit,
-    lateral = track.x,
-    progress = track.z,
+    lateral = track and track.x or nil,
+    progress = track and track.z or nil,
   }
 end
 
@@ -71,20 +73,22 @@ function script.update(dt)
       save('status.json', { state = state, points = #points, csp = ac.getPatchVersionCode() })
     end
   elseif state == 'starting' then
+    -- CSP's own start button keys on isInMainMenu (the pits setup screen); confirm in M3.
     local sim = ac.getSim()
-    if not sim.isSessionStarted then
+    if sim.isInMainMenu then
       ac.tryToStart(true)
     else
       state = 'probing'
     end
   elseif state == 'probing' then
-    if wait == 0 then
+    if wait == nil then
       local p = points[index]
       physics.setCarPosition(0, vec(p.pos), vec(p.dir))
-      wait = SETTLE_FRAMES
+      wait = SETTLE_S
     else
-      wait = wait - 1
-      if wait == 0 then
+      wait = wait - dt
+      if wait <= 0 then
+        wait = nil
         record(points[index])
         if options.screenshots_every > 0 and (index - 1) % options.screenshots_every == 0 then
           ac.makeScreenshot(dir .. '/shot_' .. index .. '.png', ac.ScreenshotFormat.PNG)
@@ -94,10 +98,17 @@ function script.update(dt)
           state = 'done'
           save('results.json', { results = results, csp = ac.getPatchVersionCode() })
           save('status.json', { state = state, points = #points })
-          os.remove(dir .. '/points.json')
+          -- os.remove is a stub inside CSP's sandbox; io.deleteFile is the real one. Without this the
+          -- probe would run again (and teleport the car) on every later launch.
+          io.deleteFile(dir .. '/points.json')
           if options.quit then ac.shutdownAssettoCorsa() end
         end
       end
     end
   end
+end
+
+function script.windowMain(dt)
+  ui.text('mapcreator probe: ' .. state)
+  if points then ui.text(string.format('point %d of %d', math.min(index, #points), #points)) end
 end

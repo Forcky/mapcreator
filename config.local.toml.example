@@ -21,3 +21,6 @@
 # In-game test harness (Windows, development only):
 # ac_root = "C:/Program Files (x86)/Steam/steamapps/common/assettocorsa"
 # cm_path = "C:/Games/Content Manager/Content Manager.exe"
+# Only if AC's Documents folder isn't where Windows says Documents is (the harness asks Windows,
+# so OneDrive-redirected Documents already work):
+# ac_docs = "E:/Documents/Assetto Corsa"

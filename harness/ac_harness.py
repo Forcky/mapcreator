@@ -73,8 +73,30 @@ def cm_path() -> Path:
     return Path(value)
 
 
+def _documents() -> Path:
+    """The shell's Documents folder, which AC, CM and CSP all use. OneDrive often moves it away from
+    ~/Documents, so ask Windows rather than guess."""
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        class GUID(ctypes.Structure):
+            _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD), ("Data3", wintypes.WORD),
+                        ("Data4", ctypes.c_ubyte * 8)]
+
+        documents = GUID(0xFDD39AD0, 0x238F, 0x46AF, (ctypes.c_ubyte * 8)(0xAD, 0xB4, 0x6C, 0x85, 0x48, 0x03, 0x69, 0xC7))
+        found = ctypes.c_wchar_p()
+        if ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(documents), 0, None, ctypes.byref(found)) == 0:
+            try:
+                return Path(found.value)
+            finally:
+                ctypes.windll.ole32.CoTaskMemFree(found)
+    return Path.home() / "Documents"
+
+
 def ac_docs() -> Path:
-    return Path(os.environ.get("MAPCREATOR_AC_DOCS", Path.home() / "Documents" / "Assetto Corsa"))
+    value = _config("ac_docs", "MAPCREATOR_AC_DOCS")
+    return Path(value) if value else _documents() / "Assetto Corsa"
 
 
 def _cm(*args: str) -> None:
@@ -109,14 +131,40 @@ def _race_ini() -> Path:
     return ac_docs() / "cfg" / "race.ini"
 
 
+def _first_skin(car: str) -> str:
+    skins = ac_root() / "content" / "cars" / car / "skins"
+    found = sorted(p.name for p in skins.iterdir() if p.is_dir()) if skins.is_dir() else []
+    return found[0] if found else ""
+
+
 def _patched_race_ini(tid: str, layout: str, car: str) -> str:
+    """The player's last race.ini, made into a solo practice session on the track.
+
+    Their own settings (weather, lighting, assists) stay. Everything that would turn the launch into
+    something else is cleared, as Content Manager's own clean-up does: an online server, a replay, a
+    benchmark or a restart; extra cars and sessions from a race weekend; events; and the last car's
+    skin and setup.
+    """
+    ini = _race_ini()
+    if not ini.exists():
+        sys.exit(f"{ini} doesn't exist: start any session in Content Manager once, then try again")
     cp = configparser.ConfigParser(strict=False, interpolation=None)
     cp.optionxform = str
-    cp.read(_race_ini(), encoding="utf-8-sig")
+    cp.read(ini, encoding="utf-8-sig")
+    for name in cp.sections():
+        if (name.startswith(("CAR_", "SESSION_", "CONDITION_")) and name not in ("CAR_0", "SESSION_0")) \
+                or name in ("EVENT", "SPECIAL_EVENT"):
+            cp.remove_section(name)
+    if cp.has_section("CAR_0"):
+        cp.remove_option("CAR_0", "_EXT_SETUP_FILENAME")
     for section, values in {
         "RACE": {"TRACK": tid, "CONFIG_TRACK": layout, "MODEL": car, "CARS": "1", "PENALTIES": "0"},
-        "CAR_0": {"MODEL": "-", "DRIVER_NAME": "Test"},
+        "CAR_0": {"MODEL": "-", "DRIVER_NAME": "Test", "SKIN": _first_skin(car), "SETUP": ""},
         "SESSION_0": {"NAME": "Practice", "TYPE": "1", "DURATION_MINUTES": "0", "SPAWN_SET": "PIT"},
+        "REMOTE": {"ACTIVE": "0"},
+        "REPLAY": {"ACTIVE": "0"},
+        "BENCHMARK": {"ACTIVE": "0"},
+        "RESTART": {"ACTIVE": "0"},
         "AUTOSPAWN": {"ACTIVE": "1"},
     }.items():
         if not cp.has_section(section):
@@ -182,8 +230,25 @@ def check_log(tid: str) -> int:
     return 0 if loaded and physics and not errors else 1
 
 
+def _mapping_exists(name: str) -> bool:
+    import ctypes
+
+    FILE_MAP_READ = 0x0004
+    kernel32 = ctypes.windll.kernel32
+    kernel32.OpenFileMappingW.restype = ctypes.c_void_p
+    handle = kernel32.OpenFileMappingW(FILE_MAP_READ, False, name)
+    if not handle:
+        return False
+    kernel32.CloseHandle(ctypes.c_void_p(handle))
+    return True
+
+
 def probe(samples: int = 3) -> int:
     """Physics page: speed, wheel loads, suspension. Graphics page: status and car position."""
+    if not (_mapping_exists("Local\\acpmf_physics") and _mapping_exists("Local\\acpmf_graphics")):
+        # mmap with a tagname would quietly create an empty mapping under AC's name instead.
+        print("AC's shared memory isn't there: is AC running, and in a session?")
+        return 1
     try:
         phys = mmap.mmap(-1, 512, tagname="Local\\acpmf_physics", access=mmap.ACCESS_READ)
         graph = mmap.mmap(-1, 512, tagname="Local\\acpmf_graphics", access=mmap.ACCESS_READ)
