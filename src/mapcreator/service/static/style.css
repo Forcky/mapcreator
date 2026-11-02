@@ -1,0 +1,418 @@
+/* mapcreator map page. Loaded as a file because the content security policy allows no inline styles. */
+
+:root {
+  --bg: #f4f6f7;
+  --panel: #ffffff;
+  --fg: #1b1f23;
+  --muted: #4a5560;
+  --border: #c5ced6;
+  --header: #18232c;
+  --accent: #00695c;
+  --accent-dark: #004d40;
+  --danger: #b71c1c;
+  --danger-bg: #fdecea;
+  --focus: #ffbf47;
+  --start: #2e7d32;
+  --via: #37474f;
+  --finish: #c62828;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+a {
+  color: var(--accent-dark);
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+code {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0.5rem;
+  z-index: 10;
+  padding: 0.5rem 1rem;
+  background: var(--panel);
+  color: var(--fg);
+}
+
+.skip-link:focus {
+  left: 0.5rem;
+}
+
+/* ----- header and footer ----- */
+
+.site-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1rem;
+  padding: 0.6rem 1rem;
+  background: var(--header);
+  color: #ffffff;
+}
+
+.site-header h1 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.site-header p {
+  margin: 0;
+  color: #d3dce3;
+}
+
+.site-footer {
+  padding: 0.5rem 1rem;
+  border-top: 1px solid var(--border);
+  background: #e9edf0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.site-footer p {
+  margin: 0.25rem 0;
+}
+
+/* ----- layout: map above the panel on phones, side by side on wide screens ----- */
+
+.layout {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.map-wrap {
+  position: relative;
+  height: 60vh;
+  min-height: 320px;
+}
+
+.map {
+  position: absolute;
+  inset: 0;
+}
+
+/* A crosshair while the map has keyboard focus (not after a click), for "Add point at map centre". */
+.map-wrap:has(.maplibregl-canvas:focus-visible)::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border: 2px solid var(--fg);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px #ffffff;
+  pointer-events: none;
+}
+
+.map-error {
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  top: 1rem;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  background: var(--panel);
+  border-left: 4px solid var(--danger);
+}
+
+.panel {
+  padding: 1rem;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+
+.panel h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
+}
+
+.subhead {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+@media (min-width: 900px) {
+  body {
+    height: 100vh;
+  }
+
+  .layout {
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr) 390px;
+  }
+
+  .map-wrap {
+    height: auto;
+  }
+
+  .panel {
+    overflow-y: auto;
+    border-top: 0;
+    border-left: 1px solid var(--border);
+  }
+}
+
+/* ----- text ----- */
+
+.hint {
+  margin: 0.25rem 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.route-info {
+  min-height: 1.5em;
+  margin: 0.5rem 0;
+  font-weight: 600;
+}
+
+.error {
+  margin: 1rem 0 0;
+  padding: 0.6rem 0.8rem;
+  border-left: 4px solid var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+/* ----- controls ----- */
+
+.button {
+  min-height: 44px;
+  padding: 0.55rem 1rem;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--accent-dark);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  background: #e0f2f1;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button-primary {
+  display: inline-flex;
+  align-items: center;
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.button-primary:hover:not(:disabled) {
+  background: var(--accent-dark);
+}
+
+.button-quiet {
+  border-color: var(--border);
+  color: var(--fg);
+}
+
+.button-small {
+  min-height: 36px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.9rem;
+}
+
+.map-tools,
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin: 0.5rem 0;
+}
+
+.check,
+.radio {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 36px;
+  cursor: pointer;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 1.15rem;
+  height: 1.15rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.job-form fieldset {
+  margin: 1rem 0 0;
+  padding: 0.5rem 0.75rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.job-form legend {
+  padding: 0 0.25rem;
+  font-weight: 600;
+}
+
+.field-label {
+  display: block;
+  margin: 1rem 0 0.25rem;
+  font-weight: 600;
+}
+
+.optional {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.text-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--muted);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.turnstile {
+  margin: 1rem 0 0;
+}
+
+.job-form > .button-primary {
+  margin-top: 1rem;
+}
+
+/* ----- route points: the list and the map markers share their colours ----- */
+
+.points {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.point {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas: "badge name remove" "badge coords remove";
+  align-items: center;
+  column-gap: 0.6rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #e3e8ec;
+}
+
+.point-badge {
+  grid-area: badge;
+}
+
+.point-name {
+  grid-area: name;
+  font-weight: 600;
+}
+
+.point-coords {
+  grid-area: coords;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.point .button {
+  grid-area: remove;
+}
+
+.marker,
+.point-badge {
+  display: inline-block;
+  width: 28px;
+  height: 28px;
+  border: 3px solid #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  color: #ffffff;
+  font: 700 12px/22px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  text-align: center;
+}
+
+.marker {
+  cursor: grab;
+}
+
+.marker-start {
+  background: var(--start);
+}
+
+.marker-via {
+  background: var(--via);
+}
+
+.marker-finish {
+  background: var(--finish);
+}
+
+/* ----- the job ----- */
+
+.job {
+  margin-top: 1.25rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.75rem;
+  margin: 0.5rem 0;
+}
+
+.summary dt {
+  color: var(--muted);
+}
+
+.summary dd {
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto !important;
+    transition: none !important;
+  }
+}

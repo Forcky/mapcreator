@@ -1,7 +1,12 @@
 import hashlib
+import re
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 import mapcreator.service
+from mapcreator.service.api import create_app
+from mapcreator.service.settings import ServiceSettings
 
 STATIC = Path(mapcreator.service.__file__).parent / "static"
 VENDOR = STATIC / "vendor"
@@ -26,3 +31,47 @@ def test_maplibre_is_the_recorded_release_with_its_licence():
     assert {p.name for p in folder.iterdir()} == set(MAPLIBRE_SHA256)
     for name, digest in MAPLIBRE_SHA256.items():
         assert hashlib.sha256((folder / name).read_bytes()).hexdigest() == digest, name
+
+
+INDEX = STATIC / "index.html"
+
+
+def test_page_has_no_inline_script_or_style():
+    """The CSP forbids inline script and style, so the page must not depend on any."""
+    html = INDEX.read_text(encoding="utf-8")
+    scripts = re.findall(r"<script\b([^>]*)>(.*?)</script>", html, flags=re.S | re.I)
+    assert scripts and all('src="' in attrs and body.strip() == "" for attrs, body in scripts)
+    assert not re.search(r"<style\b", html, re.I)
+    assert not re.search(r"\sstyle\s*=", html, re.I)
+    assert not re.search(r"\son[a-z]+\s*=", html, re.I)  # onclick= and friends
+    assert "javascript:" not in html.lower()
+
+
+def test_page_references_only_files_that_exist():
+    html = INDEX.read_text(encoding="utf-8")
+    local = [ref for ref in re.findall(r'(?:src|href)="([^"]+)"', html)
+             if not ref.startswith(("https://", "#", "data:"))]
+    assert local
+    assert [ref for ref in local if not (STATIC / ref).is_file()] == []
+
+
+def test_script_never_parses_api_text_as_html():
+    js = (STATIC / "app.js").read_text(encoding="utf-8")
+    for risky in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"):
+        assert risky not in js, risky
+
+
+def test_static_files_are_served_with_the_security_headers(tmp_path):
+    settings = ServiceSettings(db_path=tmp_path / "jobs.sqlite3", storage_dir=tmp_path / "downloads", ip_salt="s")
+    client = TestClient(create_app(settings, router=object()))
+    page = client.get("/")
+    assert page.status_code == 200 and '<div id="map"' in page.text
+    assert page.headers["content-type"].startswith("text/html")
+    csp = page.headers["Content-Security-Policy"]
+    assert "script-src 'self';" in csp and "unsafe-inline" not in csp and "frame-ancestors 'none'" in csp
+    assert page.headers["X-Content-Type-Options"] == "nosniff"
+    for path, kind in (("/app.js", "javascript"), ("/style.css", "text/css"),
+                       ("/vendor/maplibre-gl/maplibre-gl.js", "javascript")):
+        r = client.get(path)
+        assert r.status_code == 200 and kind in r.headers["content-type"], path
+        assert r.headers["Content-Security-Policy"] == csp

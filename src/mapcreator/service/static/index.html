@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mapcreator: drive a real road in Assetto Corsa</title>
+  <meta name="description" content="Pick a stretch of real road on the map and get an Assetto Corsa track built from open data.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="vendor/maplibre-gl/maplibre-gl.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="vendor/maplibre-gl/maplibre-gl.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#panel">Skip to the route options</a>
+
+  <header class="site-header">
+    <h1>mapcreator</h1>
+    <p>Pick a real road and get an Assetto Corsa track built from open data.</p>
+  </header>
+
+  <main class="layout">
+    <section class="map-wrap" aria-label="Map">
+      <div id="map" class="map"></div>
+      <p id="map-error" class="map-error" role="alert" hidden></p>
+      <noscript><p class="map-error">The map needs JavaScript.</p></noscript>
+    </section>
+
+    <section id="panel" class="panel" aria-labelledby="panel-title" tabindex="-1">
+      <h2 id="panel-title">Your road</h2>
+      <p class="hint">Click the map to add a start, then a finish. Each further click adds a point and becomes the new finish. Drag points to move them.</p>
+      <p class="hint">With a keyboard: select the map, move it with the arrow keys and zoom with + and −, then use Add point at map centre.</p>
+
+      <div class="map-tools">
+        <button type="button" id="add-centre" class="button">Add point at map centre</button>
+        <label class="check">
+          <input type="checkbox" id="topo-toggle">
+          <span>Show theLIST topographic map</span>
+        </label>
+      </div>
+
+      <h3 class="subhead">Points</h3>
+      <p id="points-empty" class="hint">No points yet.</p>
+      <ol id="points" class="points"></ol>
+      <div class="row">
+        <button type="button" id="clear-points" class="button button-quiet" disabled>Clear all points</button>
+      </div>
+      <p id="route-info" class="route-info" role="status" aria-live="polite"></p>
+
+      <form id="job-form" class="job-form" novalidate>
+        <fieldset>
+          <legend>Road width</legend>
+          <label class="radio"><input type="radio" name="width" value="as_mapped" checked> As mapped</label>
+          <label class="radio"><input type="radio" name="width" value="plus_15"> 15% wider</label>
+          <label class="radio"><input type="radio" name="width" value="plus_30"> 30% wider</label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Layouts</legend>
+          <label class="radio"><input type="radio" name="layouts" value="both" checked> Both directions</label>
+          <label class="radio"><input type="radio" name="layouts" value="forward"> Start to finish only</label>
+          <label class="radio"><input type="radio" name="layouts" value="reverse"> Finish to start only</label>
+        </fieldset>
+
+        <label for="track-name" class="field-label">Track name <span class="optional">(optional)</span></label>
+        <input type="text" id="track-name" class="text-input" maxlength="60" autocomplete="off" spellcheck="false" aria-describedby="track-id-hint">
+        <p id="track-id-hint" class="hint">Folder name in Assetto Corsa: <code id="track-id"></code></p>
+
+        <div id="turnstile" class="turnstile" hidden></div>
+
+        <button type="submit" id="submit" class="button button-primary" disabled>Build my track</button>
+      </form>
+
+      <div id="job" class="job" hidden>
+        <h3 class="subhead">Your track</h3>
+        <p id="job-status" role="status" aria-live="polite"></p>
+        <dl id="job-summary" class="summary" hidden></dl>
+        <p id="download" hidden><a id="download-link" class="button button-primary" href="#" download>Download the track (.zip)</a></p>
+        <p class="hint">Unzip it into <code>assettocorsa/content/tracks</code>. Built tracks work in the original Assetto Corsa on PC.</p>
+      </div>
+
+      <p id="error" class="error" role="alert" hidden></p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      Road data © <a href="https://www.openstreetmap.org/copyright" rel="noopener">OpenStreetMap contributors</a>, available under the Open Database Licence (ODbL).
+      Base map by <a href="https://openfreemap.org/" rel="noopener">OpenFreeMap</a>, © <a href="https://openmaptiles.org/" rel="noopener">OpenMapTiles</a>.
+      Topographic Basemap from <a href="https://www.thelist.tas.gov.au/" rel="noopener">theLIST</a> © State of Tasmania, <a href="https://creativecommons.org/licenses/by/3.0/au/" rel="noopener">CC BY 3.0 AU</a>.
+      Elevation from the Tasmania 2 metre DEM from theLIST © State of Tasmania, CC BY 3.0 AU.
+    </p>
+    <p>Not affiliated with or endorsed by Kunos Simulazioni. Assetto Corsa is a trademark of its owner.</p>
+  </footer>
+</body>
+</html>
