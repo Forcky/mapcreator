@@ -37,19 +37,43 @@ CHUNK = 8 * 1024 * 1024
 HEADERS = {"User-Agent": "mapcreator mirror"}
 
 
+def _validator(headers) -> str:
+    """What identifies this version of the file: its ETag, else its Last-Modified date."""
+    return headers.get("etag") or headers.get("last-modified") or ""
+
+
 def download(url: str, dest: Path) -> Path:
+    """Resumable download. A partial file is only ever continued from the same version of the source:
+    the version (ETag or Last-Modified) is kept beside it, and each ranged request says If-Range, so a
+    file republished mid-download (theLIST does republish) starts again rather than splicing two versions
+    of the same size together."""
     part = dest.with_name(dest.name + ".part")
+    part_version = part.with_name(part.name + ".version")
+    dest_version = dest.with_name(dest.name + ".version")
     with httpx.Client(headers=HEADERS, timeout=120, follow_redirects=True) as client:
-        total = int(client.head(url).headers["content-length"])
+        head = client.head(url).headers
+        total, version = int(head["content-length"]), _validator(head)
         if dest.exists() and dest.stat().st_size == total:
-            print(f"{dest.name}: already complete ({total / 1e9:.2f} GB)")
-            return dest
+            recorded = dest_version.read_text(encoding="utf-8") if dest_version.exists() else ""
+            if not recorded or not version or recorded == version:
+                print(f"{dest.name}: already complete ({total / 1e9:.2f} GB)")
+                return dest
+            print(f"{dest.name}: the source has been republished ({recorded} -> {version}); downloading again")
+        if part.exists():
+            kept = part_version.read_text(encoding="utf-8") if part_version.exists() else ""
+            if not kept or kept != version:
+                print(f"{part.name}: from another version of the source (or unknown); starting again")
+                part.unlink()
+        part_version.write_text(version, encoding="utf-8")
         for attempt in range(1000):
             have = part.stat().st_size if part.exists() else 0
             if have >= total:
                 break
+            ranged = {"Range": f"bytes={have}-"}
+            if version:
+                ranged["If-Range"] = version
             try:
-                with client.stream("GET", url, headers={"Range": f"bytes={have}-"}) as r:
+                with client.stream("GET", url, headers=ranged) as r:
                     if r.status_code not in (200, 206):
                         raise httpx.HTTPStatusError("bad status", request=r.request, response=r)
                     if r.status_code == 200 and have:
@@ -71,6 +95,7 @@ def download(url: str, dest: Path) -> Path:
         if part.stat().st_size != total:
             sys.exit(f"{dest.name}: size mismatch after download")
         part.replace(dest)
+        part_version.replace(dest_version)
     print(f"{dest.name}: complete")
     return dest
 
