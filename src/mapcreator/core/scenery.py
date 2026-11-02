@@ -52,14 +52,31 @@ class Trees:
         return Trees(self.xy[mask], self.height[mask])
 
 
+COVER_BLOCK_M = 512.0  # candidate grid made in blocks this size
+
 def candidates_from_cover(region: shapely.Geometry, rng: np.random.Generator,
                           spacing: float = COVER_SPACING_M) -> np.ndarray:
-    """A jittered grid of candidate tree positions inside `region`."""
+    """A jittered grid of candidate tree positions inside `region`.
+
+    Made block by block, skipping blocks `region` doesn't touch, so memory follows the corridor's area
+    rather than its bounding box's (which a long diagonal road makes huge and mostly empty).
+    """
     minx, miny, maxx, maxy = region.bounds
-    gx, gy = np.meshgrid(np.arange(minx, maxx, spacing), np.arange(miny, maxy, spacing))
-    pts = np.column_stack([gx.ravel(), gy.ravel()]) + rng.uniform(-0.45, 0.45, (gx.size, 2)) * spacing
+    xs, ys = np.arange(minx, maxx, spacing), np.arange(miny, maxy, spacing)
+    per = max(int(COVER_BLOCK_M // spacing), 1)
     shapely.prepare(region)
-    return pts[shapely.contains_xy(region, pts[:, 0], pts[:, 1])]
+    out = []
+    for i in range(0, len(xs), per):
+        bx = xs[i:i + per]
+        for j in range(0, len(ys), per):
+            by = ys[j:j + per]
+            block = shapely.box(bx[0] - spacing, by[0] - spacing, bx[-1] + spacing, by[-1] + spacing)
+            if not region.intersects(block):
+                continue
+            gx, gy = np.meshgrid(bx, by)
+            pts = np.column_stack([gx.ravel(), gy.ravel()]) + rng.uniform(-0.45, 0.45, (gx.size, 2)) * spacing
+            out.append(pts[shapely.contains_xy(region, pts[:, 0], pts[:, 1])])
+    return np.vstack(out) if out else np.zeros((0, 2))
 
 
 def heights_for_cover(n: int, rng: np.random.Generator) -> np.ndarray:

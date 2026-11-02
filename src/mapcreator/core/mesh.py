@@ -32,6 +32,7 @@ SKIRT_STEPS_M = (2.0, 5.0, 10.0)  # beyond the verge
 CHUNK_M = 200.0
 # Terrain lattice spacing by distance from the centreline: (up to metres, spacing).
 LATTICE = ((60.0, 4.0), (140.0, 8.0), (300.0, 16.0))
+LATTICE_BLOCK_M = 512.0  # the lattice is made in blocks this size, skipping those far from the road
 FOLD_FRACTION = 0.8  # skirt may reach at most this share of the local radius on the inside of a bend
 # Road distance over straight distance above which a nearby centreline point is another part of the route.
 OTHER_PART_RATIO = 1.4
@@ -210,6 +211,9 @@ def _lattice(region, ring_xy: np.ndarray, centre_xy: np.ndarray) -> np.ndarray:
 
     Distances come from KD-trees over the densely sampled centreline and skirt edge.
     Exact shapely distances to a 13k-vertex line took over 10 minutes for C324.
+
+    The grid is made block by block, skipping blocks the corridor doesn't reach, so memory follows the
+    corridor's area rather than the bounding box's (a long diagonal route has a huge, mostly empty box).
     """
     centre_tree = cKDTree(centre_xy)
     minx, miny, maxx, maxy = region.bounds
@@ -218,11 +222,22 @@ def _lattice(region, ring_xy: np.ndarray, centre_xy: np.ndarray) -> np.ndarray:
     for reach, sp in LATTICE:
         xs = np.arange(np.floor(minx / sp) * sp, maxx + sp, sp)
         ys = np.arange(np.floor(miny / sp) * sp, maxy + sp, sp)
-        gx, gy = np.meshgrid(xs, ys)
-        cand = np.column_stack([gx.ravel(), gy.ravel()])
-        d, _ = centre_tree.query(cand, distance_upper_bound=reach + 1.0, workers=-1)
-        keep = (d <= reach) & (d > lower)
-        pts.append(cand[keep])
+        per = max(int(LATTICE_BLOCK_M // sp), 1)
+        level = []
+        for i in range(0, len(xs), per):
+            bx = xs[i:i + per]
+            for j in range(0, len(ys), per):
+                by = ys[j:j + per]
+                half_diag = float(np.hypot(bx[-1] - bx[0], by[-1] - by[0])) / 2
+                gap, _ = centre_tree.query([(bx[0] + bx[-1]) / 2, (by[0] + by[-1]) / 2])
+                if gap - half_diag > reach:
+                    continue  # no point in this block is within reach of the road
+                gx, gy = np.meshgrid(bx, by)
+                cand = np.column_stack([gx.ravel(), gy.ravel()])
+                d, _ = centre_tree.query(cand, distance_upper_bound=reach + 1.0, workers=-1)
+                level.append(cand[(d <= reach) & (d > lower)])
+        level = np.vstack(level) if level else np.zeros((0, 2))
+        pts.append(level[np.lexsort((level[:, 0], level[:, 1]))])  # row by row, as one grid would give
         lower = reach
     pts = np.vstack(pts)
     shapely.prepare(region)
