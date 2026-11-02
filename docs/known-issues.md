@@ -4,7 +4,6 @@ Found in a code review in November 2026 and not fixed yet, or only answerable in
 
 ## Geometry
 
-- **Verge skirts can reach a parallel leg of the road.** A skirt's reach is limited only by the road's own curvature, not by other parts of the route. On switchbacks whose legs run parallel about 16 m apart on a steep cross-fall (around 12%), grass from one leg can sit up to about 0.5 m above the other leg's carriageway. Validation doesn't catch it. Diverging legs are fine. Fix: limit the skirt by the distance to the nearest other part of the centreline (`core/mesh.py`).
 - **Terrain memory grows with the route's bounding box, not its corridor.** The terrain lattice (`core/mesh.py`) and the WorldCover candidate grid (`core/scenery.py`) cover the whole box. A 30 km diagonal route peaks at about 1.6 GB in the lattice; the 75 km the CLI allows would need about 9.5 GB. The hosted service caps roads at 30 km, inside the example worker's 6 GB limit. Fix: build the lattice only inside the corridor.
 - **Guard-rail visual meshes aren't split.** One continuous rail run longer than about 13 km would exceed the 65,535-vertex limit and fail the build. Real runs are far shorter.
 

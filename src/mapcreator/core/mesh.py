@@ -33,6 +33,8 @@ CHUNK_M = 200.0
 # Terrain lattice spacing by distance from the centreline: (up to metres, spacing).
 LATTICE = ((60.0, 4.0), (140.0, 8.0), (300.0, 16.0))
 FOLD_FRACTION = 0.8  # skirt may reach at most this share of the local radius on the inside of a bend
+# Road distance over straight distance above which a nearby centreline point is another part of the route.
+OTHER_PART_RATIO = 1.4
 
 
 @dataclass
@@ -47,12 +49,50 @@ class Ribbon:
     right_cols: slice  # road edge -> outside
 
 
-def _side_limits(curvature: np.ndarray, full_m: float, step: float) -> tuple[np.ndarray, np.ndarray]:
-    """Max lateral reach on each side so offsets never cross the bend's centre of curvature."""
+def _neighbour_limits(xy: np.ndarray, nrm: np.ndarray, reach_m: float) -> tuple[np.ndarray, np.ndarray]:
+    """Half the distance, on each side, to another part of the route (a parallel leg of a switchback).
+
+    Another part means a centreline point much further away along the road than in a straight line: on the
+    same stretch the two are about equal, while across a hairpin the road distance is at least about 1.5
+    times the gap. Two legs then share the ground between them instead of each skirt reaching over the
+    other carriageway.
+    """
+    n = len(xy)
+    left, right = np.full(n, np.inf), np.full(n, np.inf)
+    if n < 3:
+        return left, right
+    s = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(xy, axis=0).T))])
+    tree = cKDTree(xy)
+    for i, near in enumerate(tree.query_ball_point(xy, r=2 * reach_m)):
+        if len(near) < 2:
+            continue
+        near = np.asarray(near)
+        d_vec = xy[near] - xy[i]
+        d = np.hypot(d_vec[:, 0], d_vec[:, 1])
+        other = (d > 1e-6) & (np.abs(s[near] - s[i]) > OTHER_PART_RATIO * d)
+        if not other.any():
+            continue
+        side = d_vec[other] @ nrm[i]
+        half = d[other] / 2
+        if (side > 0).any():
+            left[i] = half[side > 0].min()
+        if (side < 0).any():
+            right[i] = half[side < 0].min()
+    return left, right
+
+
+def _side_limits(curvature: np.ndarray, full_m: float, step: float, cap_left=None,
+                 cap_right=None) -> tuple[np.ndarray, np.ndarray]:
+    """Max lateral reach on each side so offsets never cross the bend's centre of curvature, nor (with the
+    caps from `_neighbour_limits`) reach another part of the route."""
     k = curvature
     with np.errstate(divide="ignore"):
         lim_left = np.where(k > 1e-6, FOLD_FRACTION / np.abs(k), np.inf)
         lim_right = np.where(k < -1e-6, FOLD_FRACTION / np.abs(k), np.inf)
+    if cap_left is not None:
+        lim_left = np.minimum(lim_left, cap_left)
+    if cap_right is not None:
+        lim_right = np.minimum(lim_right, cap_right)
     win = max(int(round(40.0 / step)), 1)  # neighbouring stations' normals converge too
     lim_left = minimum_filter1d(np.minimum(lim_left, full_m), win)
     lim_right = minimum_filter1d(np.minimum(lim_right, full_m), win)
@@ -63,7 +103,8 @@ def build_ribbon(xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, de
     nrm = np.column_stack([-np.sin(heading), np.cos(heading)])  # left
     step = float(np.median(np.hypot(*np.diff(xy, axis=0).T))) if len(xy) > 1 else 1.0
     full = VERGE_M + SKIRT_STEPS_M[-1]
-    lim_l, lim_r = _side_limits(curvature, half_l.max() + full, step)
+    cap_l, cap_r = _neighbour_limits(np.asarray(xy, dtype=float), nrm, max(half_l.max(), half_r.max()) + full)
+    lim_l, lim_r = _side_limits(curvature, half_l.max() + full, step, cap_l, cap_r)
 
     def side(half, slope, lim):
         edge_h = z - slope * half
