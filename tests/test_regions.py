@@ -78,3 +78,22 @@ def test_lonlat_is_put_on_the_gda94_grid_with_the_datum_shift():
     assert 1.3 < ((e - e0) ** 2 + (n - n0) ** 2) ** 0.5 < 1.7
     lon, lat = TASMANIA.to_lonlat().transform(e, n)
     assert abs(lon - 147.33) < 1e-9 and abs(lat + 42.88) < 1e-9
+
+
+def test_a_wgs84_raster_is_reached_with_the_same_datum_shift(tmp_path):
+    import numpy as np
+    import rasterio
+    from pyproj import Transformer
+    from rasterio.transform import from_origin
+
+    from mapcreator.providers.base import LONLAT_CRS
+    from mapcreator.providers.raster import BlockRaster
+
+    path = tmp_path / "wgs84.tif"
+    with rasterio.open(path, "w", driver="GTiff", width=16, height=16, count=1, dtype="float32", crs="EPSG:4326",
+                       transform=from_origin(147.0, -42.0, 0.01, 0.01)) as ds:
+        ds.write(np.zeros((1, 16, 16), dtype="float32"))
+    r = BlockRaster(str(path), tmp_path / "cache", region_epsg=28355)
+    e, n = 526950.0, 5252458.0
+    assert r.to_raster.transform(e, n) == pytest.approx(
+        Transformer.from_crs(28355, LONLAT_CRS, always_xy=True).transform(e, n), abs=1e-9)

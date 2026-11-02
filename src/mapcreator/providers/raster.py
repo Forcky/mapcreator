@@ -25,6 +25,7 @@ from rasterio.windows import Window
 from shapely.geometry import LineString, box
 
 from mapcreator.providers import cache
+from mapcreator.providers.base import LONLAT_CRS
 
 GDAL_ENV = {
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
@@ -52,6 +53,10 @@ class BlockRaster:
             self.block = block or ds.block_shapes[0][0]
             raster_epsg = ds.crs.to_epsg() if ds.crs else None
         self.to_raster = None
+        if raster_epsg == 4326:
+            # WGS84 rasters (DEM-S, WorldCover) are GDA2020 to within decimetres: take the same datum shift
+            # as OSM coordinates (providers.base.LONLAT_CRS), not PROJ's null shift from GDA94.
+            raster_epsg = LONLAT_CRS
         if region_epsg and raster_epsg and region_epsg != raster_epsg:
             self.to_raster = Transformer.from_crs(region_epsg, raster_epsg, always_xy=True)
         self.blocks: dict[tuple[int, int], np.ndarray] = {}

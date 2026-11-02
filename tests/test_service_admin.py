@@ -16,6 +16,13 @@ def store(tmp_path):
     return JobStore(tmp_path / "jobs.sqlite3")
 
 
+@pytest.fixture(autouse=True)
+def no_real_storage(monkeypatch, tmp_path):
+    from mapcreator.service.storage import LocalStorage
+
+    monkeypatch.setattr(admin, "storage_for", lambda settings: LocalStorage(tmp_path / "unused", "/downloads"))
+
+
 def make(store, n: int):
     return [store.create(Job.model_validate({"track_id": f"road_{i}", "waypoints": [
         {"lon": 147.33 + i / 1000, "lat": -42.81}, WP[1]]}), ip_hash="secret-hash") for i in range(n)]
@@ -47,3 +54,17 @@ def test_fail_requeue_and_delete(store, capsys):
     assert not store.heartbeat(job.id, claimed.worker_id)  # ...and its old worker has lost it
     assert admin.main(["delete", job.id], store=store) == 0 and store.get(job.id) is None
     assert admin.main(["show", job.id], store=store) == 1
+
+
+def test_delete_removes_the_download_too(store, tmp_path):
+    from mapcreator.service.storage import LocalStorage
+
+    downloads = LocalStorage(tmp_path / "downloads", "/downloads")
+    job = make(store, 1)[0]
+    claimed = store.claim_next()
+    key = f"{job.id}/road_0.zip"
+    (tmp_path / "downloads" / job.id).mkdir(parents=True)
+    (tmp_path / "downloads" / key).write_bytes(b"PK")
+    store.complete(claimed.id, claimed.worker_id, {"key": key})
+    assert admin.main(["delete", job.id], store=store, storage=downloads) == 0
+    assert not (tmp_path / "downloads" / key).exists()

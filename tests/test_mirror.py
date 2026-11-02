@@ -68,3 +68,20 @@ def test_a_republished_source_replaces_a_complete_mirror(tmp_path, serve):
     (tmp_path / "f.zip.version").write_text('"v1"')
     serve(Source(b"D" * 1000, '"v2"'))
     assert mirror.download("https://data.example.org/f.zip", tmp_path / "f.zip").read_bytes() == b"D" * 1000
+
+
+def test_a_republish_between_head_and_get_is_followed_not_spliced(tmp_path, serve):
+    (tmp_path / "f.zip.part").write_bytes(b"A" * 400)
+    (tmp_path / "f.zip.part.version").write_text('"v1"')
+    source = Source(b"A" * 1000, '"v1"')
+    real_handler = source.handler
+
+    def republished_after_head(request):
+        if request.method == "GET":  # the HEAD saw v1; by the GET it's v2, smaller
+            source.body, source.etag = b"E" * 700, '"v2"'
+        return real_handler(request)
+
+    source.handler = republished_after_head
+    serve(source)
+    assert mirror.download("https://data.example.org/f.zip", tmp_path / "f.zip").read_bytes() == b"E" * 700
+    assert (tmp_path / "f.zip.version").read_text() == '"v2"'

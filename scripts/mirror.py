@@ -76,9 +76,15 @@ def download(url: str, dest: Path) -> Path:
                 with client.stream("GET", url, headers=ranged) as r:
                     if r.status_code not in (200, 206):
                         raise httpx.HTTPStatusError("bad status", request=r.request, response=r)
-                    if r.status_code == 200 and have:
-                        have = 0  # server ignored the range; start again
-                        part.unlink()
+                    if r.status_code == 200:
+                        # The whole file: the server ignored the range, or (If-Range) the file changed since
+                        # the HEAD. Either way this answer is the version being downloaded now.
+                        version = _validator(r.headers) or version
+                        total = int(r.headers.get("content-length", total))
+                        part_version.write_text(version, encoding="utf-8")
+                        if have:
+                            have = 0
+                            part.unlink()
                     t0, done = time.time(), 0
                     with part.open("ab") as f:
                         for chunk in r.iter_bytes(CHUNK):

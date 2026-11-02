@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 
 from mapcreator.service.db import STATUSES, JobRecord, JobStore
 from mapcreator.service.settings import ServiceSettings
+from mapcreator.service.storage import Storage, storage_for
 
 CANCELLED = "The build was cancelled by the maintainers."
 
@@ -42,7 +43,7 @@ def _public(r: JobRecord) -> dict:
             "result": r.result, "error": r.error}
 
 
-def main(argv: list[str] | None = None, *, store: JobStore | None = None) -> int:
+def main(argv: list[str] | None = None, *, store: JobStore | None = None, storage: Storage | None = None) -> int:
     ap = argparse.ArgumentParser(prog="mapcreator-admin", description="Inspect and fix the mapcreator job queue.")
     sub = ap.add_subparsers(dest="command", required=True)
     sub.add_parser("stats", help="jobs per status, and when a worker was last heard from")
@@ -56,11 +57,14 @@ def main(argv: list[str] | None = None, *, store: JobStore | None = None) -> int
     cancel = sub.add_parser("fail", help="fail a queued or running job by hand")
     cancel.add_argument("id")
     cancel.add_argument("--reason", default=CANCELLED, help="shown on the job page (default: %(default)s)")
-    rm = sub.add_parser("delete", help="forget a job; its download goes when the bucket's lifecycle rule runs")
+    rm = sub.add_parser("delete", help="forget a job and delete its download (with public storage, the bucket's "
+                                        "lifecycle rule removes it)")
     rm.add_argument("id")
     args = ap.parse_args(argv)
 
-    store = store or JobStore(ServiceSettings.from_env().db_path)
+    settings = ServiceSettings.from_env() if store is None or storage is None else None
+    store = store or JobStore(settings.db_path)
+    storage = storage or storage_for(settings)
     if args.command == "stats":
         seen = store.worker_last_seen()
         print(json.dumps({"jobs": store.counts(),
@@ -83,7 +87,13 @@ def main(argv: list[str] | None = None, *, store: JobStore | None = None) -> int
     elif args.command == "fail":
         done = store.cancel(args.id, " ".join(args.reason.split())[:500])
     else:
-        done = store.delete(args.id) is not None
+        result = store.delete(args.id)
+        done = result is not None
+        if result and result.get("key"):
+            try:
+                storage.delete(result["key"])  # a no-op with public storage: the lifecycle rule does it
+            except Exception as e:  # noqa: BLE001 - the job is gone either way; say what's left behind
+                print(f"the job is deleted, but its download {result['key']} couldn't be: {e}", file=sys.stderr)
     if not done:
         print(f"job {args.id} is {record.status}: nothing to do", file=sys.stderr)
         return 1

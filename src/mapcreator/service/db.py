@@ -112,7 +112,11 @@ class JobStore:
             con.executescript(SCHEMA)
             # Databases from before stage reporting. ADD COLUMN is cheap and keeps every row.
             if "stage" not in {r["name"] for r in con.execute("PRAGMA table_info(jobs)")}:
-                con.execute("ALTER TABLE jobs ADD COLUMN stage TEXT")
+                try:
+                    con.execute("ALTER TABLE jobs ADD COLUMN stage TEXT")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" not in str(e):
+                        raise  # another process added it between our check and the ALTER: fine
 
     # A connection per call: cheap for SQLite, and safe from FastAPI's thread pool.
     @contextmanager
