@@ -12,7 +12,7 @@ Everything that can be built and checked without the game is done. The next mile
 | profile | `mapcreator profile job.json` | Smooth centreline + DEM profile, bridges filled; `02_profile/profile.png` | Done |
 | section | `mapcreator section job.json` | Width from OSM tags, camber from the DEM | Done |
 | mesh | `mapcreator mesh job.json` | Road, verges, skirts, terrain; `04_mesh/preview.obj` | Done |
-| scenery | `mapcreator scenery job.json` | Trees (canopy model or WorldCover) and LIST buildings, visual only | Done, branch `scenery` |
+| scenery | `mapcreator scenery job.json` | Trees (canopy model or WorldCover) and buildings (LIST in Tasmania; OSM elsewhere, with an OSM index), visual only | Done, branch `scenery` |
 | track | `mapcreator track job.json` | KN5s, AI lines, layouts, data and UI files, zip | Done, **never loaded in game** |
 | validate | `mapcreator validate job.json` | 70 static checks | Done |
 | `harness/` | `python harness/ac_harness.py …` | CM showroom, install and launch; log, results and shared-memory checks | Written, **untested** |
@@ -34,9 +34,28 @@ Then:
 1. Copy the private marker list from the deployment repo to `.private-markers` in this folder. It's gitignored, and the privacy test uses it.
 2. Create `config.local.toml` from `config.local.toml.example`. Set `ac_root` (the folder that contains `acs.exe`) and `cm_path` (`Content Manager.exe`).
 3. Run `.venv\Scripts\python -m pytest -q`. Every test should pass.
-4. Run `.venv\Scripts\mapcreator build examples\grasstree_hill.json`. The first run downloads OSM data (about 45 s) and DEM tiles (about 30 MB). Later runs take about 30 s.
+4. Run `.venv\Scripts\mapcreator build examples\grasstree_hill.json`. The first run downloads OSM data from Overpass (about 45 s; nothing with an OSM index, below) and DEM tiles (about 30 MB). Later runs take about 30 s.
 
 The output is `out\grasstree_hill\05_track\grasstree_hill\` and `grasstree_hill.zip`.
+
+## OSM data: build the local index once
+
+Public Overpass is fine for a handful of development builds. For anything more, such as running the hosted service, a batch of builds, or buildings outside Tasmania, read OSM from a local index built once from Geofabrik's Australia extract (ODbL; see `docs/data-sources.md`):
+
+```powershell
+.venv\Scripts\python -m pip install -e .[osm]      # pyosmium: needed to build the index, not to use it
+mkdir data\osm                                      # data\ is gitignored
+# Download https://download.geofabrik.de/australia-oceania/australia-latest.osm.pbf (about 0.9 GB) into data\osm\
+.venv\Scripts\python -m mapcreator.providers.osm.index build data\osm\australia-latest.osm.pbf data\osm\australia.sqlite
+```
+
+Then set `osm_index` in `config.local.toml` (or `MAPCREATOR_OSM_INDEX`) to the index's full path. The route stage, the dev route previews and the national fallback's buildings all read it, and Overpass is no longer asked.
+
+- **Check it:** `.venv\Scripts\python -m mapcreator.providers.osm.index query data\osm\australia.sqlite 147.30 -42.82 147.34 -42.79` prints the source file, the OSM data timestamp, and how many roads and buildings are in the box.
+- **Memory:** node locations are kept in memory while building. On a small machine, add `--locations sparse_file_array,data\osm\nodes.cache` to keep them in a file (delete it afterwards).
+- **Refreshing:** download a newer extract and build again. The new index is written as `<name>.partial` and replaces the old one only when it's complete.
+- **Not yet measured:** build time, peak memory and index size for the full Australia extract. On synthetic data the builder handles about 13,000 ways a second on a laptop, so expect it to take tens of minutes.
+- **Windows:** a Python process that had called `osmium.apply()` could take many minutes to exit, or not exit at all. The builder and the tests don't use it; don't use it in scripts either.
 
 ## First drive (M3)
 

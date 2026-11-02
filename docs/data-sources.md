@@ -12,6 +12,7 @@ Checked November 2026. Licences change, so recheck a source's own licence statem
   - A track is a Produced Work, so it needs attribution.
   - The enriched centreline is shipped as `centreline.geojson` under ODbL.
   - OSM is never merged with another road dataset for the same feature.
+  - Production reads OSM from a local index built from a Geofabrik extract (below). Public Overpass is for light development use only.
 
 ## Tasmania (theLIST, © State of Tasmania)
 Attribution format: `"<dataset name>" from theLIST © State of Tasmania`, with the matching CC licence.
@@ -33,7 +34,7 @@ Attribution format: `"<dataset name>" from theLIST © State of Tasmania`, with t
 
 | Need | Dataset | Licence | Notes |
 |---|---|---|---|
-| Roads | OpenStreetMap (Geofabrik extracts) | ODbL | `lanes`, `width`, `surface` coverage is uneven |
+| Roads | OpenStreetMap (Geofabrik extracts) | ODbL | Read from the local OSM index (below). `lanes`, `width`, `surface` coverage is uneven |
 | Elevation, national | Geoscience Australia 1-second SRTM DEM-S | CC BY 4.0 | ~30 m smoothed, vegetation offsets removed; one 38 GB COG on DEA's public bucket, read by window. The fallback outside Tasmania: too coarse for camber, bridges or rails, so tracks get a 240 m profile filter and a 15% grade cap |
 | Elevation, fine | GA 5 m LiDAR DEM; state LiDAR via ELVIS | CC BY (varies by state) | NSW, SA, ACT open; VIC 1 m is paid (10 m free); QLD newer than 3 years is paid; WA is not open |
 | Elevation, fallback | Copernicus DEM GLO-30 | Copernicus DEM licence | Surface model (includes trees and buildings); carry its attribution and notice |
@@ -42,6 +43,23 @@ Attribution format: `"<dataset name>" from theLIST © State of Tasmania`, with t
 | Imagery | QLD public imagery | CC BY-SA | Share-alike carries into derived textures |
 | Imagery | VIC Vicmap, WA Landgate | Paid / personal use | Not usable |
 | Vegetation | ESA WorldCover 10 m; NVIS 7.0 | CC BY 4.0 | WorldCover tree cover (class 10) is the tree fallback everywhere; read by window from its public COGs |
-| Buildings | OSM; Overture (filter sources) | ODbL | Exclude Google Open Buildings from Overture |
+| Buildings | OSM; Overture (filter sources) | ODbL | OSM footprints (closed `building=*` ways) from the local OSM index are the fallback outside Tasmania; none without an index. If Overture is added, exclude Google Open Buildings |
 | Textures | Poly Haven, ambientCG | CC0 | |
 | Map display | OpenFreeMap | OSM / OpenMapTiles attribution | Free, no keys |
+
+## OpenStreetMap: the production source
+
+| | |
+|---|---|
+| Source | Geofabrik's Australia extract, `https://download.geofabrik.de/australia-oceania/australia-latest.osm.pbf` (about 0.9 GB) |
+| Licence | ODbL 1.0, © OpenStreetMap contributors (`https://www.openstreetmap.org/copyright`) |
+| What we keep | Drivable highway ways (the classes in `overpass.DRIVABLE`) with all their tags and node ids; closed `building=*` ways with only their shape and height tags (`building*`, `height`, `min_height`, `roof:*`). Building relations (multipolygons) aren't kept yet |
+| Where | A SQLite file built once by `python -m mapcreator.providers.osm.index build` and named by `osm_index` (`MAPCREATOR_OSM_INDEX`). See `docs/dev-handover.md` |
+| Freshness | The index records the extract's file name and its OSM data timestamp; `python -m mapcreator.providers.osm.index query` prints them. Refresh by building a new index from a newer extract |
+
+ODbL obligations, checked against the licence text (opendatacommons.org, ODbL 1.0) in November 2026:
+
+- **§4.3, Produced Works.** Publicly using a Produced Work needs a notice that content came from the database and is available under the ODbL. Every track's `ATTRIBUTION.txt` carries the OSM lines: "Road centreline and tags" and, when OSM buildings were used, "Building footprints".
+- **§4.6, Derivative Databases.** Treat the index as a Derivative Database: it is a filtered, rearranged copy of the extract. Publicly using a Derivative Database, or a Produced Work from one, means offering recipients either the whole Derivative Database or "the method of making the alterations to the Database (such as an algorithm)". The method is `providers/osm/index.py` in this repository, applied to the Geofabrik extract named in the index, and the centreline each track uses ships as `centreline.geojson`.
+- **Still to do:** tracks don't yet point recipients at that method. Once this repository is published, `ATTRIBUTION.txt` should say where.
+- The index itself stays on the build machines and isn't published.
