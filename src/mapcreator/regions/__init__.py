@@ -22,10 +22,11 @@ from typing import Callable
 from pyproj import Transformer
 
 from mapcreator.config import Settings
-from mapcreator.providers.base import OSM, OSM_BUILDINGS, Attribution
+from mapcreator.providers.base import LONLAT_CRS, OSM, OSM_BUILDINGS, Attribution
 
 # A DEM coarser than this can't resolve a road's camber or the drop beside it.
 FINE_DEM_M = 5.0
+
 
 
 @dataclass(frozen=True)
@@ -49,10 +50,10 @@ class Region:
         return w <= lon <= e and s <= lat <= n
 
     def to_xy(self) -> Transformer:
-        return Transformer.from_crs(4326, self.epsg, always_xy=True)
+        return Transformer.from_crs(LONLAT_CRS, self.epsg, always_xy=True)
 
     def to_lonlat(self) -> Transformer:
-        return Transformer.from_crs(self.epsg, 4326, always_xy=True)
+        return Transformer.from_crs(self.epsg, LONLAT_CRS, always_xy=True)
 
 
 def _tas_dem(settings: Settings):

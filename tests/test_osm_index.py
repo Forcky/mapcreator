@@ -11,6 +11,7 @@ import shapely
 from pyproj import Transformer
 
 from mapcreator import config
+from mapcreator.providers.base import LONLAT_CRS
 from mapcreator.job import Job, Waypoint
 from mapcreator.pipeline import route_stage
 from mapcreator.pipeline.workdir import WorkDir
@@ -97,7 +98,7 @@ FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
 """
 # West, south, east, north: around the block, clear of the far road and inside the L-shaped one.
 QUERY = (147.295, -42.805, 147.318, -42.795)
-TO_XY = Transformer.from_crs(4326, EPSG, always_xy=True)
+TO_XY = Transformer.from_crs(LONLAT_CRS, EPSG, always_xy=True)
 
 
 @pytest.fixture(scope="module")

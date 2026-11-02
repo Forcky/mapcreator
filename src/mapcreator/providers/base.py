@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# Longitudes and latitudes from OSM and the map page are WGS84, which in Australia sits within decimetres of
+# GDA2020 and about 1.5 m from GDA94. The work CRSs are GDA94 MGA zones (matching theLIST's DEM and
+# footprints and GA's DEM-S), so lon/lat is treated as GDA2020: pyproj then applies the published
+# GDA2020 -> GDA94 transformation (7 parameters, 0.01 m), where EPSG:4326 would get a null shift and put
+# the road 1.5 m off the elevation and building data.
+LONLAT_CRS = 7844
+
 
 @dataclass(frozen=True)
 class Attribution:

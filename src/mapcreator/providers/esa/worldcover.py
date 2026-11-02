@@ -19,7 +19,7 @@ import numpy as np
 from pyproj import Transformer
 from shapely.geometry import LineString
 
-from mapcreator.providers.base import Attribution
+from mapcreator.providers.base import LONLAT_CRS, Attribution
 from mapcreator.providers.raster import BlockRaster
 
 ATTRIBUTION = Attribution(
@@ -46,7 +46,7 @@ class WorldCover:
         self.cache_dir = cache_dir
         self.region_epsg = region_epsg
         self.url_template = url_template
-        self.to_lonlat = Transformer.from_crs(region_epsg, 4326, always_xy=True)
+        self.to_lonlat = Transformer.from_crs(region_epsg, LONLAT_CRS, always_xy=True)
         self.tiles: dict[str, BlockRaster] = {}
 
     def _tile(self, name: str) -> BlockRaster:

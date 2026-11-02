@@ -66,3 +66,15 @@ def test_no_elevation_under_a_road_is_explained_to_the_user():
     from mapcreator.service.worker import public_error
 
     assert public_error(NoElevation("there's no elevation data along this road")).startswith("There's no elevation")
+
+
+def test_lonlat_is_put_on_the_gda94_grid_with_the_datum_shift():
+    # GDA2020 (≈ WGS84 today) to GDA94 moves points about 1.5 m north-east-ish in Tasmania; a null
+    # shift (EPSG:4326 straight to MGA) would leave the road that far off the DEM and theLIST layers.
+    from pyproj import Transformer
+
+    e, n = TASMANIA.to_xy().transform(147.33, -42.88)
+    e0, n0 = Transformer.from_crs(4326, 28355, always_xy=True).transform(147.33, -42.88)
+    assert 1.3 < ((e - e0) ** 2 + (n - n0) ** 2) ** 0.5 < 1.7
+    lon, lat = TASMANIA.to_lonlat().transform(e, n)
+    assert abs(lon - 147.33) < 1e-9 and abs(lat + 42.88) < 1e-9

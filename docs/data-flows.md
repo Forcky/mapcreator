@@ -76,7 +76,7 @@ Each stage reads the folders before it and writes its own, so any stage can be r
 | track | `05_track` | everything above | the KN5 model, `fast_lane.ai` per layout, ini files, `ui_track.json`, preview images, `ATTRIBUTION.txt`, `centreline.geojson` (ODbL), the zip |
 | validate | `06_validate` | the track folder | `report.json`: static checks. Any failure fails the job (the page gets the generic message) |
 
-The region (`regions/`) decides the CRS and the providers. Tasmania uses theLIST's 2 m DEM, canopy model and building footprints in MGA zone 55. Elsewhere in Australia the national fallback uses GA's DEM-S, WorldCover trees and OSM buildings, in the MGA zone of the route's mean longitude.
+The region (`regions/`) decides the CRS and the providers. Tasmania uses theLIST's 2 m DEM, canopy model and building footprints in MGA zone 55. Elsewhere in Australia the national fallback uses GA's DEM-S, WorldCover trees and OSM buildings, in the MGA zone of the route's mean longitude. The work CRSs are GDA94 MGA zones, to match the elevation and building data; longitudes and latitudes from OSM and the map page (WGS84, within decimetres of GDA2020) go through the GDA2020-to-GDA94 transformation (`providers.base.LONLAT_CRS`), not a null shift, which would leave the road about 1.5 m off the DEM.
 
 ## What is stored, where, for how long
 

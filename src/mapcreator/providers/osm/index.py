@@ -51,6 +51,7 @@ import numpy as np
 import shapely
 from pyproj import Transformer
 
+from mapcreator.providers.base import LONLAT_CRS
 from mapcreator.providers.osm.overpass import DRIVABLE
 
 # Bump when the table layout changes; queries refuse an index built for another layout.
@@ -417,14 +418,14 @@ def buildings(index_path: str | os.PathLike, bbox: tuple[float, float, float, fl
     relations (courtyards, complexes) aren't in the index.
     """
     minx, miny, maxx, maxy = _check_bbox(bbox)
-    lonlat = Transformer.from_crs(epsg, 4326, always_xy=True).transform_bounds(minx, miny, maxx, maxy,
+    lonlat = Transformer.from_crs(epsg, LONLAT_CRS, always_xy=True).transform_bounds(minx, miny, maxx, maxy,
                                                                                  densify_pts=21)
     with closing(_connect(index_path)) as con:
         rows = _candidates(con, "building", _check_bbox(lonlat))
     if not rows:
         return []
     rings = [np.frombuffer(r[2], dtype="<f8").reshape(-1, 2) for r in rows]
-    x, y = Transformer.from_crs(4326, epsg, always_xy=True).transform(*np.concatenate(rings).T)
+    x, y = Transformer.from_crs(LONLAT_CRS, epsg, always_xy=True).transform(*np.concatenate(rings).T)
     xy = np.column_stack([x, y])
     area = shapely.box(minx, miny, maxx, maxy)
     out: list[shapely.Polygon] = []
@@ -488,7 +489,7 @@ def main(argv: list[str] | None = None) -> int:
     roads = query(args.index, bbox)
     t_roads = time.perf_counter() - t0
     epsg = args.epsg or _mga_epsg((args.west + args.east) / 2)
-    projected = Transformer.from_crs(4326, epsg, always_xy=True).transform_bounds(*bbox, densify_pts=21)
+    projected = Transformer.from_crs(LONLAT_CRS, epsg, always_xy=True).transform_bounds(*bbox, densify_pts=21)
     t1 = time.perf_counter()
     footprints = buildings(args.index, projected, epsg)
     t_buildings = time.perf_counter() - t1
