@@ -308,7 +308,43 @@ class RequestGuard:
             if refusal is not None:
                 await refusal(scope, receive, send)
                 return
+            if "content-length" not in headers and scope["method"] not in ("GET", "HEAD"):
+                # A chunked body has no length to check up front: read it here, up to the limit, so an
+                # endless one can't be buffered and parsed by the app.
+                body = await self._read_capped(receive)
+                if body is None:
+                    await JSONResponse({"detail": "The request is too large."}, status_code=413)(scope, receive, send)
+                    return
+                receive = self._replay(body, receive)
         await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _read_capped(receive: Receive) -> bytes | None:
+        chunks, size = [], 0
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                return b""  # the client went away; the app will see the disconnect
+            chunk = message.get("body", b"")
+            size += len(chunk)
+            if size > MAX_BODY_BYTES:
+                return None
+            chunks.append(chunk)
+            if not message.get("more_body", False):
+                return b"".join(chunks)
+
+    @staticmethod
+    def _replay(body: bytes, receive: Receive) -> Receive:
+        sent = False
+
+        async def replay() -> Message:
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+
+        return replay
 
     @staticmethod
     def _body_refusal(headers: Headers) -> Response | None:
@@ -419,23 +455,21 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
         except OutOfArea as e:
             raise HTTPException(422, str(e)) from None
 
-        # The same road with the same options is the same track: hand back the existing job.
-        same = route_hash(body.job)
-        existing = store.find_done_by_route_hash(same) or store.find_active_by_route_hash(same)
-        if existing is not None:
-            response.status_code = 200
-            return {"id": existing.id, "status": existing.status}
-
-        if store.count_queued() >= settings.max_queued_jobs:
+        # One transaction: the same road with the same options is the same track (hand back the existing
+        # job), then the queue cap, then the per-client daily limit.
+        job = body.job.model_copy(update={"track_id": public_track_id(body.job.track_id, route_hash(body.job))})
+        outcome, record = store.submit(job, ip_hash=identity.key(request), max_queued=settings.max_queued_jobs,
+                                       per_ip_per_day=settings.jobs_per_ip_per_day)
+        if outcome == "queue_full":
             raise HTTPException(503, "The build queue is full right now. Please try again later.",
                                 headers={"Retry-After": "900"})
-        who = identity.key(request)
-        if store.count_recent_for_ip(who) >= settings.jobs_per_ip_per_day:
+        if outcome == "ip_limit":
             raise HTTPException(429, f"You've reached the limit of {settings.jobs_per_ip_per_day} tracks a day. "
                                      "Please try again tomorrow.", headers={"Retry-After": "3600"})
-        job = body.job.model_copy(update={"track_id": public_track_id(body.job.track_id, same)})
-        record = store.create(job, ip_hash=who)
-        log.info("job %s queued", record.id)
+        if outcome == "existing":
+            response.status_code = 200
+        else:
+            log.info("job %s queued", record.id)
         return {"id": record.id, "status": record.status}
 
     def absolute(url: str, request: Request) -> str:

@@ -1,3 +1,4 @@
+import json
 import re
 import time
 from pathlib import Path
@@ -341,6 +342,20 @@ def test_raw_addresses_are_never_stored(make, tmp_path):
 def test_oversized_bodies_are_refused(client):
     r = client.post("/api/jobs", content=b"{" + b" " * 70_000 + b"}", headers={"Content-Type": "application/json"})
     assert r.status_code == 413
+
+
+def test_chunked_bodies_without_a_length_are_capped_too(client):
+    def chunks(n):
+        yield b"["
+        for _ in range(n):
+            yield b"0," * 1000
+        yield b"0]"
+
+    big = client.post("/api/route-preview", content=chunks(100), headers={"Content-Type": "application/json"})
+    assert "content-length" not in big.request.headers and big.status_code == 413
+    small = client.post("/api/route-preview", content=iter([json.dumps({"waypoints": job()["waypoints"]}).encode()]),
+                        headers={"Content-Type": "application/json"})
+    assert small.status_code != 413  # read in full and passed on
 
 
 def test_health_and_config(make):

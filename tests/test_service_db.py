@@ -218,3 +218,26 @@ def test_a_database_from_before_stage_reporting_is_upgraded_in_place(tmp_path, c
     assert record.id == "old-job-0123456789" and record.stage is None
     assert store.heartbeat(record.id, record.worker_id, "route") and store.get(record.id).stage == "route"
     JobStore(path, clock=clock)  # opening it again changes nothing
+
+
+def test_simultaneous_submissions_cannot_pass_the_limits(tmp_path):
+    store = JobStore(tmp_path / "race.sqlite3")
+
+    def race(make_job, per_ip: int) -> list[str]:
+        outcomes, barrier = [], threading.Barrier(20)
+
+        def go(i: int) -> None:
+            barrier.wait()
+            outcomes.append(store.submit(make_job(i), ip_hash="one", max_queued=50, per_ip_per_day=per_ip)[0])
+
+        threads = [threading.Thread(target=go, args=(i,)) for i in range(20)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        return outcomes
+
+    # Twenty different roads at once from one client allowed one a day: exactly one gets in.
+    first = race(lambda i: job(f"t{i}", lon=147.33 + i / 10000), per_ip=1)
+    assert first.count("created") == 1 and first.count("ip_limit") == 19
+    # The same road twenty times at once: one job, and everyone else joins it.
+    second = race(lambda i: job(f"s{i}", lon=147.35), per_ip=100)
+    assert second.count("created") == 1 and second.count("existing") == 19

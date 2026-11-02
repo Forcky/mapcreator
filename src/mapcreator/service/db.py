@@ -152,6 +152,33 @@ class JobStore:
             )
         return self.get(job_id)
 
+    def submit(self, job: Job, *, ip_hash: str, max_queued: int, per_ip_per_day: int) -> tuple[str, JobRecord | None]:
+        """Admit a public job, atomically, so simultaneous submissions can't slip past the limits.
+
+        Returns ("existing", the job already done or under way for the same road), ("queue_full", None),
+        ("ip_limit", None) or ("created", the new job), checked in that order.
+        """
+        same = route_hash(job)
+        with self._transaction() as con:
+            row = (con.execute("SELECT * FROM jobs WHERE route_hash = ? AND status = 'done' "
+                               "ORDER BY finished_at DESC LIMIT 1", (same,)).fetchone()
+                   or con.execute("SELECT * FROM jobs WHERE route_hash = ? AND status IN ('queued', 'running') "
+                                  "ORDER BY created_at LIMIT 1", (same,)).fetchone())
+            if row is not None:
+                return "existing", JobRecord._from_row(row)
+            if con.execute("SELECT COUNT(*) FROM jobs WHERE status = 'queued'").fetchone()[0] >= max_queued:
+                return "queue_full", None
+            now = self.clock()
+            recent = con.execute("SELECT COUNT(*) FROM jobs WHERE ip_hash = ? AND created_at >= ?",
+                                 (ip_hash, now - 86400.0)).fetchone()[0]
+            if recent >= per_ip_per_day:
+                return "ip_limit", None
+            job_id = secrets.token_urlsafe(16)
+            con.execute("INSERT INTO jobs (id, status, job_json, route_hash, ip_hash, created_at) "
+                        "VALUES (?, 'queued', ?, ?, ?, ?)", (job_id, job.model_dump_json(), same, ip_hash, now))
+            created = con.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        return "created", JobRecord._from_row(created)
+
     def get(self, job_id: str) -> JobRecord | None:
         return self._one("SELECT * FROM jobs WHERE id = ?", (job_id,))
 
