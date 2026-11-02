@@ -88,3 +88,18 @@ Each step below is a decision or an account for the operator to set up. They are
 Every setting is a `MAPCREATOR_*` environment variable:
 - the service's in `src/mapcreator/service/settings.py`
 - the pipeline's in `src/mapcreator/config.py` and `config.local.toml.example`
+
+## 4. Operating the queue
+
+`mapcreator-admin` works on the web app's job database directly. Run it inside the web container, where the database and settings are:
+
+```sh
+docker exec <web container> mapcreator-admin stats                    # jobs per status, worker last heard from
+docker exec <web container> mapcreator-admin list --status failed     # newest first
+docker exec <web container> mapcreator-admin show <job id>            # one job in full, no client data
+docker exec <web container> mapcreator-admin requeue <job id>         # failed or running back to queued, attempts reset
+docker exec <web container> mapcreator-admin fail <job id> --reason "..."   # shown on the job page
+docker exec <web container> mapcreator-admin delete <job id>          # the download goes with the bucket's lifecycle rule
+```
+
+`GET /api/status` says whether a worker has been heard from in the last two minutes; the map page warns visitors when it hasn't.

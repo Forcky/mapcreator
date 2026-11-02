@@ -507,6 +507,8 @@
     el.download.hidden = true;
     el.summary.hidden = true;
     el.jobStatus.textContent = "Checking on your track…";
+    // The job section sits below the form: bring it into view, or a new or resumed job looks like nothing.
+    el.job.scrollIntoView({ block: "start", behavior: "smooth" });
     pollJob();
   }
 

@@ -264,6 +264,50 @@ class JobStore:
             con.execute("UPDATE jobs SET ip_hash = '' WHERE ip_hash != '' AND created_at < ?", (now - ip_hash_s,))
         return [json.loads(r["result_json"]) for r in old if r["result_json"]]
 
+    # ----- operator commands (mapcreator-admin) -----
+
+    def list_jobs(self, status: str | None = None, limit: int = 50) -> list[JobRecord]:
+        """Newest first."""
+        if status is not None and status not in STATUSES:
+            raise ValueError(f"status must be one of {', '.join(STATUSES)}")
+        where, params = ("WHERE status = ?", (status,)) if status else ("", ())
+        with self._connect() as con:
+            rows = con.execute(f"SELECT * FROM jobs {where} ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                               (*params, limit)).fetchall()
+        return [JobRecord._from_row(r) for r in rows]
+
+    def counts(self) -> dict[str, int]:
+        with self._connect() as con:
+            rows = con.execute("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status").fetchall()
+        return {s: 0 for s in STATUSES} | {r["status"]: r["n"] for r in rows}
+
+    def requeue(self, job_id: str) -> bool:
+        """Put a failed or running job back in the queue with its attempts reset. A running job's worker
+        loses it (its next heartbeat gets 409)."""
+        with self._connect() as con:
+            cur = con.execute(
+                "UPDATE jobs SET status = 'queued', worker_id = NULL, attempts = 0, started_at = NULL, "
+                "heartbeat_at = NULL, finished_at = NULL, error = NULL, stage = NULL "
+                "WHERE id = ? AND status IN ('failed', 'running')", (job_id,))
+        return cur.rowcount == 1
+
+    def cancel(self, job_id: str, reason: str) -> bool:
+        """Fail a queued or running job by hand, with a reason the page shows."""
+        with self._connect() as con:
+            cur = con.execute(
+                "UPDATE jobs SET status = 'failed', worker_id = NULL, finished_at = ?, error = ?, stage = NULL "
+                "WHERE id = ? AND status IN ('queued', 'running')", (self.clock(), reason, job_id))
+        return cur.rowcount == 1
+
+    def delete(self, job_id: str) -> dict | None:
+        """Forget a job. Returns its result (so its download can be removed), or None if there was no job."""
+        with self._transaction() as con:
+            row = con.execute("SELECT result_json FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None:
+                return None
+            con.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        return json.loads(row["result_json"]) if row["result_json"] else {}
+
     def worker_seen(self) -> None:
         """Record that a worker just made an authenticated request."""
         with self._connect() as con:
