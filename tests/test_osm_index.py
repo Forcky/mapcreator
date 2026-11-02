@@ -267,3 +267,14 @@ def test_dev_router_reads_the_index_when_configured(osm_index, tmp_path):
     with pytest.raises(RouterUnavailable, match="map data isn't available"):
         DevRouter(settings=_settings(tmp_path, tmp_path / "missing.sqlite"), fetch=_no_overpass).preview(WESTBOUND)
 
+
+def test_the_national_fallback_takes_buildings_from_the_index(osm_index, tmp_path):
+    from mapcreator.providers.base import OSM_BUILDINGS
+    from mapcreator.regions import TASMANIA, australia
+
+    box = TO_XY.transform_bounds(*QUERY)
+    region = australia(55)  # MGA zone 55, the fixture's CRS
+    assert len(region.buildings(box, _settings(tmp_path, osm_index))) == 1
+    assert region.buildings(box, _settings(tmp_path)) == []  # no index, no buildings (and no Overpass)
+    assert region.buildings_attribution == OSM_BUILDINGS and OSM_BUILDINGS.licence == "ODbL 1.0"
+    assert TASMANIA.buildings_attribution.holder == "© State of Tasmania"  # Tasmania keeps theLIST's footprints
