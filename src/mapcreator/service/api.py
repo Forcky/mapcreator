@@ -172,6 +172,12 @@ class RateLimiter:
             hits.append(now)
             if len(self._hits) > self.MAX_KEYS:
                 self._hits = {k: q for k, q in self._hits.items() if q and q[-1] > cutoff}
+                if len(self._hits) > self.MAX_KEYS // 2:
+                    # A flood of distinct addresses inside one window: keep the most recent half. Forgotten
+                    # keys start afresh, which loosens the limit only while the flood lasts, and the next
+                    # sweep is half the cap away, so the cost per request stays small.
+                    newest = sorted(self._hits.items(), key=lambda kv: kv[1][-1])[-(self.MAX_KEYS // 2):]
+                    self._hits = dict(newest)
             return True
 
 
@@ -198,7 +204,10 @@ class ClientIdentity:
     def address(self, request: Request) -> str:
         peer = request.client.host if request.client else ""
         if self._header and self._is_trusted(peer):
-            claimed = request.headers.get(self._header, "").split(",")[-1].strip()
+            # The last entry of the last copy is the proxy's own: some proxies append a separate header line
+            # rather than extend the client's, and the client's copy then comes first.
+            copies = request.headers.getlist(self._header)
+            claimed = copies[-1].split(",")[-1].strip() if copies else ""
             try:
                 return str(ipaddress.ip_address(claimed))
             except ValueError:

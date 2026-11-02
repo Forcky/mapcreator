@@ -267,3 +267,20 @@ def test_an_older_web_app_that_refuses_stages_still_gets_heartbeats():
     assert worker_api.heartbeat("j" * 22, "k" * 22, "mesh")
     assert worker_api.heartbeat("j" * 22, "k" * 22, "track")  # straight to the plain form now
     assert beats == [{"worker_id": "k" * 22}, {"worker_id": "k" * 22}]
+
+
+def test_a_build_past_the_time_limit_stops_heartbeating_and_is_abandoned(env):
+    _, client, storage, store = env
+    job_id = client.post("/api/jobs", json={"job": JOB}).json()["id"]
+    gave_up = threading.Event()
+
+    def hangs(job, work, on_stage):
+        on_stage("profile")
+        gave_up.wait(5)  # stands in for a stage that never returns
+        return pipeline_that()(job, work)
+
+    work(env, hangs, heartbeat_s=0.05, build_timeout_s=0.3, on_timeout=gave_up.set)
+    assert gave_up.is_set()
+    record = store.get(job_id)
+    assert record.status == "running" and record.stage == "profile"  # nothing reported: it goes stale and is requeued
+    assert storage.keys == []  # the build that finished after the limit was neither uploaded nor reported

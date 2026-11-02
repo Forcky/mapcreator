@@ -426,3 +426,23 @@ def test_public_jobs_and_previews_stay_within_the_length_limit(make):
     far = {"waypoints": [{"lon": 147.0, "lat": -42.0}, {"lon": 148.0, "lat": -41.0}]}
     r = c.post("/api/route-preview", json=far)
     assert r.status_code == 422 and "too far apart" in r.json()["detail"]
+
+
+def test_a_client_supplied_forwarding_line_cannot_choose_the_address(make):
+    c = make(jobs_per_ip_per_day=1, trusted_proxies=("203.0.113.1",), client_ip_header="X-Forwarded-For")
+    proxy = c("203.0.113.1")
+    for i, spoof in enumerate(("6.6.6.6", "6.6.6.7")):
+        # The client's own line first, then the one the proxy added as a separate header.
+        headers = [("X-Forwarded-For", spoof), ("X-Forwarded-For", "198.51.100.1")]
+        r = proxy.post("/api/jobs", json={"job": job(147.30 + i / 100)}, headers=headers)
+        assert r.status_code == (201 if i == 0 else 429)
+
+
+def test_the_rate_limiter_stays_bounded_under_a_flood():
+    from mapcreator.service.api import RateLimiter
+
+    limiter = RateLimiter(1, 60.0, clock=lambda: 1000.0)
+    for i in range(3 * RateLimiter.MAX_KEYS):
+        limiter.allow(f"k{i}")
+    assert len(limiter._hits) <= RateLimiter.MAX_KEYS + 1
+    assert not limiter.allow(f"k{3 * RateLimiter.MAX_KEYS - 1}")  # recent clients are still counted

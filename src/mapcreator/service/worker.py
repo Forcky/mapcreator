@@ -16,6 +16,12 @@ worker's own log. Paths and internals never leave the machine.
 Stopping: the first Ctrl+C or SIGTERM finishes the current job and exits;
 a second one aborts at once, and the abandoned job goes back in the queue
 when its heartbeat goes stale.
+
+A build that runs past `build_timeout_s` is taken to be stuck (a hung
+download, say): the worker stops heartbeating and exits, the container
+restarts it, and the job is requeued once and then failed, as for a worker
+that died. Without this, heartbeats would hold a hung job, and with one
+worker the whole queue, for ever.
 """
 
 from __future__ import annotations
@@ -44,6 +50,9 @@ from mapcreator.service.storage import Storage, storage_for
 log = logging.getLogger(__name__)
 
 INTERNAL_ERROR = "The build failed with an internal error. It has been logged for the maintainers."
+# Longest a build may run. A 30 km road takes minutes on a slow server; an hour means something hung.
+BUILD_TIMEOUT_S = 3600.0
+STUCK_EXIT_CODE = 70
 # Exceptions whose message is about the user's road, written for people, and safe to show.
 USER_FACING = (RouteError, OutOfArea)
 
@@ -151,12 +160,15 @@ class Heartbeat(threading.Thread):
     A new stage is reported straight away rather than at the next interval, so the page keeps up.
     """
 
-    def __init__(self, api: WorkerApi, job_id: str, worker_id: str, interval_s: float):
+    def __init__(self, api: WorkerApi, job_id: str, worker_id: str, interval_s: float, *,
+                 timeout_s: float = BUILD_TIMEOUT_S, on_timeout: Callable[[], None] | None = None):
         super().__init__(name=f"heartbeat-{job_id}", daemon=True)
         self._api = api
         self._job_id = job_id
         self._worker_id = worker_id
         self._interval_s = interval_s
+        self._deadline = time.monotonic() + timeout_s
+        self._on_timeout = on_timeout or _abandon_stuck_build
         self._halt = threading.Event()  # not `_stop`: Thread uses that name itself
         self._wake = threading.Event()
         self._stage: str | None = None
@@ -172,6 +184,11 @@ class Heartbeat(threading.Thread):
             self._wake.clear()
             if self._halt.is_set():
                 return
+            if time.monotonic() > self._deadline:
+                log.error("job %s has run past the build time limit; stopping heartbeats", self._job_id)
+                self.lost = True  # whatever the build produces now, it no longer reports it
+                self._on_timeout()
+                return
             try:
                 if not self._api.heartbeat(self._job_id, self._worker_id, self._stage):
                     log.warning("job %s was taken away from this worker", self._job_id)
@@ -186,11 +203,19 @@ class Heartbeat(threading.Thread):
         self.join(timeout=self._interval_s + 5)
 
 
+def _abandon_stuck_build() -> None:
+    """A stage that never returns can't be stopped from another thread, so end the process. The container
+    restarts it; the job's heartbeats have stopped, so it goes back in the queue."""
+    logging.shutdown()
+    os._exit(STUCK_EXIT_CODE)
+
+
 def run_worker(settings: ServiceSettings, api_base: str, token: str, *, pipeline: Pipeline | None = None,
                storage: Storage | None = None, client: httpx.Client | None = None,
                stop: threading.Event | None = None, max_jobs: int | None = None, exit_when_idle: bool = False,
                heartbeat_s: float = 30.0, idle_s: float = 15.0, max_backoff_s: float = 300.0,
-               scratch_dir: Path | None = None) -> int:
+               scratch_dir: Path | None = None, build_timeout_s: float = BUILD_TIMEOUT_S,
+               on_timeout: Callable[[], None] | None = None) -> int:
     """Claim and build jobs until `stop` is set. Returns the number of jobs taken."""
     pipeline = pipeline or run_pipeline
     storage = storage or storage_for(settings)
@@ -217,7 +242,7 @@ def run_worker(settings: ServiceSettings, api_base: str, token: str, *, pipeline
                 stop.wait(idle_s)
                 continue
             taken += 1
-            _build_one(claim, api, pipeline, storage, heartbeat_s, scratch_dir)
+            _build_one(claim, api, pipeline, storage, heartbeat_s, scratch_dir, build_timeout_s, on_timeout)
             if max_jobs is not None and taken >= max_jobs:
                 break
     finally:
@@ -227,7 +252,8 @@ def run_worker(settings: ServiceSettings, api_base: str, token: str, *, pipeline
 
 
 def _build_one(claim: dict, api: WorkerApi, pipeline: Pipeline, storage: Storage, heartbeat_s: float,
-               scratch_dir: Path | None) -> None:
+               scratch_dir: Path | None, build_timeout_s: float = BUILD_TIMEOUT_S,
+               on_timeout: Callable[[], None] | None = None) -> None:
     job_id, worker_id = str(claim["id"]), str(claim["worker_id"])
     try:
         job = Job.model_validate(claim["job"])
@@ -238,7 +264,8 @@ def _build_one(claim: dict, api: WorkerApi, pipeline: Pipeline, storage: Storage
 
     log.info("job %s: building %s (attempt %s)", job_id, job.track_id, claim.get("attempt"))
     work = Path(tempfile.mkdtemp(prefix="mapcreator-job-", dir=scratch_dir))
-    beat = Heartbeat(api, job_id, worker_id, heartbeat_s)
+    beat = Heartbeat(api, job_id, worker_id, min(heartbeat_s, build_timeout_s), timeout_s=build_timeout_s,
+                     on_timeout=on_timeout)
     beat.start()
     try:
         (work / "job.json").write_text(job.model_dump_json(indent=2), encoding="utf-8")

@@ -30,8 +30,13 @@ RUN pip install ".[s3]" && rm -rf /opt/mapcreator/src /opt/mapcreator/build
 RUN python -c "import rasterio, mapcreator.cli.main, mapcreator.service.worker"
 USER 10001:10001
 # Scratch space for each job's work folder; mount a size-limited tmpfs here.
+# GDAL's network reads (the DEM over HTTPS) give up instead of hanging a build.
 ENV HOME=/scratch \
     TMPDIR=/scratch \
     XDG_CACHE_HOME=/scratch/.cache \
-    MAPCREATOR_CACHE_DIR=/cache
+    MAPCREATOR_CACHE_DIR=/cache \
+    GDAL_HTTP_TIMEOUT=60 \
+    GDAL_HTTP_CONNECTTIMEOUT=20 \
+    GDAL_HTTP_MAX_RETRY=3 \
+    GDAL_HTTP_RETRY_DELAY=5
 CMD ["mapcreator-worker"]
