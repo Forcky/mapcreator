@@ -47,9 +47,11 @@ build worker ── runs the pipeline against local data mirrors ──▶ objec
 
 - **`mapcreator-web`** (`api.py`) serves the map page, the public job API and the worker API from one FastAPI app. The public submits a `Job` and nothing else. In order: a Turnstile check (when configured), a region check, de-duplication (the same road with the same options returns the existing job), then a global queue cap and a per-IP daily limit. Client addresses are stored only as a keyed hash.
 - **The queue** (`db.py`) is one SQLite table in WAL mode. A claim is atomic and hands out a fresh `worker_id` that heartbeat, complete and fail must present. A job whose worker stops heartbeating is requeued, then failed after two attempts.
-- **Route previews** (`routing.py`) come from a self-hosted GraphHopper, or for local development from the build's own OSM graph over Overpass. They are only a guide: the worker routes again during the build.
+- **Route previews** (`routing.py`) come from a self-hosted GraphHopper, or for local development from the build's own OSM graph over Overpass. The worker routes again during the build. To keep it on the same road, the page sends points sampled about every kilometre along the current preview as extra waypoints.
+- **Track ids** are `mc_<slug>_<first 8 of the route hash>`. Two people's tracks with the same name can't overwrite each other in a player's AC install, and rebuilding the same road keeps its id, so Content Manager treats the new zip as an update.
+- **Retention:** every hour, piggy-backed on traffic, the web app deletes finished jobs and their downloads after `MAPCREATOR_KEEP_DAYS` (30) and blanks client-IP hashes after `MAPCREATOR_IP_HASH_DAYS` (2).
 - **`mapcreator-worker`** (`worker.py`) polls the API, validates the job again, runs every stage from `cli.main.STAGES` in a fresh temporary folder, uploads the zip through `storage.py` and reports back. Only errors about the road reach the public; anything else is a generic line.
-- **Downloads** are zip attachments with a quoted `<track_id>.zip` filename and support Range requests, so Content Manager can install them from an `acmanager://install?url=…` link on the job page.
+- **Downloads** are zip attachments with a quoted `<track_id>.zip` filename and support Range requests, so Content Manager can install them from an `acmanager://install?url=…` link on the job page. In production they live in an S3-compatible bucket (Cloudflare R2) behind a public custom domain (`MAPCREATOR_STORAGE=s3`). They're uploaded with the same headers, so the bucket serves exactly what Content Manager needs; locally the web app serves a folder.
 
 Security:
 
