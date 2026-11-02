@@ -9,6 +9,7 @@ visual only.
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import asdict
 
 import numpy as np
@@ -23,6 +24,8 @@ from mapcreator.pipeline import mesh_stage, profile_stage, section_stage
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.providers.esa import worldcover
 from mapcreator.regions import job_region
+
+log = logging.getLogger(__name__)
 
 STAGE = "04b_scenery"
 
@@ -48,9 +51,15 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
 
     # Buildings first: trees must not grow through roofs.
     buildings: list = []
+    buildings_note = None
     if region.buildings is not None:
         bbox = centre.buffer(scenery.BUILDING_REACH_M).bounds
-        buildings = scenery.select_buildings(region.buildings(bbox, settings), xy, centre.buffer(half + 2.0))
+        try:
+            found = region.buildings(bbox, settings)
+        except Exception as e:  # noqa: BLE001 - any source failure costs the buildings, not the track
+            log.warning("building footprints unavailable (%s: %s); building without them", type(e).__name__, e)
+            found, buildings_note = [], "unavailable"
+        buildings = scenery.select_buildings(found, xy, centre.buffer(half + 2.0))
         if buildings:
             attributions.append(region.buildings_attribution)
     built = shapely.unary_union([b.buffer(3.0) for b in buildings]) if buildings else None
@@ -104,6 +113,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "trees": len(trees),
         "tree_source": source,
         "buildings": len(buildings),
+        "buildings_source": buildings_note or "ok",
         "meshes": len(meshes),
         "vertices": int(sum(len(m.positions) for m in meshes)),
         "triangles": int(sum(len(m.triangles) for m in meshes)),

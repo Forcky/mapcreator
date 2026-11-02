@@ -15,6 +15,7 @@ from pathlib import Path
 import httpx
 
 from mapcreator.config import Settings
+from mapcreator.providers import cache as cache_io
 
 # Classes a car may be routed along. `service` and `track` are left out so a route
 # between sparse waypoints doesn't wander through car parks or forestry tracks.
@@ -34,11 +35,15 @@ def query_for_bbox(south: float, west: float, north: float, east: float) -> str:
 
 def fetch(query: str, settings: Settings, *, refresh: bool = False) -> dict:
     cache = settings.cache_dir / "osm" / (hashlib.sha256(query.encode()).hexdigest()[:24] + ".json")
-    if cache.exists() and not refresh:
-        return json.loads(cache.read_text(encoding="utf-8"))
+    if not refresh:
+        cached = cache_io.read_json(cache)
+        if cached is not None:
+            return cached
     data = _post(query, settings)
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps(data), encoding="utf-8")
+    # Overpass reports a timeout or memory limit as a normal answer with a "remark" and partial (or no)
+    # elements. Use it, but don't keep it, or every later build in this box would see the partial roads.
+    if not data.get("remark"):
+        cache_io.write_json(cache, data)
     return data
 
 

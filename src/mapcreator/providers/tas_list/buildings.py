@@ -16,6 +16,7 @@ import httpx
 import shapely
 
 from mapcreator.config import Settings
+from mapcreator.providers import cache as cache_io
 from mapcreator.providers.base import Attribution
 
 ATTRIBUTION = Attribution(
@@ -41,21 +42,28 @@ def _fetch_page(bbox, offset: int, settings: Settings) -> dict:
         try:
             r = httpx.get(URL, params=params, timeout=90, headers={"User-Agent": settings.user_agent})
             r.raise_for_status()
-            return r.json()
-        except httpx.HTTPError:
+            page = r.json()
+            # ArcGIS reports a failed query as HTTP 200 with an "error" object instead of features.
+            if "error" in page or "features" not in page:
+                raise ServiceError(f"theLIST buildings query failed: {str(page.get('error'))[:200]}")
+            return page
+        except (httpx.HTTPError, ServiceError, ValueError):
             if attempt == 3:
                 raise
             time.sleep(5 * (attempt + 1))
     raise RuntimeError("unreachable")
 
 
+class ServiceError(RuntimeError):
+    """theLIST answered, but not with features."""
+
+
 def footprints(bbox: tuple[float, float, float, float], settings: Settings) -> list[shapely.Polygon]:
     """Building polygons (MGA55) intersecting the box, from cache when available."""
     key = hashlib.sha256(json.dumps([round(v) for v in bbox]).encode()).hexdigest()[:16]
     cache = settings.cache_dir / "tas_buildings" / f"{key}.json"
-    if cache.exists():
-        features = json.loads(cache.read_text(encoding="utf-8"))
-    else:
+    features = cache_io.read_json(cache)
+    if features is None:
         features, offset = [], 0
         while True:
             page = _fetch_page(bbox, offset, settings)
@@ -64,8 +72,7 @@ def footprints(bbox: tuple[float, float, float, float], settings: Settings) -> l
             if not page.get("exceededTransferLimit") or not got:
                 break
             offset += len(got)
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps(features), encoding="utf-8")
+        cache_io.write_json(cache, features)  # only a complete answer is cached
     polys = []
     for f in features:
         rings = (f.get("geometry") or {}).get("rings") or []

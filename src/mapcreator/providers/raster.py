@@ -24,6 +24,8 @@ from pyproj import Transformer
 from rasterio.windows import Window
 from shapely.geometry import LineString, box
 
+from mapcreator.providers import cache
+
 GDAL_ENV = {
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
     "GDAL_HTTP_MULTIRANGE": "YES",
@@ -60,7 +62,10 @@ class BlockRaster:
         bx, by = key
         path = self.cache / f"{bx}_{by}.npy"
         if path.exists():
-            return np.load(path)
+            try:
+                return np.load(path)
+            except (OSError, ValueError, EOFError):
+                pass  # cut short by an older writer: read the tile again
         b = self.block
         col0, row0 = bx * b, by * b
         w, h = min(b, self.width - col0), min(b, self.height - row0)
@@ -74,9 +79,7 @@ class BlockRaster:
             arr[arr < -1000] = np.nan  # float-min sentinels seen in the wild
         full = np.zeros((b, b), dtype=dtype) if self.categorical else np.full((b, b), np.nan, dtype=np.float32)
         full[:h, :w] = arr
-        tmp = path.with_suffix(".tmp.npy")
-        np.save(tmp, full)
-        tmp.replace(path)
+        cache.save_npy(path, full)
         return full
 
     def blocks_for(self, geom) -> list[tuple[int, int]]:
