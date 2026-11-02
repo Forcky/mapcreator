@@ -28,6 +28,7 @@ dev = ["pytest>=8", "matplotlib>=3.9", "fastapi>=0.115"]
 [project.scripts]
 mapcreator = "mapcreator.cli.main:main"
 mapcreator-web = "mapcreator.service.api:main"
+mapcreator-worker = "mapcreator.service.worker:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
