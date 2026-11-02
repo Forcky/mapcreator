@@ -10,13 +10,14 @@ from pathlib import Path
 
 from mapcreator import config
 from mapcreator.job import load_job
-from mapcreator.pipeline import profile_stage, route_stage, section_stage
+from mapcreator.pipeline import mesh_stage, profile_stage, route_stage, section_stage
 from mapcreator.pipeline.workdir import WorkDir
 
 STAGES = {
     "route": route_stage.run,
     "profile": profile_stage.run,
     "section": section_stage.run,
+    "mesh": mesh_stage.run,
 }
 
 

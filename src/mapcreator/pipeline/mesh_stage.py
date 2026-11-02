@@ -1,0 +1,64 @@
+"""Stage 4: build the road, verges, skirts and terrain as a neutral scene."""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+
+from mapcreator.config import Settings
+from mapcreator.core import mesh
+from mapcreator.core.scene import LocalFrame, Material, Scene
+from mapcreator.job import Job
+from mapcreator.pipeline import profile_stage, section_stage
+from mapcreator.pipeline.workdir import WorkDir
+from mapcreator.regions import region_for
+
+STAGE = "04_mesh"
+TERRAIN_CORRIDOR_M = 300.0
+
+
+def frame_for(xy: np.ndarray, z: np.ndarray) -> LocalFrame:
+    lo, hi = xy.min(axis=0), xy.max(axis=0)
+    return LocalFrame(e0=float(round((lo[0] + hi[0]) / 2)), n0=float(round((lo[1] + hi[1]) / 2)),
+                      h0=float(math.floor(np.nanmin(z))))
+
+
+def run(job: Job, settings: Settings, work: WorkDir) -> dict:
+    region = region_for(job.waypoints[0].lon, job.waypoints[0].lat)
+    c = np.load(work.root / profile_stage.STAGE / "centreline.npz")
+    sec = np.load(work.root / section_stage.STAGE / "section.npz")
+    dem = region.elevation(settings)
+    dem.load_corridor(c["xy"], profile_stage.CORRIDOR_M)
+
+    frame = frame_for(c["xy"], c["z"])
+    rb = mesh.build_ribbon(c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
+                           sec["slope_left"], sec["slope_right"], dem.sample)
+    meshes = mesh.ribbon_meshes(rb, c["s"], frame)
+    meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, dem.sample, frame)
+
+    scene = Scene(
+        frame=frame,
+        meshes=meshes,
+        materials={
+            "road": Material("road", texture="asphalt", uv_scale=1.0),
+            "grass": Material("grass", texture="grass"),
+            "terrain": Material("terrain", texture="ground"),
+        },
+    )
+    out = work.stage(STAGE)
+    scene.save(out)
+    scene.write_obj(out / "preview.obj")
+
+    by_kind: dict[str, list[int]] = {}
+    for m in meshes:
+        kind = m.name.split("_")[0] + ("_T" if "_T" in m.name else "_V" if "_V" in m.name else "")
+        by_kind.setdefault(kind, []).append(len(m.positions))
+    return {
+        "meshes": len(meshes),
+        "vertices": int(sum(len(m.positions) for m in meshes)),
+        "triangles": int(sum(len(m.triangles) for m in meshes)),
+        "max_vertices_in_a_mesh": int(max(len(m.positions) for m in meshes)),
+        "by_kind": {k: {"meshes": len(v), "vertices": int(sum(v))} for k, v in by_kind.items()},
+        "frame": [frame.e0, frame.n0, frame.h0],
+    }
