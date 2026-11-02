@@ -22,6 +22,9 @@ dea-public-data.s3.ap-southeast-2.amazonaws.com
 # Geoscience Australia's 5 m LiDAR DEM (WCS), used outside Tasmania where it covers the road.
 services.ga.gov.au
 
+# Vicmap Elevation DEM 10m, as ArcGIS elevation tiles from Vicmap as a Service (Victorian roads GA misses).
+tiles-ap1.arcgis.com
+
 # No OpenStreetMap hosts: the worker reads OSM from the local index mounted at /osm
 # (MAPCREATOR_OSM_INDEX). The index is built from a Geofabrik extract on another machine,
 # and public Overpass is for light development use only.

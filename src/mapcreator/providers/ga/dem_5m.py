@@ -74,8 +74,19 @@ class Ga5mDem(TiledDem):
 
 
 def fine_sources(cache_dir: Path, region_epsg: int) -> list[TiledDem]:
-    """The fine DEMs to try for a road outside Tasmania, finest first."""
-    return [Ga5mDem(cache_dir, region_epsg)]
+    """The DEMs to try ahead of DEM-S for a road outside Tasmania, finest first. Each one only answers
+    roads inside its own extent.
+
+    Two more are written, tested against the live services, and left out until their licences are settled:
+    - `providers.qld.dem_1m.QldDem1m`: Queensland's 1 m LiDAR. The service says CC BY-SA, the surveys CC BY
+      4.0; share-alike would carry into every track.
+    - `providers.nsw.dem_5m.NswDem5m`: NSW's statewide 5 m (and the ACT), which fills GA's holes in Canberra,
+      the Blue Mountains and the Putty Road. CC BY 3.0 AU, but with a term about hosting material "on any
+      external cloud platforms" unchanged. It would go after GA's 5 m, and QLD's 1 m first of all.
+    """
+    from mapcreator.providers.vic.dem_10m import VicDem10m
+
+    return [Ga5mDem(cache_dir, region_epsg), VicDem10m(cache_dir, region_epsg)]
 
 
 class NationalElevation:
@@ -90,6 +101,11 @@ class NationalElevation:
         self.fines = fines
         self.coarse = coarse if coarse is not None else GaDemS(cache_dir, region_epsg)
         self.decisions = cache_dir / "ga_dem_5m" / "decisions"
+        from pyproj import Transformer
+
+        from mapcreator.providers.base import LONLAT_CRS
+
+        self._to_lonlat = Transformer.from_crs(region_epsg, LONLAT_CRS, always_xy=True)
         self.chosen = None
         self.coverage = 0.0  # the chosen source's, or the best any source reached
         self.resolution_m = getattr(self.coarse, "resolution_m", 30.0)
@@ -118,7 +134,10 @@ class NationalElevation:
             coverage = float(decided.get("coverage", 0.0))
         else:
             chosen, coverage, tried = None, 0.0, {}
+            lon, lat = self._to_lonlat.transform(line_xy[:, 0], line_xy[:, 1])
             for fine in self.fines:  # finest first: the first that covers the road wins
+                if not fine.covers(float(np.min(lon)), float(np.min(lat)), float(np.max(lon)), float(np.max(lat))):
+                    continue
                 try:
                     tiles += fine.load_corridor(line_xy, buffer_m)
                 except Exception as e:  # noqa: BLE001 - a fine source is a bonus; DEM-S always works
