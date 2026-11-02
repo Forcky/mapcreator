@@ -55,6 +55,18 @@ class ServiceSettings:
     client_ip_header: str | None = None
     # A running job with no heartbeat for this long is handed to another worker (or failed).
     stale_after_minutes: float = 10.0
+    # Retention: finished jobs (and their downloads) are forgotten after `keep_days`; client-IP
+    # hashes are blanked after `ip_hash_days` (they only serve the daily per-IP limit).
+    keep_days: float = 30.0
+    ip_hash_days: float = 2.0
+    # Where finished zips live: "local" (storage_dir) or "s3" (any S3-compatible store, e.g. R2).
+    # For s3, download_base is the bucket's public https address (a custom domain on R2).
+    storage: str = "local"
+    s3_endpoint: str | None = None
+    s3_bucket: str | None = None
+    s3_region: str = "auto"
+    s3_access_key_id: str | None = field(default=None, repr=False)
+    s3_secret_access_key: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.router not in ROUTERS:
@@ -65,6 +77,15 @@ class ServiceSettings:
             raise ValueError(f"MAPCREATOR_WORKER_TOKEN must be at least {MIN_TOKEN_LENGTH} characters")
         if bool(self.turnstile_secret) != bool(self.turnstile_site_key):
             raise ValueError("set both MAPCREATOR_TURNSTILE_SECRET and MAPCREATOR_TURNSTILE_SITE_KEY, or neither")
+        if self.storage not in ("local", "s3"):
+            raise ValueError(f"MAPCREATOR_STORAGE must be local or s3, not {self.storage!r}")
+        if self.storage == "s3":
+            if not (_is_http_url(self.s3_endpoint) and self.s3_bucket):
+                raise ValueError("s3 storage needs MAPCREATOR_S3_ENDPOINT (http(s)) and MAPCREATOR_S3_BUCKET")
+            if not _is_http_url(self.download_base):
+                raise ValueError("with s3 storage, MAPCREATOR_DOWNLOAD_BASE must be the bucket's public http(s) URL")
+        if self.keep_days <= 0 or self.ip_hash_days <= 0:
+            raise ValueError("MAPCREATOR_KEEP_DAYS and MAPCREATOR_IP_HASH_DAYS must be positive")
         if self.serves_downloads:
             if self.download_base.rstrip("/") == "" or self.download_base.startswith("/api"):
                 raise ValueError("MAPCREATOR_DOWNLOAD_BASE must not be / or under /api")
@@ -112,6 +133,14 @@ class ServiceSettings:
             ("trusted_proxies", "TRUSTED_PROXIES", _csv),
             ("client_ip_header", "CLIENT_IP_HEADER", str),
             ("stale_after_minutes", "STALE_MINUTES", float),
+            ("keep_days", "KEEP_DAYS", float),
+            ("ip_hash_days", "IP_HASH_DAYS", float),
+            ("storage", "STORAGE", str.lower),
+            ("s3_endpoint", "S3_ENDPOINT", str),
+            ("s3_bucket", "S3_BUCKET", str),
+            ("s3_region", "S3_REGION", str),
+            ("s3_access_key_id", "S3_ACCESS_KEY_ID", str),
+            ("s3_secret_access_key", "S3_SECRET_ACCESS_KEY", str),
         ):
             raw = get(name)
             if raw is not None:

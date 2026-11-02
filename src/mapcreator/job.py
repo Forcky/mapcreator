@@ -8,6 +8,7 @@ anywhere except to a stretch of road.
 from __future__ import annotations
 
 import json
+import re
 from enum import StrEnum
 from pathlib import Path
 
@@ -56,6 +57,21 @@ class Job(BaseModel):
             if (a.lon, a.lat) == (b.lon, b.lat):
                 raise ValueError("consecutive waypoints must differ")
         return wps
+
+
+PUBLIC_PREFIX = "mc_"
+
+
+def public_track_id(slug: str, route_hash: str) -> str:
+    """The id a hosted build ships under: `mc_<slug>_<hash8>`, at most 32 characters.
+
+    The track folder name is global inside a player's AC install, so two people
+    naming their roads "grasstree_hill" must not overwrite each other. Rebuilding
+    the same road with the same options must keep its id, so Content Manager
+    treats the new zip as an update. The route hash gives both.
+    """
+    base = re.sub(r"[^a-z0-9_]", "", slug.removeprefix(PUBLIC_PREFIX))[:20].strip("_") or "road"
+    return f"{PUBLIC_PREFIX}{base}_{route_hash[:8]}"
 
 
 def load_job(path: Path) -> Job:

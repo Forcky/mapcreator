@@ -14,6 +14,8 @@ from mapcreator.service.api import create_app
 from mapcreator.service.settings import ServiceSettings
 from mapcreator.service.storage import LocalStorage
 from mapcreator.service.worker import INTERNAL_ERROR, BuildOutput, run_worker
+from mapcreator.job import Job, public_track_id
+from mapcreator.service.db import route_hash
 
 TOKEN = "w" * 40
 JOB = {"track_id": "test_road", "waypoints": [{"lon": 147.33, "lat": -42.81}, {"lon": 147.42, "lat": -42.74}]}
@@ -80,12 +82,13 @@ def test_worker_builds_uploads_and_reports(env):
     status = client.get(f"/api/jobs/{job_id}").json()
     assert status["status"] == "done", status
     assert status["summary"] == {"title": "Test Road", "length_m": 1000.0}
-    assert status["download_url"] == f"http://testserver/downloads/{job_id}/test_road.zip"
+    tid = public_track_id("test_road", route_hash(Job.model_validate(JOB)))  # hosted builds get a stable id
+    assert status["download_url"] == f"http://testserver/downloads/{job_id}/{tid}.zip"
     download = client.get(status["download_url"])
     assert download.status_code == 200
-    assert zipfile.ZipFile(io.BytesIO(download.content)).namelist() == ["test_road/ATTRIBUTION.txt"]
+    assert zipfile.ZipFile(io.BytesIO(download.content)).namelist() == [f"{tid}/ATTRIBUTION.txt"]
 
-    assert seen["job_json"]["track_id"] == "test_road"
+    assert seen["job_json"]["track_id"] == tid
     assert not seen["work"].exists(), "the temporary work folder is removed"
 
 

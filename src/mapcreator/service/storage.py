@@ -14,8 +14,8 @@ AC mod manager) installs from a URL, and it only trusts a quoted
 responses for a link to follow, so a download URL must always answer with
 the zip itself (or a plain redirect to it), never an HTML page.
 
-An S3-compatible store (S3, R2, MinIO) is the production shape and is still
-to do. It needs nothing beyond this interface:
+`S3Storage` is the production shape: any S3-compatible store (S3, R2,
+MinIO), via boto3 (optional extra `s3`). How it's meant to be used:
 - `put` uploads with `download_headers(key)` set as the object's
   Content-Type and Content-Disposition, using credentials scoped to
   write-only on one bucket prefix (the worker should not be able to list or
@@ -45,6 +45,8 @@ class Storage(Protocol):
     def put(self, local_path: Path, key: str) -> None: ...
 
     def url(self, key: str) -> str: ...
+
+    def delete(self, key: str) -> None: ...  # retention; a missing object is not an error
 
 
 def check_key(key: str) -> str:
@@ -82,3 +84,51 @@ class LocalStorage:
 
     def url(self, key: str) -> str:
         return f"{self.public_base}/{quote(check_key(key))}"
+
+    def delete(self, key: str) -> None:
+        (self.directory / check_key(key)).unlink(missing_ok=True)
+
+
+class S3Storage:
+    """An S3-compatible bucket (Cloudflare R2 in production), with a public base URL for downloads.
+
+    Objects are uploaded with `download_headers` as their Content-Type and
+    Content-Disposition, so the bucket serves exactly what Content Manager
+    needs. Range requests are answered by the store itself. `client` can be
+    injected (tests use a fake); otherwise boto3 is imported lazily, so
+    installs without the `s3` extra still work with local storage.
+    """
+
+    def __init__(self, *, bucket: str, public_base: str, endpoint: str | None = None, region: str = "auto",
+                 access_key_id: str | None = None, secret_access_key: str | None = None, client=None):
+        self.bucket = bucket
+        self.public_base = public_base.rstrip("/")
+        if client is None:
+            import boto3  # optional dependency: pip install mapcreator[s3]
+
+            client = boto3.client("s3", endpoint_url=endpoint, region_name=region,
+                                  aws_access_key_id=access_key_id, aws_secret_access_key=secret_access_key)
+        self.client = client
+
+    def put(self, local_path: Path, key: str) -> None:
+        headers = download_headers(key)
+        with open(local_path, "rb") as f:
+            self.client.put_object(Bucket=self.bucket, Key=check_key(key), Body=f,
+                                   ContentType=headers["Content-Type"],
+                                   ContentDisposition=headers["Content-Disposition"])
+
+    def url(self, key: str) -> str:
+        return f"{self.public_base}/{quote(check_key(key))}"
+
+    def delete(self, key: str) -> None:
+        self.client.delete_object(Bucket=self.bucket, Key=check_key(key))
+
+
+def storage_for(settings) -> Storage:
+    """The storage a service process should use, from its settings."""
+    if settings.storage == "s3":
+        return S3Storage(bucket=settings.s3_bucket, public_base=settings.download_base,
+                         endpoint=settings.s3_endpoint, region=settings.s3_region,
+                         access_key_id=settings.s3_access_key_id,
+                         secret_access_key=settings.s3_secret_access_key)
+    return LocalStorage(settings.storage_dir, settings.download_base)

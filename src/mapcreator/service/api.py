@@ -38,13 +38,13 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from mapcreator import __version__
-from mapcreator.job import MAX_WAYPOINTS, Job, Waypoint
+from mapcreator.job import MAX_WAYPOINTS, Job, Waypoint, public_track_id
 from mapcreator.regions import REGIONS
 from mapcreator.service.db import JobStore, route_hash
 from mapcreator.service.routing import (DevRouter, GraphHopperRouter, OutOfArea, RoutePreview, Router,
                                         RouterUnavailable, RoutingError, check_region)
 from mapcreator.service.settings import ServiceSettings
-from mapcreator.service.storage import LocalStorage, Storage, check_key, download_headers
+from mapcreator.service.storage import LocalStorage, Storage, check_key, download_headers, storage_for
 from mapcreator.service.turnstile import MAX_TOKEN_LENGTH, CloudflareTurnstile, Verifier
 
 log = logging.getLogger(__name__)
@@ -312,16 +312,36 @@ def _default_router(settings: ServiceSettings) -> Router:
     return DevRouter()
 
 
+PRUNE_EVERY_S = 3600.0
+
+
 def create_app(settings: ServiceSettings, *, router: Router | None = None, turnstile: Verifier | None = None,
                storage: Storage | None = None) -> FastAPI:
     store = JobStore(settings.db_path)
     router = router or _default_router(settings)
     if turnstile is None and settings.turnstile_secret:
         turnstile = CloudflareTurnstile(settings.turnstile_secret)
-    storage = storage or LocalStorage(settings.storage_dir, settings.download_base)
+    storage = storage or storage_for(settings)
     identity = ClientIdentity(settings)
     previews = RateLimiter(settings.previews_per_ip_per_minute, 60.0)
     max_length_km = Job.model_fields["max_length_km"].default
+    last_prune = [float("-inf")]
+
+    def maybe_prune() -> None:
+        """Retention, at most hourly, piggy-backed on traffic so no scheduler is needed."""
+        now = store.clock()
+        if now - last_prune[0] < PRUNE_EVERY_S:
+            return
+        last_prune[0] = now
+        day = 86400.0
+        for result in store.prune(settings.keep_days * day, settings.ip_hash_days * day):
+            key = result.get("key")
+            if not key:
+                continue
+            try:
+                storage.delete(key)
+            except Exception:  # an object store lifecycle rule is the backstop; never fail a request on this
+                log.warning("could not delete download %s", key)
 
     app = FastAPI(title="mapcreator", version=__version__, docs_url=None, redoc_url=None,
                   openapi_url="/api/openapi.json")
@@ -353,6 +373,7 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
 
     @app.post("/api/jobs", status_code=201)
     def submit_job(body: JobRequest, request: Request, response: Response) -> dict:
+        maybe_prune()
         if turnstile is not None and not turnstile.verify(body.turnstile_token or ""):
             raise HTTPException(403, "The anti-robot check didn't pass. Reload the page and try again.")
         try:
@@ -374,7 +395,8 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
         if store.count_recent_for_ip(who) >= settings.jobs_per_ip_per_day:
             raise HTTPException(429, f"You've reached the limit of {settings.jobs_per_ip_per_day} tracks a day. "
                                      "Please try again tomorrow.", headers={"Retry-After": "3600"})
-        record = store.create(body.job, ip_hash=who)
+        job = body.job.model_copy(update={"track_id": public_track_id(body.job.track_id, same)})
+        record = store.create(job, ip_hash=who)
         log.info("job %s queued", record.id)
         return {"id": record.id, "status": record.status}
 
@@ -425,6 +447,7 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
 
     @app.post(WORKER_PREFIX + "/claim", include_in_schema=False, response_model=None)
     def worker_claim() -> Response | dict:
+        maybe_prune()
         store.requeue_stale(settings.stale_after_minutes * 60)
         record = store.claim_next()
         if record is None:

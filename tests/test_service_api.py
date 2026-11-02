@@ -1,3 +1,4 @@
+import re
 import time
 from pathlib import Path
 
@@ -40,6 +41,9 @@ class FakeStorage:
 
     def url(self, key: str) -> str:
         return f"https://downloads.example.org/{key}"
+
+    def delete(self, key: str) -> None:
+        pass
 
 
 def job(lon: float = 147.33, track_id: str = "t", **extra) -> dict:
@@ -200,7 +204,8 @@ def test_claim_heartbeat_complete(client):
     job_id = submit(client, job(track_id="my_road")).json()["id"]
     lease = claim(client)
     assert lease["id"] == job_id and lease["attempt"] == 1
-    assert lease["job"]["track_id"] == "my_road" and lease["job"]["layouts"] == "both"
+    # Hosted builds ship under a unique, stable id: mc_<slug>_<first 8 of the route hash>.
+    assert re.fullmatch(r"mc_my_road_[0-9a-f]{8}", lease["job"]["track_id"]) and lease["job"]["layouts"] == "both"
     assert client.get(f"/api/jobs/{job_id}").json()["status"] == "running"
 
     url = f"/api/worker/jobs/{job_id}"

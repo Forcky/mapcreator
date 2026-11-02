@@ -39,7 +39,7 @@ from mapcreator.job import Job
 from mapcreator.providers.osm.graph import RouteError
 from mapcreator.regions import OutOfArea
 from mapcreator.service.settings import ServiceSettings
-from mapcreator.service.storage import LocalStorage, Storage
+from mapcreator.service.storage import Storage, storage_for
 
 log = logging.getLogger(__name__)
 
@@ -167,7 +167,7 @@ def run_worker(settings: ServiceSettings, api_base: str, token: str, *, pipeline
                scratch_dir: Path | None = None) -> int:
     """Claim and build jobs until `stop` is set. Returns the number of jobs taken."""
     pipeline = pipeline or run_pipeline
-    storage = storage or LocalStorage(settings.storage_dir, settings.download_base)
+    storage = storage or storage_for(settings)
     own_client = client is None
     if own_client:
         client = httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0), follow_redirects=False)

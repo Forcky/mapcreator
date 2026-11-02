@@ -203,6 +203,23 @@ class JobStore:
             ).rowcount
         return requeued, failed
 
+    def prune(self, keep_s: float, ip_hash_s: float) -> list[dict]:
+        """Forget old work. Returns the results of deleted jobs so their downloads can go too.
+
+        Finished jobs (done or failed) older than `keep_s` are deleted. Every
+        job's client-IP hash is blanked once it's older than `ip_hash_s`: it's
+        only kept for the daily per-IP limit, so it shouldn't outlive that.
+        """
+        now = self.clock()
+        with self._transaction() as con:
+            old = con.execute(
+                "SELECT result_json FROM jobs WHERE status IN ('done', 'failed') AND finished_at < ?",
+                (now - keep_s,),
+            ).fetchall()
+            con.execute("DELETE FROM jobs WHERE status IN ('done', 'failed') AND finished_at < ?", (now - keep_s,))
+            con.execute("UPDATE jobs SET ip_hash = '' WHERE ip_hash != '' AND created_at < ?", (now - ip_hash_s,))
+        return [json.loads(r["result_json"]) for r in old if r["result_json"]]
+
     def count_queued(self) -> int:
         with self._connect() as con:
             return con.execute("SELECT COUNT(*) FROM jobs WHERE status = 'queued'").fetchone()[0]

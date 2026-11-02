@@ -24,9 +24,16 @@ services:
       MAPCREATOR_PUBLIC_URL: https://mapcreator.example.org
       MAPCREATOR_ROUTER: graphhopper
       MAPCREATOR_GRAPHHOPPER_URL: http://graphhopper:8989
-      # Tracks are downloaded from object storage once it is supported (see storage.py). Until then
-      # the default (/downloads, served by this app) only works with a worker on the same host.
-      # MAPCREATOR_DOWNLOAD_BASE: https://downloads.example.org/tracks
+      # Tracks live in an S3-compatible bucket (e.g. Cloudflare R2) served from a public custom domain.
+      # The web app only builds URLs and deletes expired tracks; keys go in .env, not here:
+      #   MAPCREATOR_S3_ACCESS_KEY_ID / MAPCREATOR_S3_SECRET_ACCESS_KEY (scoped to this bucket)
+      MAPCREATOR_STORAGE: s3
+      MAPCREATOR_S3_ENDPOINT: https://<account id>.r2.cloudflarestorage.com
+      MAPCREATOR_S3_BUCKET: mapcreator-tracks
+      MAPCREATOR_DOWNLOAD_BASE: https://downloads.example.org
+      # Retention: finished jobs and their downloads go after 30 days, client-IP hashes after 2.
+      MAPCREATOR_KEEP_DAYS: "30"
+      MAPCREATOR_IP_HASH_DAYS: "2"
       # Your reverse proxy's address as this container sees it, and the header the proxy
       # overwrites with the client's address. Anyone else's copy of that header is ignored.
       MAPCREATOR_TRUSTED_PROXIES: 192.0.2.10

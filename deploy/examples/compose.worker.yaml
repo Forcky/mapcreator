@@ -34,8 +34,15 @@ services:
       https_proxy: http://egress:3128
       GDAL_HTTP_PROXY: egress:3128
       NO_PROXY: ""
-      # A local mirror of the Tasmania 2 m DEM is much faster than reading it over HTTPS:
+      # Finished tracks are uploaded to the same bucket the web app links to (write-only keys in .env).
+      MAPCREATOR_STORAGE: s3
+      MAPCREATOR_S3_ENDPOINT: https://<account id>.r2.cloudflarestorage.com
+      MAPCREATOR_S3_BUCKET: mapcreator-tracks
+      MAPCREATOR_DOWNLOAD_BASE: https://downloads.example.org
+      # Local mirrors (scripts/mirror.py) are much faster than reading over HTTPS, and the canopy
+      # model can only be read from a mirror:
       # MAPCREATOR_TAS_DEM: /mirror/Tasmania_Statewide_2m_DEM_14-08-2021.tif
+      # MAPCREATOR_TAS_CHM: /mirror/CHM_2m/TAS_CHM_2m.tif
     user: "10001:10001"
     volumes:
       - cache:/cache
