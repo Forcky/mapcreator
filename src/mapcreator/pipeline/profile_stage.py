@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 import numpy as np
 
 from mapcreator.config import Settings
@@ -36,6 +38,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     dem = region.elevation(settings)
     tiles = dem.load_corridor(line.xy, CORRIDOR_M)
     z_raw = dem.sample(line.xy[:, 0], line.xy[:, 1])
+    # Sources that pick their data per road (the national fallback) say which they used, for ATTRIBUTION.txt.
+    if hasattr(dem, "attributions"):
+        work.write_json(STAGE, "attributions.json", [asdict(a) for a in dem.attributions])
 
     # A coarse DEM samples the hillside as much as the road: filter far above its cell size
     # and cap the grade at what a sealed road plausibly has.
@@ -58,6 +63,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     summary = st.as_dict() | {
         "dem_tiles": tiles,
         "dem_resolution_m": getattr(dem, "resolution_m", None),
+        "dem_lidar_coverage": getattr(dem, "coverage", None),
         "profile_cutoff_m": cutoff,
         "grade_capped": coarse,
         "centreline_max_deviation_m": round(line.max_deviation_m, 2),

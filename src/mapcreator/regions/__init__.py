@@ -2,7 +2,8 @@
 
 Regions are checked in order, best data first:
 - Tasmania has 2 m LiDAR elevation, a canopy model and building footprints.
-- Anywhere else in Australia falls back to national data: GA's ~30 m DEM-S,
+- Anywhere else in Australia falls back to national data: GA's 5 m LiDAR DEM where it covers
+  the whole road (the populated coast, the Murray-Darling and towns), else GA's ~30 m DEM-S,
   ESA WorldCover trees, and OSM building footprints when a local OSM index is
   configured (none without one). That region works in the MGA zone of the
   route's mean longitude, so a route may cross a zone boundary (the Great
@@ -129,9 +130,9 @@ def australia(zone: int) -> Region:
     epsg = 28300 + zone  # GDA94 / MGA zone N
 
     def elevation(settings: Settings):
-        from mapcreator.providers.ga.dem_s import GaDemS
+        from mapcreator.providers.ga.dem_5m import NationalElevation
 
-        return GaDemS(settings.cache_dir, epsg)
+        return NationalElevation(settings.cache_dir, epsg)
 
     from mapcreator.providers.ga.dem_s import ATTRIBUTION as DEM_S
 

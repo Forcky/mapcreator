@@ -98,12 +98,13 @@ def _attributions(region, work: WorkDir):
     from mapcreator.providers.base import Attribution
 
     out = list(region.attributions)
-    path = work.root / scenery_stage.STAGE / "attributions.json"
-    if path.exists():
-        for d in json.loads(path.read_text(encoding="utf-8")):
-            a = Attribution(**d)
-            if a not in out:
-                out.append(a)
+    for stage in (profile_stage.STAGE, scenery_stage.STAGE):
+        path = work.root / stage / "attributions.json"
+        if path.exists():
+            for d in json.loads(path.read_text(encoding="utf-8")):
+                a = Attribution(**d)
+                if a not in out:
+                    out.append(a)
     return out
 
 
@@ -211,7 +212,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     (ext / "ext_config.ini").write_text(package.ext_config_ini(
         grass_materials=[n for n in ("grass", "terrain") if n in mat_index],
         road_materials=["road"], version=__version__), encoding="ascii")
-    _write_centreline(track_dir, job, c, sec, region, lonlat)
+    _write_centreline(track_dir, job, c, sec, region, lonlat, attributions)
 
     zip_path = out_root / f"{job.track_id}.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
@@ -242,7 +243,7 @@ def _write_attribution(track_dir, attributions, title: str) -> None:
     (track_dir / "ATTRIBUTION.txt").write_text("\r\n".join(lines), encoding="utf-8")
 
 
-def _write_centreline(track_dir, job: Job, c, sec, region, lonlat) -> None:
+def _write_centreline(track_dir, job: Job, c, sec, region, lonlat, attributions) -> None:
     step = 5
     idx = np.arange(0, len(c["s"]), step)
     lon, lat = lonlat.transform(c["xy"][idx, 0], c["xy"][idx, 1])
@@ -259,7 +260,7 @@ def _write_centreline(track_dir, job: Job, c, sec, region, lonlat) -> None:
             "superelevation": [round(float(v), 4) for v in sec["superelevation"][idx]],
             "height_datum": region.height_datum,
             "license": "ODbL-1.0",
-            "attribution": "; ".join(a.line() for a in region.attributions),
+            "attribution": "; ".join(a.line() for a in attributions),
         },
     }
     (track_dir / "centreline.geojson").write_text(

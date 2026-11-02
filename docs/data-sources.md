@@ -36,7 +36,8 @@ Attribution format: `"<dataset name>" from theLIST © State of Tasmania`, with t
 |---|---|---|---|
 | Roads | OpenStreetMap (Geofabrik extracts) | ODbL | Read from the local OSM index (below). `lanes`, `width`, `surface` coverage is uneven |
 | Elevation, national | Geoscience Australia 1-second SRTM DEM-S | CC BY 4.0 | ~30 m smoothed, vegetation offsets removed; one 38 GB COG on DEA's public bucket, read by window. The fallback outside Tasmania: too coarse for camber, bridges or rails, so tracks get a 240 m profile filter and a 15% grade cap |
-| Elevation, fine | GA 5 m LiDAR DEM; state LiDAR via ELVIS | CC BY (varies by state) | NSW, SA, ACT open; VIC 1 m is paid (10 m free); QLD newer than 3 years is paid; WA is not open |
+| Elevation, fine (in use) | Geoscience Australia, DEM of Australia derived from LiDAR 5 Metre Grid ([doi:10.26186/89644](https://doi.org/10.26186/89644)) | CC BY 4.0 | About 245,000 km²: the populated coast, the Murray-Darling floodplains and towns (surveys 2001-2015). Read in 0.02° tiles from GA's WCS (`services.ga.gov.au`, GDA94 lon/lat); no LiDAR comes back as 0.0. Used for a whole road when it covers at least 98% of the centreline (`providers/ga/dem_5m.py`), with DEM-S filling small holes; otherwise the road uses DEM-S throughout |
+| Elevation, finer | State LiDAR via ELVIS | CC BY (varies by state) | NSW, SA, ACT open; VIC 1 m is paid (10 m free); QLD newer than 3 years is paid; WA is not open |
 | Elevation, fallback | Copernicus DEM GLO-30 | Copernicus DEM licence | Surface model (includes trees and buildings); carry its attribution and notice |
 | Imagery as texture | NSW Imagery | CC BY | Best open high-resolution option outside Tasmania |
 | Imagery as texture | DEA GeoMAD (Landsat) | CC BY 4.0 | 30 m colour only |
