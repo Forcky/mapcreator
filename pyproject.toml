@@ -23,6 +23,8 @@ dependencies = [
 plots = ["matplotlib>=3.9"]
 # The hosted web front end and job API. Build workers need only the base package.
 service = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
+# Building the local OSM index from a .osm.pbf extract. Workers only query the index and don't need it.
+osm = ["osmium>=4"]
 dev = ["pytest>=8", "matplotlib>=3.9", "fastapi>=0.115"]
 
 [project.scripts]
