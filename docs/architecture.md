@@ -7,18 +7,17 @@ Every stage reads files and writes files, so each one can be tested and rerun on
 ```
 job.json (waypoints, width option, layouts)
    │
-1. route      → route.geojson          snapped OSM centreline + per-segment tags (roads from the local OSM index)
-2. profile    → centreline_3d.csv      DEM sampling, smoothing with a grade-change limit, camber from cross-slope
-3. width      → widths per station     OSM width → lanes × lane width → class default; optional +15% / +30%
-4. meshgen    → meshes                 road chunks (≤ 65,535 vertices each), verges, adaptive terrain corridor, walls, AC dummies
-4b. scenery  → 04b_scenery/scene      trees (canopy model, else ESA WorldCover cover) + buildings from footprints
-6. kn5        → <track>.kn5            numpy KN5 writer; DDS texture library compressed once at image build
-7. ai_line    → ai/fast_lane.ai        computed offline from the centreline with a curvature speed profile
-8. package    → <track>.zip            data/*.ini, ui/*, map.png, ATTRIBUTION.txt, centreline.geojson, layouts
-9. validate   → report.json            static checks; optional in-game harness during development
+route     01_route     snapped OSM centreline and its ways' tags (roads from the local OSM index)
+profile   02_profile   DEM sampling, smoothing with a grade-change limit and grade cap, bridge dips filled
+section   03_section   width (OSM width → lanes × lane width → class default; +15% / +30%), camber from the DEM, crown
+mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, adaptive terrain corridor, guard rails, AC dummies
+scenery   04b_scenery  trees (canopy model, else ESA WorldCover) and buildings from footprints
+track     05_track     numpy KN5 writer, DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,
+                       centreline.geojson (ODbL), the zip
+validate  06_validate  static checks (report.json); the in-game harness is for development only
 ```
 
-No stage needs a GPU, Blender, the AC SDK or the game.
+The stage names are `mapcreator.pipeline.STAGE_NAMES`; `mapcreator <stage> job.json` reruns one, `mapcreator build job.json` runs them all. No stage needs a GPU, Blender, the AC SDK or the game. `data-flows.md` lists each stage's inputs and outputs.
 
 ## OSM data
 
@@ -34,20 +33,26 @@ Geofabrik extract (.osm.pbf) ──build once (pyosmium)──▶ index (SQLite)
 - The index is opened read-only and immutable, so it can sit on a read-only mount. A rebuild writes a new file and moves it into place when complete; nothing updates the index in place.
 - Building the index needs pyosmium (the `osm` extra); querying needs only Python's `sqlite3` with the R*Tree module.
 
-## Code layout (planned)
+## Code layout
 
 ```
 src/mapcreator/
-  core/        geometry, profile, mesh, kn5, ai_line, package, validate (data-agnostic)
-  providers/   Centreline, Elevation, Canopy, Vegetation, Buildings, Imagery, Textures interfaces
-               osm/, tas_list/, copernicus/, ...  (one package per source; each declares licence + attribution)
+  core/        centreline, profile, section, mesh, scene, scenery, sprites, textures, roadside, kn5, ai_line,
+               layout, package, validate (data-agnostic: arrays and geometry in, meshes and files out)
+  providers/   one package per source; each declares its licence and attribution
+               base, raster (windowed reads and tile cache)
+               tas_list/: 2 m DEM, canopy height model, building footprints (Tasmania)
+               ga/: DEM-S (national elevation); esa/: WorldCover (national tree cover)
                osm/: graph (routing), index (local SQLite index), roads (index or Overpass), overpass (development)
-  regions/     bounding box → providers registry; assembles ATTRIBUTION.txt
+  regions/     bounding box → providers and CRS; Tasmania, then the national fallback by MGA zone
+  pipeline/    one module per stage, wiring providers to core; STAGE_NAMES
   cli/         `mapcreator build job.json` and per-stage commands
-  service/     the hosted service: web API + job queue (api, db), route previews (routing),
-               build worker (worker), download storage (storage), map page (static/)
+  service/     the hosted service: web API + job queue (api, db), route previews (routing), settings,
+               Turnstile (turnstile), build worker (worker), download storage (storage), map page (static/)
 harness/       Windows-only in-game test harness for development
 deploy/examples/  generic container definitions with placeholder settings
+deploy/graphhopper/  the car router image and its routing profile
+scripts/       mirror.py: resumable downloads of the large Tasmanian rasters
 ```
 
 ## Hosted service
