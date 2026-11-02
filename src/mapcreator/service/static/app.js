@@ -356,6 +356,40 @@
     return state.points.map((p) => ({ lon: p.lng, lat: p.lat }));
   }
 
+  // The build routes on its own copy of OpenStreetMap, which can choose a different road from the
+  // preview's router. Points sampled along the previewed line, sent as extra waypoints, make the
+  // build follow the line the person saw. Only a preview of the current points is used.
+  const SHAPE_SPACING_M = 1000;
+
+  function metresBetween(a, b) {
+    const k = Math.PI / 180;
+    const lat = ((a[1] + b[1]) / 2) * k;
+    return 6371000 * Math.hypot((b[0] - a[0]) * k * Math.cos(lat), (b[1] - a[1]) * k);
+  }
+
+  function jobWaypoints() {
+    const user = waypoints();
+    const line = state.routeUsable ? state.route : null;
+    if (!line || line.length < 2 || user.length < 2) return user;
+    const cum = [0];
+    for (let i = 1; i < line.length; i++) cum.push(cum[i - 1] + metresBetween(line[i - 1], line[i]));
+    const total = cum[cum.length - 1];
+    const count = Math.min(state.config.max_waypoints - 2, Math.floor(total / SHAPE_SPACING_M));
+    if (count < 1) return user;
+    const out = [user[0]];
+    let j = 1;
+    for (let k = 1; k <= count; k++) {
+      const target = (total * k) / (count + 1);
+      while (j < line.length - 1 && cum[j] < target) j++;
+      const a = line[j - 1];
+      const b = line[j];
+      const f = (target - cum[j - 1]) / (cum[j] - cum[j - 1] || 1);
+      out.push({ lon: round6(a[0] + (b[0] - a[0]) * f), lat: round6(a[1] + (b[1] - a[1]) * f) });
+    }
+    out.push(user[user.length - 1]);
+    return out;
+  }
+
   // ----- route preview -----
 
   function schedulePreview() {
@@ -428,7 +462,7 @@
     const body = {
       job: {
         track_id: trackId(),
-        waypoints: waypoints(),
+        waypoints: jobWaypoints(),
         width: checkedValue("width"),
         layouts: checkedValue("layouts"),
       },
