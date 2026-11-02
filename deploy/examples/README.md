@@ -61,4 +61,4 @@ The worker reads OpenStreetMap from a local index, not from Overpass, which isn'
 ## Still to do
 
 - **DNS.** Containers on an internal Docker network can still resolve names through Docker's resolver. If that matters to you, run the worker host with a resolver that only answers for allowlisted names.
-- **Proving the proxy's private-range rule.** A request to a bare private address is refused before that rule is reached (it isn't on the allowlist), so it proves nothing about it. To test the rule itself, run a throwaway copy of the proxy whose allowlist also has a wildcard DNS name that resolves to a private address (such as `.nip.io`), and check that `https://10-0-0-1.nip.io/` is refused.
+- **Proving the proxy's private-range rule.** A request to a bare private address is refused before that rule is reached (it isn't on the allowlist), so it proves nothing about it. To test the rule itself, run a throwaway copy of the proxy whose allowlist also has a wildcard DNS name that resolves to a private address (such as `.nip.io`), and check that `https://10-0-0-1.nip.io/` (which resolves to a private address) is refused.
