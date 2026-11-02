@@ -10,7 +10,7 @@ from mapcreator.core import profile as pf
 from mapcreator.job import Job
 from mapcreator.pipeline import route_stage
 from mapcreator.pipeline.workdir import WorkDir
-from mapcreator.regions import FINE_DEM_M, region_for
+from mapcreator.regions import FINE_DEM_M, job_region
 
 STAGE = "02_profile"
 # DEM tiles are fetched this far either side of the road, enough for the terrain corridor later.
@@ -26,7 +26,7 @@ def _fill_mask(run_idx: np.ndarray, runs: list[dict]) -> np.ndarray:
 
 
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
-    region = region_for(job.waypoints[0].lon, job.waypoints[0].lat)
+    region = job_region(job.waypoints)
     route = np.load(work.root / route_stage.STAGE / "route.npz")
     runs = work.read_json(route_stage.STAGE, "runs.json")
 

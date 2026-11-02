@@ -14,7 +14,7 @@ from mapcreator.job import Job
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.providers.osm import graph as osm_graph
 from mapcreator.providers.osm import roads as osm_roads
-from mapcreator.regions import same_region
+from mapcreator.regions import job_region
 
 STAGE = "01_route"
 class RouteTooLong(osm_graph.RouteError):
@@ -50,7 +50,7 @@ def runs(route: osm_graph.Route) -> list[dict]:
 
 
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
-    region = same_region([(w.lon, w.lat) for w in job.waypoints])
+    region = job_region(job.waypoints)
 
     data = osm_roads.for_bbox(_bbox(job, 0.02), settings)
     to_xy = region.to_xy()

@@ -5,7 +5,11 @@ Regions are checked in order, best data first:
 - Anywhere else in Australia falls back to national data: GA's ~30 m DEM-S,
   ESA WorldCover trees, and OSM building footprints when a local OSM index is
   configured (none without one). That region works in the MGA zone of the
-  route's start.
+  route's mean longitude, so a route may cross a zone boundary (the Great
+  Ocean Road crosses 144°E); over a route of tens of kilometres the extra
+  scale error is a few parts in 10,000.
+
+Every stage asks `job_region(job.waypoints)`, so they all agree on the CRS.
 """
 
 from __future__ import annotations
@@ -153,8 +157,20 @@ def region_for(lon: float, lat: float) -> Region:
 
 
 def same_region(points: list[tuple[float, float]]) -> Region:
-    """The region for a set of points. All must fall in one region (and one MGA zone outside Tasmania)."""
-    regions = {region_for(lon, lat).key for lon, lat in points}
-    if len(regions) > 1:
-        raise OutOfArea("all waypoints must be in the same region (and, outside Tasmania, the same map zone)")
-    return region_for(*points[0])
+    """The region for a set of points. All must be in Tasmania, or all on the national fallback; there,
+    the MGA zone is the one for the points' mean longitude, so a route can cross a zone boundary."""
+    if not points:
+        raise OutOfArea("no points given")
+    regions = [region_for(lon, lat) for lon, lat in points]
+    tas = [r is TASMANIA for r in regions]
+    if all(tas):
+        return TASMANIA
+    if any(tas):
+        raise OutOfArea("all waypoints must be in the same region")
+    mean_lon = sum(lon for lon, _ in points) / len(points)
+    return australia(mga_zone(mean_lon))
+
+
+def job_region(waypoints) -> Region:
+    """The region a job's pipeline works in, from its waypoints (anything with .lon and .lat)."""
+    return same_region([(w.lon, w.lat) for w in waypoints])

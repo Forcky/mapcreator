@@ -18,7 +18,7 @@ from mapcreator.core.scene import Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import mesh_stage, profile_stage, route_stage, scenery_stage, section_stage
 from mapcreator.pipeline.workdir import WorkDir
-from mapcreator.regions import region_for
+from mapcreator.regions import job_region
 
 STAGE = "05_track"
 # Material values for the base surfaces follow a generator whose tracks pass an in-game load test.
@@ -116,7 +116,7 @@ def _title(runs: list[dict], track_id: str) -> str:
 
 
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
-    region = region_for(job.waypoints[0].lon, job.waypoints[0].lat)
+    region = job_region(job.waypoints)
     scene = Scene.load(work.root / mesh_stage.STAGE)
     c = np.load(work.root / profile_stage.STAGE / "centreline.npz")
     sec = np.load(work.root / section_stage.STAGE / "section.npz")

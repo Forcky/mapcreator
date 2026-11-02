@@ -22,7 +22,7 @@ from mapcreator.job import Job
 from mapcreator.pipeline import mesh_stage, profile_stage, section_stage
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.providers.esa import worldcover
-from mapcreator.regions import region_for
+from mapcreator.regions import job_region
 
 STAGE = "04b_scenery"
 
@@ -32,7 +32,7 @@ def _seed(job: Job) -> int:
 
 
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
-    region = region_for(job.waypoints[0].lon, job.waypoints[0].lat)
+    region = job_region(job.waypoints)
     c = np.load(work.root / profile_stage.STAGE / "centreline.npz")
     sec = np.load(work.root / section_stage.STAGE / "section.npz")
     frame = Scene.load(work.root / mesh_stage.STAGE).frame

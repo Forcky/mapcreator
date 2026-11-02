@@ -29,7 +29,7 @@ from mapcreator.job import Waypoint
 from mapcreator.providers.osm import graph as osm_graph
 from mapcreator.providers.osm import overpass
 from mapcreator.providers.osm import roads as osm_roads
-from mapcreator.regions import REGIONS, OutOfArea, Region, region_for
+from mapcreator.regions import REGIONS, OutOfArea, Region, job_region, region_for
 
 __all__ = ["DevRouter", "GraphHopperRouter", "NoRoute", "OutOfArea", "RoutePreview", "Router", "RouterUnavailable",
            "RoutingError", "check_region", "supported_regions"]
@@ -62,20 +62,18 @@ def supported_regions() -> str:
 
 def check_region(waypoints: Sequence[Waypoint]) -> Region:
     """The one region every point is in; `OutOfArea` names the first point that isn't."""
-    region: Region | None = None
+    if not waypoints:
+        raise OutOfArea("No points given.")
     for i, w in enumerate(waypoints, start=1):
         try:
-            here = region_for(w.lon, w.lat)
+            region_for(w.lon, w.lat)
         except OutOfArea:
             raise OutOfArea(f"Point {i} is outside the supported area. Supported regions: "
                             f"{supported_regions()}.") from None
-        if region is None:
-            region = here
-        elif here is not region:
-            raise OutOfArea("All points must be in the same region.")
-    if region is None:
-        raise OutOfArea("No points given.")
-    return region
+    try:
+        return job_region(waypoints)  # the same choice the pipeline makes
+    except OutOfArea:
+        raise OutOfArea("All points must be in the same region.") from None
 
 
 def _preview(lon: Sequence[float], lat: Sequence[float], length_m: float) -> RoutePreview:

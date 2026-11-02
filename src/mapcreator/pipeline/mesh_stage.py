@@ -12,7 +12,7 @@ from mapcreator.core.scene import LocalFrame, Material, Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import profile_stage, section_stage
 from mapcreator.pipeline.workdir import WorkDir
-from mapcreator.regions import FINE_DEM_M, region_for
+from mapcreator.regions import FINE_DEM_M, job_region
 
 STAGE = "04_mesh"
 TERRAIN_CORRIDOR_M = 300.0
@@ -25,7 +25,7 @@ def frame_for(xy: np.ndarray, z: np.ndarray) -> LocalFrame:
 
 
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
-    region = region_for(job.waypoints[0].lon, job.waypoints[0].lat)
+    region = job_region(job.waypoints)
     c = np.load(work.root / profile_stage.STAGE / "centreline.npz")
     sec = np.load(work.root / section_stage.STAGE / "section.npz")
     dem = region.elevation(settings)

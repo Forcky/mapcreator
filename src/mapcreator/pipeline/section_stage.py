@@ -11,13 +11,13 @@ from mapcreator.core import section as sec
 from mapcreator.job import Job
 from mapcreator.pipeline import profile_stage, route_stage
 from mapcreator.pipeline.workdir import WorkDir
-from mapcreator.regions import FINE_DEM_M, region_for
+from mapcreator.regions import FINE_DEM_M, job_region
 
 STAGE = "03_section"
 
 
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
-    region = region_for(job.waypoints[0].lon, job.waypoints[0].lat)
+    region = job_region(job.waypoints)
     c = np.load(work.root / profile_stage.STAGE / "centreline.npz")
     runs = work.read_json(route_stage.STAGE, "runs.json")
 
