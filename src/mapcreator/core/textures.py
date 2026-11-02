@@ -1,0 +1,100 @@
+"""Tileable procedural textures, encoded as DXT1 DDS with mipmaps.
+
+Generating our own textures sidesteps imagery licensing entirely. The noise
+is shaped in the frequency domain, so it is periodic and tiles seamlessly.
+CC0 photo textures can replace these later through the same `Texture` interface.
+
+DDS encoding uses Pillow's DXT1 block encoder (Pillow >= 11.2) one mip level
+at a time, then writes a single legacy DDS header holding the whole chain.
+That is the layout the game's loader expects for DXT1.
+"""
+
+from __future__ import annotations
+
+import io
+import struct
+
+import numpy as np
+from PIL import Image
+
+DDS_HEADER_FLAGS = 0x000A1007  # CAPS | HEIGHT | WIDTH | PIXELFORMAT | MIPMAPCOUNT | LINEARSIZE
+DDS_CAPS = 0x00401008  # TEXTURE | MIPMAP | COMPLEX
+
+
+def tileable_noise(size: int, beta: float, seed: int) -> np.ndarray:
+    """Periodic 1/f^beta noise scaled to [0, 1]."""
+    rng = np.random.default_rng(seed)
+    f = np.fft.fftfreq(size)
+    fx, fy = np.meshgrid(f, f)
+    radius = np.hypot(fx, fy)
+    radius[0, 0] = 1.0
+    spectrum = np.fft.fft2(rng.normal(size=(size, size))) / radius**beta
+    spectrum[0, 0] = 0
+    out = np.real(np.fft.ifft2(spectrum))
+    out -= out.min()
+    return out / max(out.max(), 1e-12)
+
+
+def _mix(base: np.ndarray, variation: np.ndarray, amount: np.ndarray) -> np.ndarray:
+    rgb = base[None, None, :] * (1 + (variation[..., None] - 0.5) * amount[None, None, :])
+    return np.clip(rgb, 0, 255).astype(np.uint8)
+
+
+def asphalt(size: int = 512, seed: int = 1) -> Image.Image:
+    coarse = tileable_noise(size, 1.2, seed)
+    grain = tileable_noise(size, 0.2, seed + 1)
+    v = 0.55 * coarse + 0.45 * grain
+    return Image.fromarray(_mix(np.array([92.0, 92.0, 96.0]), v, np.array([0.45, 0.45, 0.42])))
+
+
+def grass(size: int = 512, seed: int = 2) -> Image.Image:
+    patches = tileable_noise(size, 1.6, seed)
+    blades = tileable_noise(size, 0.4, seed + 1)
+    v = 0.6 * patches + 0.4 * blades
+    dry = tileable_noise(size, 2.0, seed + 2)[..., None]
+    green = _mix(np.array([88.0, 118.0, 58.0]), v, np.array([0.5, 0.45, 0.5])).astype(float)
+    straw = _mix(np.array([150.0, 140.0, 88.0]), v, np.array([0.35, 0.35, 0.4])).astype(float)
+    t = np.clip((dry - 0.55) * 3, 0, 1)
+    return Image.fromarray((green * (1 - t) + straw * t).astype(np.uint8))
+
+
+def ground(size: int = 512, seed: int = 3) -> Image.Image:
+    soil = tileable_noise(size, 1.4, seed)
+    cover = tileable_noise(size, 1.8, seed + 1)[..., None]
+    v = 0.5 * soil + 0.5 * tileable_noise(size, 0.5, seed + 2)
+    dirt = _mix(np.array([120.0, 104.0, 78.0]), v, np.array([0.45, 0.45, 0.45])).astype(float)
+    veg = _mix(np.array([84.0, 104.0, 60.0]), v, np.array([0.45, 0.4, 0.45])).astype(float)
+    t = np.clip((cover - 0.4) * 2.5, 0, 1)
+    return Image.fromarray((dirt * (1 - t) + veg * t).astype(np.uint8))
+
+
+def _dxt1_blocks(im: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    im.convert("RGB").save(buf, format="DDS", pixel_format="DXT1")
+    data = buf.getvalue()
+    header = 148 if data[84:88] == b"DX10" else 128
+    return data[header:]
+
+
+def to_dds_dxt1(im: Image.Image) -> bytes:
+    """DXT1 DDS with a mip chain down to 4 px."""
+    w, h = im.size
+    if w % 4 or h % 4:
+        raise ValueError("DXT textures need sides divisible by 4")
+    levels = []
+    cur = im.convert("RGB")
+    while True:
+        levels.append(_dxt1_blocks(cur))
+        if min(cur.size) <= 4:
+            break
+        cur = cur.resize((max(4, cur.size[0] // 2), max(4, cur.size[1] // 2)), Image.Resampling.LANCZOS)
+    linear = ((w + 3) // 4) * ((h + 3) // 4) * 8
+    header = b"DDS " + struct.pack("<7I", 124, DDS_HEADER_FLAGS, h, w, linear, 0, len(levels))
+    header += b"\0" * 44
+    header += struct.pack("<2I", 32, 0x4) + b"DXT1" + b"\0" * 20
+    header += struct.pack("<5I", DDS_CAPS, 0, 0, 0, 0)
+    assert len(header) == 128
+    return header + b"".join(levels)
+
+
+LIBRARY = {"asphalt": asphalt, "grass": grass, "ground": ground}
