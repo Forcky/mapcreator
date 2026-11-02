@@ -87,3 +87,21 @@ def test_skirts_stop_halfway_to_a_parallel_leg():
     lone = mesh.build_ribbon(line.xy[:40], z[:40], line.heading[:40], line.curvature[:40], half[:40], half[:40],
                              sl[:40], sr[:40], flat)
     assert (lone.n[5:30, 0] - line.xy[5:30, 1]).max() > 12.0
+
+
+def test_a_very_long_guard_rail_is_split_under_the_vertex_limit():
+    from mapcreator.core import roadside
+    from mapcreator.core.scene import LocalFrame
+
+    n = 15000  # 30 km at 2 m, with a 10 m drop along the whole left edge
+    s = np.arange(n) * 2.0
+    xy = np.column_stack([500000 + s, np.full(n, 5250000.0)])
+    flat_road = np.zeros(n)
+    meshes, stats = roadside.guard_rails(s, xy, np.full(n, 100.0), flat_road, np.full(n, 3.0), np.full(n, 3.0),
+                                         flat_road, flat_road, lambda e, nn: np.where(np.asarray(nn) > 5250000, 90.0, 100.0),
+                                         LocalFrame(500000, 5250000, 100))
+    assert stats["L"]["runs"] == 1
+    for m in meshes:
+        m.validate()  # raises over 65,535 vertices
+    names = [m.name for m in meshes]
+    assert names[:2] == ["RAIL_L000", "1WALL_RAIL_L000"] and len(set(names)) == len(names) > 2

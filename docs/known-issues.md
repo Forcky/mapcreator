@@ -2,10 +2,6 @@
 
 Found in a code review in November 2026 and not fixed yet, or only answerable in the game. Each says what it affects, so it can be weighed against other work.
 
-## Geometry
-
-- **Guard-rail visual meshes aren't split.** One continuous rail run longer than about 13 km would exceed the 65,535-vertex limit and fail the build. Real runs are far shorter.
-
 ## Service
 
 - **Turnstile tokens aren't checked for hostname or action.** Verification requires `success`, and fails closed on errors and timeouts. A token minted for another site using the same widget's site key would pass, which needs the secret, so it's of little use to anyone.

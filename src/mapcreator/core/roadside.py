@@ -24,6 +24,8 @@ from mapcreator.core.scene import LocalFrame, Mesh
 PROBE_BEYOND_EDGE_M = 7.0
 DROP_M = 2.0
 RAIL_OFFSET_M = 1.0  # from the road edge, on the verge
+# Sample points per rail mesh: the visual rail has 10 vertices a sample, so this stays well under 65,535.
+MAX_RAIL_POINTS = 4000
 VERGE_FALL = 0.06
 MERGE_GAP_M = 16.0
 MIN_RUN_M = 24.0
@@ -68,11 +70,16 @@ def guard_rails(s, xy, z, heading, half_l, half_r, slope_l, slope_r, dem_sample,
                 idx = np.append(idx, i1)
             if len(idx) < 2:
                 continue
-            off = (half[idx] + RAIL_OFFSET_M) * sign
-            line = xy[idx] + nrm[idx] * off[:, None]
-            base = edge_h[idx] - RAIL_OFFSET_M * VERGE_FALL
-            meshes.append(_rail_visual(f"RAIL_{side}{k:03d}", line, base, frame))
-            meshes.append(_collider(f"1WALL_RAIL_{side}{k:03d}", line, base, frame))
+            # A very long run is cut into pieces that share their end points, so each mesh stays under the
+            # vertex limit and the rail stays continuous. A run of ordinary length keeps its plain name.
+            for p, start in enumerate(range(0, len(idx) - 1, MAX_RAIL_POINTS - 1)):
+                part = idx[start:start + MAX_RAIL_POINTS]
+                name = f"{side}{k:03d}" + (f"_{p}" if p else "")
+                off = (half[part] + RAIL_OFFSET_M) * sign
+                line = xy[part] + nrm[part] * off[:, None]
+                base = edge_h[part] - RAIL_OFFSET_M * VERGE_FALL
+                meshes.append(_rail_visual(f"RAIL_{name}", line, base, frame))
+                meshes.append(_collider(f"1WALL_RAIL_{name}", line, base, frame))
     return meshes, stats
 
 
