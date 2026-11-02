@@ -42,7 +42,7 @@ Refresh the extract and rebuild the index now and then (e.g. monthly). The index
 docker build -f deploy/examples/Dockerfile.worker -t mapcreator-worker:local .
 ```
 
-Run the CLI pipeline in that image against the mirrors. This needs no web app, no token and no object storage:
+Run the CLI pipeline in that image against the mirrors. This needs no web app, no token and no object storage. The image runs as uid 10001, so on a Linux host make the output folder writable first (`sudo install -d -o 10001 -g 10001 <output dir>`):
 
 ```sh
 docker run --rm --entrypoint mapcreator \

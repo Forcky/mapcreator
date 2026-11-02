@@ -30,7 +30,8 @@ The service is a web app (map page, job API and queue) and a build worker that p
 
 ```sh
 python -m venv .venv
-.venv/bin/pip install -e ".[service,dev]"        # Windows: .venv\Scripts\pip
+. .venv/bin/activate                               # Windows: .venv\Scripts\activate
+pip install -e ".[service,dev]"
 export MAPCREATOR_WORKER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
 mapcreator-web                                      # http://127.0.0.1:8000

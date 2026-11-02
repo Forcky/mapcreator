@@ -36,7 +36,9 @@ services:
       MAPCREATOR_IP_HASH_DAYS: "2"
       # Your reverse proxy's address as this container sees it, and the header the proxy
       # overwrites with the client's address. Anyone else's copy of that header is ignored.
-      MAPCREATOR_TRUSTED_PROXIES: 192.0.2.10
+      # A proxy on this host reaching the loopback-published port arrives from the edge network's
+      # gateway, pinned below so it can't change on a recreate.
+      MAPCREATOR_TRUSTED_PROXIES: 192.0.2.1
       MAPCREATOR_CLIENT_IP_HEADER: X-Forwarded-For
     volumes:
       - jobs:/var/lib/mapcreator
@@ -60,7 +62,7 @@ services:
       retries: 3
 
   # Route previews: GraphHopper with a car profile (deploy/graphhopper). Import the graph first
-  # (see deploy/graphhopper/README.md) into ./router-data/graph-car.
+  # (see deploy/graphhopper/README.md) into ./router-data/graph-car, a folder owned by uid 10001.
   graphhopper:
     build:
       context: ../graphhopper
@@ -82,7 +84,12 @@ services:
     pids_limit: 128
 
 networks:
-  edge: {}
+  edge:
+    # A documentation range as the placeholder: pick a private /24 that's free on your host.
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
+          gateway: 192.0.2.1
   # Internal: GraphHopper needs no internet access once its graph is built.
   routing:
     internal: true

@@ -15,11 +15,12 @@ docker build -t mapcreator-router:local deploy/graphhopper
 Import on any machine with about 3 GB of RAM free, then copy `graph-car/` to the router host. For Australia this takes over an hour. Changing `config.yml` or `mapcreator_car.json` means importing again.
 
 ```sh
+sudo install -d -o 10001 -g 10001 <data dir>     # the image runs as uid 10001 and writes here
 docker run --rm -e GH_COMMAND=import -e JAVA_OPTS="-Xmx2600m" --memory 3g \
   -v <data dir>:/data mapcreator-router:local
 ```
 
-`<data dir>` must contain `osm/australia-latest.osm.pbf`. The graph is written to `<data dir>/graph-car/`.
+`<data dir>` must contain `osm/australia-latest.osm.pbf`, readable by uid 10001. The graph is written to `<data dir>/graph-car/`.
 
 ## Serve
 

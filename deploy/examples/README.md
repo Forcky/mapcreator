@@ -1,6 +1,6 @@
 # Example deployment
 
-Generic container definitions for the hosted service. Every host name under `example.org`, the `192.0.2.x` address and the `.env` files are placeholders. These files haven't been run as written; treat them as a starting point to review, not a finished deployment. Real deployment details belong in a private repository.
+Generic container definitions for the hosted service. Every host name under `example.org`, the `192.0.2.x` addresses and subnet, and the `.env` files are placeholders. A deployment adapted from these files runs in production, but these copies haven't been run exactly as written; treat them as a starting point to review. Real deployment details belong in a private repository. `docs/deploy.md` walks through the whole setup and `docs/data-flows.md` says what moves where.
 
 ## Shape
 
@@ -20,9 +20,10 @@ build worker (mapcreator-worker) ── egress proxy (allowlist) ──▶ API, 
 
 | File | What it is |
 |---|---|
-| `Dockerfile.web` | `python:3.12-slim`, non-root uid 10001, `pip install ".[service]"` |
-| `Dockerfile.worker` | `python:3.12-slim`, non-root uid 10001, `pip install .` (the worker needs no web packages) |
-| `compose.web.yaml` | The web app, published on loopback for the reverse proxy; GraphHopper on an internal network |
+| `Dockerfile.web` | `python:3.12-slim` pinned by digest, `libexpat1`, non-root uid 10001, `pip install ".[service,s3]"`, imports checked at build time |
+| `Dockerfile.worker` | the same base, `pip install ".[s3]"` (the worker needs no web packages), GDAL network timeouts |
+| `Dockerfile.index` | a one-shot image that builds the local OSM index from a `.osm.pbf` extract (needs pyosmium, which the other images leave out) |
+| `compose.web.yaml` | The web app, published on loopback for the reverse proxy; the GraphHopper router (`deploy/graphhopper`) on an internal network |
 | `compose.worker.yaml` | The worker and its Squid egress proxy |
 | `squid.conf` | HTTPS-only `CONNECT` to allowlisted hosts; private destinations refused; nothing cached or written to disk |
 | `egress-allowlist.txt` | The hosts the pipeline reads from, plus placeholders for your API and object storage |
@@ -35,13 +36,23 @@ Both services run with a read-only root filesystem, `cap_drop: [ALL]`, `no-new-p
 
 ## Secrets and settings
 
-All settings are `MAPCREATOR_*` environment variables (see `src/mapcreator/service/settings.py`). Keep the secrets in `web.env` and `worker.env`, which are gitignored:
+All settings are `MAPCREATOR_*` environment variables (`docs/data-flows.md` lists them, per side). Keep the secrets in `web.env` and `worker.env`, which are gitignored:
 
-- `MAPCREATOR_WORKER_TOKEN`: the same long random value on both sides. Without it the web app's worker API answers 404.
-- `MAPCREATOR_IP_SALT`: client addresses are only stored as a keyed hash; set this so per-IP limits survive restarts.
-- `MAPCREATOR_TURNSTILE_SECRET` and `MAPCREATOR_TURNSTILE_SITE_KEY`: Cloudflare Turnstile on submission. Without them submissions aren't challenged.
+- `web.env`:
+  - `MAPCREATOR_WORKER_TOKEN`: the same long random value on both sides. Without it the web app's worker API answers 404.
+  - `MAPCREATOR_IP_SALT`: client addresses are only stored as a keyed hash; set this so per-IP limits survive restarts.
+  - `MAPCREATOR_TURNSTILE_SECRET` and `MAPCREATOR_TURNSTILE_SITE_KEY`: Cloudflare Turnstile on submission. Without them submissions aren't challenged.
+- `worker.env`:
+  - `MAPCREATOR_WORKER_TOKEN`: the same value as the web app's.
+  - `MAPCREATOR_S3_ACCESS_KEY_ID` and `MAPCREATOR_S3_SECRET_ACCESS_KEY`: a key for the download bucket only. Without them every job builds and then fails at upload.
 
-Set `MAPCREATOR_TRUSTED_PROXIES` to your reverse proxy's address and `MAPCREATOR_CLIENT_IP_HEADER` to the header it overwrites with the client's address. The web app ignores that header from anyone else. Your reverse proxy should also cap request bodies and send `Strict-Transport-Security`.
+The web app holds no storage key (`MAPCREATOR_STORAGE=public`): it only builds links, and the bucket's lifecycle rule expires old tracks. A key that could delete them could also overwrite live downloads.
+
+Write `.env` files without trailing spaces or carriage returns. Values are trimmed when read, but check each length against your secrets manager.
+
+**Client addresses.** Set `MAPCREATOR_TRUSTED_PROXIES` to your reverse proxy's address as the container sees it, and `MAPCREATOR_CLIENT_IP_HEADER` to the header the proxy overwrites with the client's address. The web app ignores that header from anyone else. With the port published on loopback and the proxy on the same host, the container sees the `edge` network's gateway, which is why the example pins that network's subnet. Get this wrong and every visitor counts as one client, so the per-client limits become one shared limit; the web app logs a warning naming the address the first time it sees the header from an untrusted private address. Your reverse proxy should also cap request bodies and send `Strict-Transport-Security`.
+
+**Bind-mount ownership.** The containers run as uid 10001. On a Linux host, give folders they write to that owner first, for example `sudo install -d -o 10001 -g 10001 router-data` before importing the router graph.
 
 ## OSM data
 
@@ -49,6 +60,5 @@ The worker reads OpenStreetMap from a local index, not from Overpass, which isn'
 
 ## Still to do
 
-- **Object storage.** The worker can only write to a local folder today (`LocalStorage`), so the web app and a worker must share a host until an S3-compatible `Storage` exists. `storage.py` describes what it needs.
-- **GraphHopper.** Bring your own image or jar with a `car` profile built from the Geofabrik Australia extract. The example only reserves its place.
 - **DNS.** Containers on an internal Docker network can still resolve names through Docker's resolver. If that matters to you, run the worker host with a resolver that only answers for allowlisted names.
+- **Proving the proxy's private-range rule.** A request to a bare private address is refused before that rule is reached (it isn't on the allowlist), so it proves nothing about it. To test the rule itself, run a throwaway copy of the proxy whose allowlist also has a wildcard DNS name that resolves to a private address (such as `.nip.io`), and check that `https://10-0-0-1.nip.io/` is refused.

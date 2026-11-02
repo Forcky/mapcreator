@@ -9,8 +9,10 @@
 # Run from this folder:
 #   docker compose -f compose.worker.yaml up -d --build
 #
-# worker.env (not committed) holds the secret:
+# worker.env (not committed) holds the secrets:
 #   MAPCREATOR_WORKER_TOKEN=<the same token the web app has>
+#   MAPCREATOR_S3_ACCESS_KEY_ID=<a key for the download bucket only>
+#   MAPCREATOR_S3_SECRET_ACCESS_KEY=<its secret>
 name: mapcreator-worker
 
 x-hardening: &hardening
@@ -34,7 +36,7 @@ services:
       https_proxy: http://egress:3128
       GDAL_HTTP_PROXY: egress:3128
       NO_PROXY: ""
-      # Finished tracks are uploaded to the same bucket the web app links to (write-only keys in .env).
+      # Finished tracks are uploaded to the bucket the web app links to, with the key in worker.env.
       MAPCREATOR_STORAGE: s3
       MAPCREATOR_S3_ENDPOINT: https://<account id>.r2.cloudflarestorage.com
       MAPCREATOR_S3_BUCKET: mapcreator-tracks
