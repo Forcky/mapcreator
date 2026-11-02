@@ -14,3 +14,8 @@ These need the in-game harness on a machine with Assetto Corsa (`docs/dev-handov
 - what `map.ini`'s `SCALE_FACTOR` means to the game's track map
 - what the AI line's `direction` field does
 - whether the AI drives the generated `fast_lane.ai` sensibly through hairpins
+- in the harness (`harness/`), checked against Content Manager's source and the CSP SDK but never run:
+  - whether the probe app loads with its manifest (it now declares a small window, as every CSP app found does)
+  - whether `ac.worldCoordinateToTrack` exists (the probe copes if it doesn't, but then reports no lateral offset)
+  - whether `sim.isInMainMenu` is the right signal to press Drive
+  - the CSP log's file name (`custom_shaders_patch.log`) and what race.ini's `[AUTOSPAWN]` does
