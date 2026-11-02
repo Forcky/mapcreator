@@ -65,3 +65,17 @@ def test_download_headers_name_a_quoted_zip():
         download_headers("abc123/my_road.txt")
     with pytest.raises(ValueError):
         download_headers("../my_road.zip")
+
+
+def test_turnstile_checks_the_hostname_when_it_knows_its_own():
+    def answer(hostname):
+        return lambda request: httpx.Response(200, json={"success": True, "hostname": hostname})
+
+    def ours(handler) -> CloudflareTurnstile:
+        return CloudflareTurnstile("secret-value", hostname="Tracks.Example.org",
+                                   client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+    assert ours(answer("tracks.example.org")).verify("tok")
+    assert not ours(answer("elsewhere.example.net")).verify("tok")
+    assert not ours(answer(None)).verify("tok")
+    assert turnstile(answer("anywhere.example.net")).verify("tok")  # no hostname configured: success is enough

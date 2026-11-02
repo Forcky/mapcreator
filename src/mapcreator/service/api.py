@@ -28,6 +28,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -392,7 +393,8 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
     store = JobStore(settings.db_path)
     router = router or _default_router(settings)
     if turnstile is None and settings.turnstile_secret:
-        turnstile = CloudflareTurnstile(settings.turnstile_secret)
+        turnstile = CloudflareTurnstile(settings.turnstile_secret,
+                                        hostname=urlsplit(settings.public_url).hostname if settings.public_url else None)
     storage = storage or storage_for(settings)
     identity = ClientIdentity(settings)
     previews = RateLimiter(settings.previews_per_ip_per_minute, 60.0)

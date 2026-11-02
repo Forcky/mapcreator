@@ -4,7 +4,6 @@ Found in a code review in November 2026 and not fixed yet, or only answerable in
 
 ## Service
 
-- **Turnstile tokens aren't checked for hostname or action.** Verification requires `success`, and fails closed on errors and timeouts. A token minted for another site using the same widget's site key would pass, which needs the secret, so it's of little use to anyone.
 - **The worker API isn't versioned.** A newer worker copes with an older web app (it drops build stages from its heartbeats when refused), but deploy both from the same commit.
 
 ## Only the game can answer
