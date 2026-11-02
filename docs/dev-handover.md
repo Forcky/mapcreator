@@ -12,12 +12,20 @@ Everything that can be built and checked without the game is done. The next mile
 | profile | `mapcreator profile job.json` | Smooth centreline + DEM profile, bridges filled; `02_profile/profile.png` | Done |
 | section | `mapcreator section job.json` | Width from OSM tags, camber from the DEM | Done |
 | mesh | `mapcreator mesh job.json` | Road, verges, skirts, terrain; `04_mesh/preview.obj` | Done |
-| scenery | `mapcreator scenery job.json` | Trees (canopy model or WorldCover) and buildings (LIST in Tasmania; OSM elsewhere, with an OSM index), visual only | Done, branch `scenery` |
+| scenery | `mapcreator scenery job.json` | Trees (canopy model or WorldCover) and buildings (LIST in Tasmania; OSM elsewhere, with an OSM index), visual only | Done |
 | track | `mapcreator track job.json` | KN5s, AI lines, layouts, data and UI files, zip | Done, **never loaded in game** |
-| validate | `mapcreator validate job.json` | 70 static checks | Done |
+| validate | `mapcreator validate job.json` | 73 static checks | Done |
 | `harness/` | `python harness/ac_harness.py …` | CM showroom, install and launch; log, results and shared-memory checks | Written, **untested** |
 
 `mapcreator build job.json` runs every stage. The reference job is `examples/grasstree_hill.json`: Grasstree Hill Road (C324), Tasmania, 12.8 km, two layouts.
+
+Changes since the code was last run by hand that M3 should look out for (all checked by tests, none yet in game):
+
+- OSM and map coordinates now get the GDA2020-to-GDA94 datum shift, so the road sits about 1.5 m from where it did, onto the DEM and theLIST buildings.
+- Verge skirts stop halfway to a parallel leg of the road on switchbacks.
+- Gable-end walls of houses face outward; before, they were see-through from outside.
+- Roads under 5 m wide now pass validation; the timing gates still sit 0.5 m past each edge.
+- A build has an hour's time limit in the hosted worker, and the CLI is unchanged.
 
 ## Set up
 
