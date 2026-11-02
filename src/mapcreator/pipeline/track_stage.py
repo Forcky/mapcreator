@@ -16,19 +16,21 @@ from mapcreator.core import ai_line, kn5, package, textures
 from mapcreator.core.layout import Layout, RoadModel, layouts_for, logic_dummies
 from mapcreator.core.scene import Scene
 from mapcreator.job import Job
-from mapcreator.pipeline import mesh_stage, profile_stage, route_stage, section_stage
+from mapcreator.pipeline import mesh_stage, profile_stage, route_stage, scenery_stage, section_stage
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.regions import region_for
 
 STAGE = "05_track"
-TEXTURE_FILES = {"road": "asphalt.dds", "grass": "grass.dds", "terrain": "ground.dds"}
-TEXTURE_SOURCE = {"asphalt.dds": "asphalt", "grass.dds": "grass", "ground.dds": "ground"}
-# Material values follow a generator whose tracks pass an in-game load test.
+# Material values for the base surfaces follow a generator whose tracks pass an in-game load test.
 MATERIAL_PROPS = {
     "road": {"ksAmbient": 0.35, "ksDiffuse": 0.42, "ksSpecular": 0.06, "ksSpecularEXP": 28.0},
     "grass": {"ksAmbient": 0.36, "ksDiffuse": 0.44, "ksSpecular": 0.005, "ksSpecularEXP": 18.0},
     "terrain": {"ksAmbient": 0.36, "ksDiffuse": 0.44, "ksSpecular": 0.005, "ksSpecularEXP": 18.0},
+    "trees": {"ksAmbient": 0.33, "ksDiffuse": 0.58, "ksSpecular": 0.025, "ksSpecularEXP": 8.0},
+    "walls": {"ksAmbient": 0.4, "ksDiffuse": 0.6, "ksSpecular": 0.05, "ksSpecularEXP": 10.0},
+    "roof": {"ksAmbient": 0.38, "ksDiffuse": 0.55, "ksSpecular": 0.2, "ksSpecularEXP": 20.0},
 }
+ALPHA_REF = 0.5
 COUNTRY = {"tas": ("Australia", "Tasmania")}
 
 
@@ -54,24 +56,55 @@ def _preview_raster(dem, frame, pframe, road_xy) -> tuple[np.ndarray, np.ndarray
     return package.hillshade(heights, cell), fade
 
 
-def _texture_bytes(work: WorkDir) -> dict[str, bytes]:
+def _materials_and_textures(work: WorkDir, scenes: list[Scene]):
+    """KN5 materials and embedded DDS textures for every material used by the scenes.
+
+    A scene texture is either a PNG the scenery stage wrote, or a name from the
+    procedural library. Alpha-tested materials get DXT5 and ksPerPixelAT;
+    everything else gets DXT1 and ksPerPixel. DDS files are cached between builds.
+    """
     cache = work.stage(STAGE + "_cache")
-    out = {}
-    for fname, key in TEXTURE_SOURCE.items():
-        path = cache / fname
-        if not path.exists():
-            path.write_bytes(textures.to_dds_dxt1(textures.LIBRARY[key]()))
-        out[fname] = path.read_bytes()
+    tex: dict[str, bytes] = {}
+    mats: list[kn5.Kn5Material] = []
+    index: dict[str, int] = {}
+    for scene in scenes:
+        for name, mat in scene.materials.items():
+            if name in index:
+                continue
+            alpha = mat.kind == "alpha_test"
+            fmt = "DXT5" if alpha else "DXT1"
+            tex_name = f"{mat.texture}.dds"
+            if tex_name not in tex:
+                cached = cache / tex_name
+                src = scene.textures.get(mat.texture)
+                if src is not None:
+                    from PIL import Image
+
+                    with Image.open(src) as im:
+                        tex[tex_name] = textures.to_dds(im, fmt)
+                else:
+                    if not cached.exists():
+                        cached.write_bytes(textures.to_dds(textures.LIBRARY[mat.texture](), fmt))
+                    tex[tex_name] = cached.read_bytes()
+            props = dict(MATERIAL_PROPS.get(name, MATERIAL_PROPS.get(name.split("_")[0], MATERIAL_PROPS["walls"])))
+            props |= {"ksEmissive": (0.0, 0.0, 0.0), "ksAlphaRef": ALPHA_REF if alpha else 0.0}
+            index[name] = len(mats)
+            mats.append(kn5.Kn5Material(name=name, shader="ksPerPixelAT" if alpha else "ksPerPixel",
+                                        properties=props, textures={"txDiffuse": tex_name}, alpha_tested=alpha))
+    return tex, mats, index
+
+
+def _attributions(region, work: WorkDir):
+    from mapcreator.providers.base import Attribution
+
+    out = list(region.attributions)
+    path = work.root / scenery_stage.STAGE / "attributions.json"
+    if path.exists():
+        for d in json.loads(path.read_text(encoding="utf-8")):
+            a = Attribution(**d)
+            if a not in out:
+                out.append(a)
     return out
-
-
-def _materials() -> tuple[list[kn5.Kn5Material], dict[str, int]]:
-    mats, index = [], {}
-    for name, tex in TEXTURE_FILES.items():
-        props = dict(MATERIAL_PROPS[name], ksEmissive=(0.0, 0.0, 0.0), ksAlphaRef=0.0)
-        index[name] = len(mats)
-        mats.append(kn5.Kn5Material(name=name, properties=props, textures={"txDiffuse": tex}))
-    return mats, index
 
 
 def _title(runs: list[dict], track_id: str) -> str:
@@ -97,10 +130,13 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         shutil.rmtree(track_dir)
     track_dir.mkdir(parents=True)
 
-    tex = _texture_bytes(work)
-    mats, mat_index = _materials()
+    scenes = [scene]
+    if (work.root / scenery_stage.STAGE / "scene.json").exists():
+        scenes.append(Scene.load(work.root / scenery_stage.STAGE))
+    tex, mats, mat_index = _materials_and_textures(work, scenes)
     meshes = [kn5.Kn5Mesh(m.name, mat_index[m.material], m.positions, m.normals, m.uvs, m.triangles)
-              for m in scene.meshes]
+              for s in scenes for m in s.meshes]
+    attributions = _attributions(region, work)
 
     # Preview background: a hillshade of the DEM around the road, fading out with distance.
     dem = region.elevation(settings)
@@ -150,7 +186,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         country, city = COUNTRY.get(region.key, ("", region.name))
         description = (
             f"{title}, {direction}bound, generated from open data by mapcreator. "
-            + " ".join(a.line().rstrip(".") + "." for a in region.attributions)
+            + " ".join(a.line().rstrip(".") + "." for a in attributions)
             + " Not affiliated with or endorsed by Kunos Simulazioni."
         )
         (ui_dir / "ui_track.json").write_text(package.ui_track_json(
@@ -168,7 +204,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             "slowest_kmh": round(float(line.extra[:, 0].min() * 3.6), 1),
         }
 
-    _write_attribution(track_dir, region, title)
+    _write_attribution(track_dir, attributions, title)
     _write_centreline(track_dir, job, c, sec, region, lonlat)
 
     zip_path = out_root / f"{job.track_id}.zip"
@@ -181,17 +217,17 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     return summary
 
 
-def _write_attribution(track_dir, region, title: str) -> None:
+def _write_attribution(track_dir, attributions, title: str) -> None:
     lines = [
         f"{title}: Assetto Corsa track generated by mapcreator.",
         "",
         "Data sources:",
-        *[f"- {a.line()}" for a in region.attributions],
+        *[f"- {a.line()}" for a in attributions],
         "",
         "centreline.geojson holds the road centreline, heights and widths used to build this track.",
         "It is a derivative of OpenStreetMap data and is available under the Open Database License (ODbL) 1.0.",
         "",
-        "Textures are procedurally generated by mapcreator.",
+        "Textures, tree sprites and building materials are procedurally generated by mapcreator.",
         "",
         "This track is not affiliated with or endorsed by Kunos Simulazioni.",
         "Assetto Corsa is a trademark of its owner.",

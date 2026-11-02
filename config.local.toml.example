@@ -6,6 +6,10 @@
 # A local mirror of the Tasmania 2 m DEM is much faster than reading it over HTTP.
 # tas_dem_source = "D:/mirror/Tasmania_Statewide_2m_DEM_14-08-2021.tif"   # MAPCREATOR_TAS_DEM
 
+# theLIST 2 m canopy height model, unzipped from CHM_2M_STATEWIDE.zip (CHM_2m/TAS_CHM_2m.tif, ~10 GB).
+# Without it, trees are placed from ESA WorldCover tree cover instead.
+# tas_chm_source = "D:/mirror/TAS_CHM_2m.tif"                             # MAPCREATOR_TAS_CHM
+
 # overpass_url = "https://overpass-api.de/api/interpreter"                # MAPCREATOR_OVERPASS_URL
 # user_agent = "mapcreator (+https://example.org/contact)"                 # MAPCREATOR_USER_AGENT
 

@@ -11,7 +11,7 @@ job.json (waypoints, width option, layouts)
 2. profile    → centreline_3d.csv      DEM sampling, smoothing with a grade-change limit, camber from cross-slope
 3. width      → widths per station     OSM width → lanes × lane width → class default; optional +15% / +30%
 4. meshgen    → meshes                 road chunks (≤ 65,535 vertices each), verges, adaptive terrain corridor, walls, AC dummies
-5. scenery    → scatter.json           trees from canopy height + vegetation type; buildings from footprints
+4b. scenery  → 04b_scenery/scene      trees (canopy model, else ESA WorldCover cover) + buildings from footprints
 6. kn5        → <track>.kn5            numpy KN5 writer; DDS texture library compressed once at image build
 7. ai_line    → ai/fast_lane.ai        computed offline from the centreline with a curvature speed profile
 8. package    → <track>.zip            data/*.ini, ui/*, map.png, ATTRIBUTION.txt, centreline.geojson, layouts

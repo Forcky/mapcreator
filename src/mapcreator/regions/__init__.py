@@ -19,6 +19,10 @@ class Region:
     bbox: tuple[float, float, float, float]  # west, south, east, north (WGS84)
     elevation: Callable[[Settings], object]
     attributions: tuple[Attribution, ...]
+    # Scenery: individual-crown canopy (or None), and building footprints by bbox (or None).
+    canopy: Callable[[Settings], object] | None = None
+    buildings: Callable[[tuple, Settings], list] | None = None
+    buildings_attribution: Attribution | None = None
 
     def contains(self, lon: float, lat: float) -> bool:
         w, s, e, n = self.bbox
@@ -37,10 +41,30 @@ def _tas_dem(settings: Settings):
     return TasDem(settings.tas_dem_source, settings.cache_dir)
 
 
+def _tas_canopy(settings: Settings):
+    if not settings.tas_chm_source:
+        return None
+    from mapcreator.providers.tas_list.canopy import TasCanopy
+
+    return TasCanopy(settings.tas_chm_source, settings.cache_dir)
+
+
+def _tas_buildings(bbox, settings: Settings):
+    from mapcreator.providers.tas_list.buildings import footprints
+
+    return footprints(bbox, settings)
+
+
 def _tas_attributions() -> tuple[Attribution, ...]:
     from mapcreator.providers.tas_list.dem import ATTRIBUTION as DEM
 
     return (OSM, DEM)
+
+
+def _tas_buildings_attribution() -> Attribution:
+    from mapcreator.providers.tas_list.buildings import ATTRIBUTION
+
+    return ATTRIBUTION
 
 
 TASMANIA = Region(
@@ -50,6 +74,9 @@ TASMANIA = Region(
     bbox=(143.5, -43.9, 148.6, -39.3),
     elevation=_tas_dem,
     attributions=_tas_attributions(),
+    canopy=_tas_canopy,
+    buildings=_tas_buildings,
+    buildings_attribution=_tas_buildings_attribution(),
 )
 
 REGIONS = (TASMANIA,)

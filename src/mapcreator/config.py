@@ -21,6 +21,8 @@ class Settings:
     work_dir: Path
     # Where the Tasmania 2 m DEM is read from: a local mirror path or a /vsicurl/ URL.
     tas_dem_source: str
+    # Local mirror of theLIST 2 m canopy height model; empty means fall back to ESA WorldCover.
+    tas_chm_source: str
     overpass_url: str
     user_agent: str
 
@@ -48,6 +50,7 @@ def load() -> Settings:
         cache_dir=Path(get("MAPCREATOR_CACHE_DIR", "cache_dir", str(REPO_ROOT / "cache"))),
         work_dir=Path(get("MAPCREATOR_WORK_DIR", "work_dir", str(REPO_ROOT / "out"))),
         tas_dem_source=get("MAPCREATOR_TAS_DEM", "tas_dem_source", DEFAULT_TAS_DEM),
+        tas_chm_source=get("MAPCREATOR_TAS_CHM", "tas_chm_source", ""),
         overpass_url=get("MAPCREATOR_OVERPASS_URL", "overpass_url", "https://overpass-api.de/api/interpreter"),
         user_agent=get("MAPCREATOR_USER_AGENT", "user_agent", "mapcreator (development)"),
     )

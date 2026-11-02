@@ -68,33 +68,49 @@ def ground(size: int = 512, seed: int = 3) -> Image.Image:
     return Image.fromarray((dirt * (1 - t) + veg * t).astype(np.uint8))
 
 
-def _dxt1_blocks(im: Image.Image) -> bytes:
+def _blocks(im: Image.Image, fmt: str) -> bytes:
     buf = io.BytesIO()
-    im.convert("RGB").save(buf, format="DDS", pixel_format="DXT1")
+    im.save(buf, format="DDS", pixel_format=fmt)
     data = buf.getvalue()
     header = 148 if data[84:88] == b"DX10" else 128
     return data[header:]
 
 
-def to_dds_dxt1(im: Image.Image) -> bytes:
-    """DXT1 DDS with a mip chain down to 4 px."""
+def to_dds(im: Image.Image, fmt: str = "DXT1") -> bytes:
+    """DXT1 (opaque) or DXT5 (with alpha) DDS with a mip chain down to 4 px.
+
+    For DXT5 each level is downsized with alpha premultiplied and then
+    un-premultiplied, so transparent pixels never bleed dark into a sprite's edges.
+    """
+    if fmt not in ("DXT1", "DXT5"):
+        raise ValueError(f"unsupported DDS format {fmt}")
     w, h = im.size
     if w % 4 or h % 4:
         raise ValueError("DXT textures need sides divisible by 4")
+    mode = "RGB" if fmt == "DXT1" else "RGBA"
     levels = []
-    cur = im.convert("RGB")
+    cur = im.convert(mode)
     while True:
-        levels.append(_dxt1_blocks(cur))
+        levels.append(_blocks(cur, fmt))
         if min(cur.size) <= 4:
             break
-        cur = cur.resize((max(4, cur.size[0] // 2), max(4, cur.size[1] // 2)), Image.Resampling.LANCZOS)
-    linear = ((w + 3) // 4) * ((h + 3) // 4) * 8
+        size = (max(4, cur.size[0] // 2), max(4, cur.size[1] // 2))
+        if mode == "RGBA":
+            cur = cur.convert("RGBa").resize(size, Image.Resampling.LANCZOS).convert("RGBA")
+        else:
+            cur = cur.resize(size, Image.Resampling.LANCZOS)
+    block = 8 if fmt == "DXT1" else 16
+    linear = ((w + 3) // 4) * ((h + 3) // 4) * block
     header = b"DDS " + struct.pack("<7I", 124, DDS_HEADER_FLAGS, h, w, linear, 0, len(levels))
     header += b"\0" * 44
-    header += struct.pack("<2I", 32, 0x4) + b"DXT1" + b"\0" * 20
+    header += struct.pack("<2I", 32, 0x4) + fmt.encode() + b"\0" * 20
     header += struct.pack("<5I", DDS_CAPS, 0, 0, 0, 0)
     assert len(header) == 128
     return header + b"".join(levels)
+
+
+def to_dds_dxt1(im: Image.Image) -> bytes:
+    return to_dds(im, "DXT1")
 
 
 LIBRARY = {"asphalt": asphalt, "grass": grass, "ground": ground}

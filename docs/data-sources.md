@@ -22,7 +22,7 @@ Attribution format: `"<dataset name>" from theLIST © State of Tasmania`, with t
 | Road cross-checks | LIST Transport Segments | CC BY 3.0 AU | Surface, class, route number, one-way. No width or lanes |
 | Speed limits | State road speed limits | CC BY 3.0 AU | State roads only; not legally authoritative |
 | Corridor bound | State road reserve; cadastral road casements | CC BY 3.0 AU | Legal corridor, not the sealed width |
-| Trees | Tree Canopy Height 2 m | CC BY 3.0 AU | Includes buildings and other objects |
+| Trees | Tree Canopy Height 2 m | CC BY 3.0 AU | Includes buildings and other objects. Shipped deflated inside a 26 GB zip, so it can't be range-read: mirror `TAS_CHM_2m.tif` and set `tas_chm_source`. Without it, trees come from ESA WorldCover |
 | Vegetation type | TASVEG 5.0 | CC BY 3.0 AU | TASVEG Live is restricted; don't use it |
 | Buildings | LIST 2D Building Polygons | CC BY 3.0 AU | Heights are mostly empty; derive them from canopy height |
 | Imagery (open) | AerialPhoto2020–2024 basemaps | CC BY 3.0 AU | Coverage varies by year and area |
@@ -41,7 +41,7 @@ Attribution format: `"<dataset name>" from theLIST © State of Tasmania`, with t
 | Imagery as texture | DEA GeoMAD (Landsat) | CC BY 4.0 | 30 m colour only |
 | Imagery | QLD public imagery | CC BY-SA | Share-alike carries into derived textures |
 | Imagery | VIC Vicmap, WA Landgate | Paid / personal use | Not usable |
-| Vegetation | ESA WorldCover 10 m; NVIS 7.0 | CC BY 4.0 | |
+| Vegetation | ESA WorldCover 10 m; NVIS 7.0 | CC BY 4.0 | WorldCover tree cover (class 10) is the tree fallback everywhere; read by window from its public COGs |
 | Buildings | OSM; Overture (filter sources) | ODbL | Exclude Google Open Buildings from Overture |
 | Textures | Poly Haven, ambientCG | CC0 | |
 | Map display | OpenFreeMap | OSM / OpenMapTiles attribution | Free, no keys |

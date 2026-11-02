@@ -12,6 +12,7 @@ Everything that can be built and checked without the game is done. The next mile
 | profile | `mapcreator profile job.json` | Smooth centreline + DEM profile, bridges filled; `02_profile/profile.png` | Done |
 | section | `mapcreator section job.json` | Width from OSM tags, camber from the DEM | Done |
 | mesh | `mapcreator mesh job.json` | Road, verges, skirts, terrain; `04_mesh/preview.obj` | Done |
+| scenery | `mapcreator scenery job.json` | Trees (canopy model or WorldCover) and LIST buildings, visual only | Done, branch `scenery` |
 | track | `mapcreator track job.json` | KN5s, AI lines, layouts, data and UI files, zip | Done, **never loaded in game** |
 | validate | `mapcreator validate job.json` | 70 static checks | Done |
 | `harness/` | `python harness/ac_harness.py …` | Install, race.ini, log and physics checks | Written, **untested** |
@@ -62,7 +63,8 @@ These are written down as defaults in the code. Change them in one place if the 
 | Does the AI drive the computed line? | computed, 0.4 m above the road | `core/ai_line.py` |
 | Is AC's z = −north (rotation, not mirror)? | yes | `core/scene.py` `Z_SIGN` |
 | Is the DEM camber believable? (14% of C324 reads above 7%, capped at 7%) | capped at 7% | `core/section.py` |
-| Frame rate with 565k triangles | unknown | — |
+| Frame rate with ~860k triangles (terrain 565k + 36k tree cards + 251 buildings) on a GTX 1660 Ti | unknown | `core/scenery.py` `TREE_BANDS` thins trees |
+| Do the alpha-tested tree cards look right (ksPerPixelAT, DXT5)? | they should | `core/sprites.py`, `pipeline/track_stage.py` |
 | Do both layouts show in Content Manager with names and previews? | they should | `pipeline/track_stage.py` |
 
 ## Rules that still apply
