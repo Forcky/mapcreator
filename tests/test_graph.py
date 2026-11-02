@@ -57,3 +57,17 @@ def test_route_too_long_is_a_user_facing_route_error():
     from mapcreator.pipeline.route_stage import RouteTooLong
 
     assert issubclass(RouteTooLong, graph.RouteError)
+
+
+@pytest.mark.parametrize("via", [(100.0, 0.0), (100.0, -5.0)], ids=["on the junction", "5 m off it"])
+def test_a_waypoint_on_a_junction_is_not_forced_down_a_one_way_slip(via):
+    # B (node 2) is a junction where a one-way slip B -> D leaves; the slip is listed first, so it's the
+    # segment found nearest. The through road A-B-C is two-way, and D links back to C.
+    g = graph.build(_osm({1: (0, 0), 2: (100, 0), 3: (200, 0), 4: (100, 100)}, [
+        (10, [2, 4], {"highway": "tertiary", "oneway": "yes"}),
+        (11, [1, 2, 3], {"highway": "tertiary"}),
+        (12, [4, 3], {"highway": "residential"}),
+    ]), IDENT)
+    r = graph.route(g, np.array([[10.0, 0.0], via, [190.0, 0.0]]))
+    assert float(np.hypot(*np.diff(r.xy, axis=0).T).sum()) == pytest.approx(180.0)
+    assert {r.ways[i]["id"] for i in r.seg_way} == {11}

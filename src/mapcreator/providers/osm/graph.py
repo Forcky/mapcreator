@@ -17,6 +17,9 @@ from scipy.sparse.csgraph import dijkstra
 
 from mapcreator.job import MAX_SNAP_M
 
+# A snapped waypoint this close to a node is on it.
+ON_NODE_M = 1.0
+
 # Mild preference for bigger roads, so a route between sparse waypoints follows
 # the main road rather than a parallel residential street of equal length.
 CLASS_FACTOR = {
@@ -165,6 +168,13 @@ def route(g: RoadGraph, waypoints_xy: np.ndarray, *, max_snap_m: float = MAX_SNA
         if g.seg_rev[k]:
             add(v, vi, cv, wi)
             add(vi, u, cu, wi)
+        # A waypoint that lands on a node is that node, whichever of the segments meeting there was nearest
+        # first: join it both ways, or a one-way slip road listed first at a junction would force the route
+        # down the slip (or find none at all).
+        for end, along in ((u, seg_len[k] * t), (v, seg_len[k] * (1 - t))):
+            if along < ON_NODE_M:
+                add(end, vi, 0.0, wi)
+                add(vi, end, 0.0, wi)
     # Waypoints sharing a segment connect directly, or the route would overshoot and come back.
     for k, members in on_segment.items():
         members.sort()
