@@ -25,6 +25,10 @@ class Settings:
     tas_chm_source: str
     overpass_url: str
     user_agent: str
+    # The local OSM index (providers/osm/index.py, built from a Geofabrik extract) that roads, and
+    # buildings outside Tasmania, are read from. Empty means roads come from `overpass_url`, which
+    # is for light development use only, and the national fallback has no buildings.
+    osm_index: str
 
 
 DEFAULT_TAS_DEM = (
@@ -53,4 +57,5 @@ def load() -> Settings:
         tas_chm_source=get("MAPCREATOR_TAS_CHM", "tas_chm_source", ""),
         overpass_url=get("MAPCREATOR_OVERPASS_URL", "overpass_url", "https://overpass-api.de/api/interpreter"),
         user_agent=get("MAPCREATOR_USER_AGENT", "user_agent", "mapcreator (development)"),
+        osm_index=get("MAPCREATOR_OSM_INDEX", "osm_index", ""),
     )

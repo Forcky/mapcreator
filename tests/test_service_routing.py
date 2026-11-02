@@ -1,9 +1,11 @@
 import json
 import math
+from dataclasses import replace
 
 import httpx
 import pytest
 
+from mapcreator import config
 from mapcreator.job import Waypoint
 from mapcreator.service.routing import (DevRouter, GraphHopperRouter, NoRoute, OutOfArea, RouterUnavailable,
                                         check_region)
@@ -11,6 +13,8 @@ from mapcreator.service.routing import (DevRouter, GraphHopperRouter, NoRoute, O
 HOBART = [Waypoint(lon=147.301, lat=-42.8001), Waypoint(lon=147.319, lat=-42.7999)]
 MELBOURNE = Waypoint(lon=144.96, lat=-37.81)
 AUCKLAND = Waypoint(lon=174.76, lat=-36.85)
+# Roads from (a fake) Overpass, whatever the local configuration says.
+OVERPASS = replace(config.load(), osm_index="")
 
 
 def straight_road() -> dict:
@@ -36,7 +40,7 @@ def test_dev_router_routes_on_the_osm_graph():
         queries.append(query)
         return straight_road()
 
-    preview = DevRouter(settings=object(), fetch=fake_fetch).preview(HOBART)
+    preview = DevRouter(settings=OVERPASS, fetch=fake_fetch).preview(HOBART)
     assert len(queries) == 1 and "highway" in queries[0]
     start, end = preview["coordinates"][0], preview["coordinates"][-1]
     assert start == pytest.approx([147.301, -42.80], abs=1e-5)
@@ -48,15 +52,15 @@ def test_dev_router_routes_on_the_osm_graph():
 def test_dev_router_errors_are_plain_language():
     far = [HOBART[0], Waypoint(lon=147.31, lat=-42.79)]  # about 1.1 km north of the road
     with pytest.raises(NoRoute, match="^Waypoint 2 is .* m from the nearest drivable road.$"):
-        DevRouter(settings=object(), fetch=lambda q, s: straight_road()).preview(far)
+        DevRouter(settings=OVERPASS, fetch=lambda q, s: straight_road()).preview(far)
 
     def offline(query, settings):
         raise httpx.ConnectError("offline")
 
     with pytest.raises(RouterUnavailable):
-        DevRouter(settings=object(), fetch=offline).preview(HOBART)
+        DevRouter(settings=OVERPASS, fetch=offline).preview(HOBART)
     with pytest.raises(NoRoute, match="too far apart"):
-        DevRouter(settings=object(), fetch=offline).preview([HOBART[0], Waypoint(lon=148.3, lat=-41.5)])
+        DevRouter(settings=OVERPASS, fetch=offline).preview([HOBART[0], Waypoint(lon=148.3, lat=-41.5)])
 
 
 def gh(handler) -> GraphHopperRouter:
@@ -123,5 +127,5 @@ def test_out_of_area_is_rejected_before_any_request():
     with pytest.raises(OutOfArea):
         gh(handler).preview([HOBART[0], MELBOURNE])
     with pytest.raises(OutOfArea):
-        DevRouter(settings=object(), fetch=lambda q, s: calls.append(q)).preview([MELBOURNE, HOBART[0]])
+        DevRouter(settings=OVERPASS, fetch=lambda q, s: calls.append(q)).preview([MELBOURNE, HOBART[0]])
     assert calls == []

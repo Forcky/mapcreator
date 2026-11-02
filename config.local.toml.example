@@ -10,6 +10,11 @@
 # Without it, trees are placed from ESA WorldCover tree cover instead.
 # tas_chm_source = "D:/mirror/TAS_CHM_2m.tif"                             # MAPCREATOR_TAS_CHM
 
+# Roads (and buildings outside Tasmania) from a local OSM index instead of Overpass. Build it once from
+# a Geofabrik extract: python -m mapcreator.providers.osm.index build australia-latest.osm.pbf <index>
+# osm_index = "D:/mirror/osm/australia.sqlite"                             # MAPCREATOR_OSM_INDEX
+
+# Without osm_index, roads come from Overpass: light development use only.
 # overpass_url = "https://overpass-api.de/api/interpreter"                # MAPCREATOR_OVERPASS_URL
 # user_agent = "mapcreator (+https://example.org/contact)"                 # MAPCREATOR_USER_AGENT
 

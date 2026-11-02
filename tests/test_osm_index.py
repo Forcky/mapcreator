@@ -3,13 +3,19 @@
 import json
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 
 import numpy as np
 import pytest
 import shapely
 from pyproj import Transformer
 
-from mapcreator.providers.osm import graph, index
+from mapcreator import config
+from mapcreator.job import Job, Waypoint
+from mapcreator.pipeline import route_stage
+from mapcreator.pipeline.workdir import WorkDir
+from mapcreator.providers.osm import graph, index, overpass
+from mapcreator.service.routing import DevRouter, RouterUnavailable
 
 EPSG = 28355  # MGA zone 55, the fixture is near Hobart
 # A block of road: Main Road runs west only along -42.800; Back Street loops round the north.
@@ -212,3 +218,52 @@ def test_command_line_builds_and_queries(extract, tmp_path, capsys):
     assert "roads: 3 ways, 7 nodes" in text and "buildings: 1 in EPSG:28355" in text
     assert index.main(["query", str(out), *map(str, QUERY), "--json"]) == 0
     assert len(json.loads(capsys.readouterr().out)["elements"]) == 10
+
+
+# ----- choosing the source: the index when configured, else Overpass -----
+
+# Westbound along Main Road, the way the one-way allows.
+WESTBOUND = [Waypoint(lon=147.3095, lat=-42.8), Waypoint(lon=147.3005, lat=-42.8)]
+
+
+def _settings(tmp_path, osm_index="") -> config.Settings:
+    return replace(config.load(), osm_index=str(osm_index), cache_dir=tmp_path / "cache", work_dir=tmp_path / "out")
+
+
+def _no_overpass(query, settings):
+    raise AssertionError("Overpass must not be asked when an index is configured")
+
+
+def test_route_stage_reads_the_index_when_configured(osm_index, tmp_path, monkeypatch):
+    monkeypatch.setattr(overpass, "fetch", _no_overpass)
+    job = Job(track_id="index_road", waypoints=WESTBOUND)
+    result = route_stage.run(job, _settings(tmp_path, osm_index), WorkDir(tmp_path / "work"))
+    assert result["region"] == "tas" and result["ways"] == 1
+    assert result["length_m"] == pytest.approx(0.009 * 111_320 * np.cos(np.radians(42.8)), rel=0.01)
+    runs = json.loads((tmp_path / "work" / route_stage.STAGE / "runs.json").read_text(encoding="utf-8"))
+    assert runs[0]["way_id"] == 10 and runs[0]["tags"]["name"] == "Main Road"
+    assert not (tmp_path / "cache" / "osm").exists()  # index answers aren't cached
+
+
+def test_route_stage_asks_overpass_without_an_index(osm_index, tmp_path, monkeypatch):
+    queries = []
+
+    def fake_overpass(query, settings):
+        queries.append(query)
+        return index.query(osm_index, (147.2805, -42.82, 147.3295, -42.78))
+
+    monkeypatch.setattr(overpass, "fetch", fake_overpass)
+    job = Job(track_id="overpass_road", waypoints=WESTBOUND)
+    result = route_stage.run(job, _settings(tmp_path), WorkDir(tmp_path / "work"))
+    assert result["ways"] == 1
+    # Overpass takes south, west, north, east.
+    assert len(queries) == 1 and "(-42.820000,147.280500,-42.780000,147.329500)" in queries[0]
+
+
+def test_dev_router_reads_the_index_when_configured(osm_index, tmp_path):
+    preview = DevRouter(settings=_settings(tmp_path, osm_index), fetch=_no_overpass).preview(WESTBOUND)
+    assert preview["coordinates"][0] == pytest.approx([147.3095, -42.8], abs=1e-6)
+    assert preview["coordinates"][-1] == pytest.approx([147.3005, -42.8], abs=1e-6)
+    with pytest.raises(RouterUnavailable, match="map data isn't available"):
+        DevRouter(settings=_settings(tmp_path, tmp_path / "missing.sqlite"), fetch=_no_overpass).preview(WESTBOUND)
+
