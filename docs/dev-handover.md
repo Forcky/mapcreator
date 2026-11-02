@@ -24,7 +24,7 @@ Everything that can be built and checked without the game is done. The next mile
 ```powershell
 git clone <repo url> mapcreator
 cd mapcreator
-git checkout pipeline-foundations        # or main, once merged
+git checkout australia                    # newest branch; it contains pipeline-foundations and scenery
 py -3 -m venv .venv
 .venv\Scripts\python -m pip install -e .[dev]
 ```
