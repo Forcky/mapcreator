@@ -65,6 +65,8 @@ These are written down as defaults in the code. Change them in one place if the 
 | Is the DEM camber believable? (14% of C324 reads above 7%, capped at 7%) | capped at 7% | `core/section.py` |
 | Frame rate with ~860k triangles (terrain 565k + 36k tree cards + 251 buildings) on a GTX 1660 Ti | unknown | `core/scenery.py` `TREE_BANDS` thins trees |
 | Do the alpha-tested tree cards look right (ksPerPixelAT, DXT5)? | they should | `core/sprites.py`, `pipeline/track_stage.py` |
+| Do guard rails stop the car? (invisible `1WALL_RAIL_*` colliders, 5.4 km on C324) | they should | `core/roadside.py` |
+| Do houses stop the car? (`1WALL_BUILDINGS`) | they should | `core/scenery.py` |
 | Do both layouts show in Content Manager with names and previews? | they should | `pipeline/track_stage.py` |
 
 ## Rules that still apply

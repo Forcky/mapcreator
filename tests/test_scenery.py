@@ -65,11 +65,11 @@ def test_buildings_get_walls_and_roofs_and_skip_the_road():
     meshes = scenery.building_meshes(keep, lambda x, y: np.full(len(np.atleast_1d(x)), 20.0), FRAME,
                                      np.random.default_rng(3))
     names = {m.name for m in meshes}
-    assert "BUILDING_WALLS" in names and any(n.startswith("BUILDING_ROOF_") for n in names)
+    assert "1WALL_BUILDINGS" in names and any(n.startswith("BUILDING_ROOF_") for n in names)
     for m in meshes:
         m.validate()
         assert np.allclose(np.linalg.norm(m.normals, axis=1), 1, atol=1e-5)
-    walls = next(m for m in meshes if m.name == "BUILDING_WALLS")
+    walls = next(m for m in meshes if m.name == "1WALL_BUILDINGS")
     assert walls.positions[:, 1].min() == pytest.approx(20.0 - scenery.SINK_M)
     # Wall faces point away from their building's centre.
     p = walls.positions

@@ -42,6 +42,7 @@ class Mesh:
     normals: np.ndarray  # (n, 3) float32, unit
     uvs: np.ndarray  # (n, 2) float32
     triangles: np.ndarray  # (m, 3) int, wound so the face normal points up (+Y) when seen from above
+    renderable: bool = True  # False for invisible physics-only meshes (collision walls)
 
     def validate(self) -> None:
         n = len(self.positions)
@@ -92,7 +93,7 @@ class Scene:
         np.savez_compressed(folder / "scene.npz", **arrays)
         meta = {
             "frame": asdict(self.frame),
-            "meshes": [{"name": m.name, "material": m.material} for m in self.meshes],
+            "meshes": [{"name": m.name, "material": m.material, "renderable": m.renderable} for m in self.meshes],
             "materials": {k: asdict(v) for k, v in self.materials.items()},
             "dummies": [asdict(d) for d in self.dummies],
             "textures": self.textures,
@@ -105,7 +106,7 @@ class Scene:
         data = np.load(folder / "scene.npz")
         meshes = [
             Mesh(m["name"], m["material"], data[f"{i}_pos"], data[f"{i}_nrm"], data[f"{i}_uv"],
-                 data[f"{i}_tri"].astype(np.int64))
+                 data[f"{i}_tri"].astype(np.int64), m.get("renderable", True))
             for i, m in enumerate(meta["meshes"])
         ]
         return cls(

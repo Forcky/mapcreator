@@ -1,0 +1,130 @@
+"""Guard rails where the ground falls away steeply beside the road.
+
+Real hill roads have W-beam rails on the outside of drops. Without them a
+car that runs wide tumbles down a DEM embankment, so they matter for driving
+as well as looks. Placement comes from the DEM:
+- Compare the road edge with the ground 7 m beyond it, on each side.
+- Where it falls away by more than DROP_M, put up a rail.
+- Smooth the readings, close short gaps, drop short runs, and extend each
+  run a little, as a road authority would.
+
+Each run gets two meshes:
+- `RAIL_*`: the visible beam and posts, visual only.
+- `1WALL_RAIL_*`: an invisible, taller collision wall at the same line. Any
+  physics mesh named WALL is a solid barrier in AC.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+from scipy.ndimage import binary_closing, binary_dilation, binary_opening, median_filter
+
+from mapcreator.core.scene import LocalFrame, Mesh
+
+PROBE_BEYOND_EDGE_M = 7.0
+DROP_M = 2.0
+RAIL_OFFSET_M = 1.0  # from the road edge, on the verge
+VERGE_FALL = 0.06
+MERGE_GAP_M = 16.0
+MIN_RUN_M = 24.0
+EXTEND_M = 8.0
+STEP_M = 2.0
+BEAM = (0.45, 0.75)  # metres above the verge
+POST_W = 0.12
+COLLIDER = (-0.3, 1.0)
+
+
+def rail_mask(s: np.ndarray, drop: np.ndarray) -> np.ndarray:
+    step = s[1] - s[0] if len(s) > 1 else 1.0
+    d = median_filter(np.nan_to_num(drop, nan=0.0), size=max(int(10 / step) | 1, 3))
+    m = d > DROP_M
+    m = binary_closing(m, structure=np.ones(max(int(MERGE_GAP_M / step), 1)))
+    m = binary_opening(m, structure=np.ones(max(int(MIN_RUN_M / step), 1)))
+    return binary_dilation(m, structure=np.ones(2 * max(int(EXTEND_M / step), 1) + 1))
+
+
+def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], mask.astype(int), [0]])))
+    return list(zip(edges[::2], edges[1::2] - 1))
+
+
+def guard_rails(s, xy, z, heading, half_l, half_r, slope_l, slope_r, dem_sample, frame: LocalFrame
+                ) -> tuple[list[Mesh], dict]:
+    nrm = np.column_stack([-np.sin(heading), np.cos(heading)])
+    meshes: list[Mesh] = []
+    stats = {}
+    step = s[1] - s[0] if len(s) > 1 else 1.0
+    stride = max(int(round(STEP_M / step)), 1)
+    for side, sign, half, slope in (("L", 1.0, half_l, slope_l), ("R", -1.0, half_r, slope_r)):
+        edge_h = z - slope * half
+        probe = xy + nrm * (sign * (half + PROBE_BEYOND_EDGE_M))[:, None]
+        drop = edge_h - dem_sample(probe[:, 0], probe[:, 1])
+        mask = rail_mask(s, drop)
+        runs = _runs(mask)
+        stats[side] = {"runs": len(runs), "metres": round(float(mask.sum() * step), 1)}
+        for k, (i0, i1) in enumerate(runs):
+            idx = np.arange(i0, i1 + 1, stride)
+            if idx[-1] != i1:
+                idx = np.append(idx, i1)
+            if len(idx) < 2:
+                continue
+            off = (half[idx] + RAIL_OFFSET_M) * sign
+            line = xy[idx] + nrm[idx] * off[:, None]
+            base = edge_h[idx] - RAIL_OFFSET_M * VERGE_FALL
+            meshes.append(_rail_visual(f"RAIL_{side}{k:03d}", line, base, frame))
+            meshes.append(_collider(f"1WALL_RAIL_{side}{k:03d}", line, base, frame))
+    return meshes, stats
+
+
+def _strip(line: np.ndarray, lo: np.ndarray, hi: np.ndarray, frame: LocalFrame, uv_len: float):
+    """A vertical ribbon along `line` between heights lo and hi, both windings, shared vertices."""
+    n = len(line)
+    bottom = frame.to_ac(line[:, 0], line[:, 1], lo)
+    top = frame.to_ac(line[:, 0], line[:, 1], hi)
+    pos = np.empty((2 * n, 3))
+    pos[0::2], pos[1::2] = bottom, top
+    dist = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(line, axis=0).T))])
+    uv = np.empty((2 * n, 2))
+    uv[0::2, 0], uv[1::2, 0] = dist / uv_len, dist / uv_len
+    uv[0::2, 1], uv[1::2, 1] = 1.0, 0.0
+    i = np.arange(n - 1) * 2
+    front = np.concatenate([np.column_stack([i, i + 2, i + 1]), np.column_stack([i + 1, i + 2, i + 3])])
+    tri = np.concatenate([front, front[:, [0, 2, 1]]])
+    return pos, uv, tri
+
+
+def _rail_visual(name: str, line: np.ndarray, base: np.ndarray, frame: LocalFrame) -> Mesh:
+    pos, uv, tri = _strip(line, base + BEAM[0], base + BEAM[1], frame, 4.0)
+    parts_pos, parts_uv, parts_tri = [pos], [uv], [tri]
+    count = len(pos)
+    # Posts at each sample: a thin crossed pair of quads from just below the verge to the beam top.
+    d = np.diff(line, axis=0)
+    t = np.vstack([d, d[-1:]])
+    t /= np.maximum(np.linalg.norm(t, axis=1, keepdims=True), 1e-9)
+    for vec in (t, np.column_stack([-t[:, 1], t[:, 0]])):
+        a, b = line - vec * POST_W / 2, line + vec * POST_W / 2
+        lo, hi = base - 0.15, base + BEAM[1]
+        quad = np.stack([frame.to_ac(a[:, 0], a[:, 1], lo), frame.to_ac(b[:, 0], b[:, 1], lo),
+                         frame.to_ac(b[:, 0], b[:, 1], hi), frame.to_ac(a[:, 0], a[:, 1], hi)], axis=1)
+        qp = quad.reshape(-1, 3)
+        quv = np.tile([[0.0, 1.0], [0.05, 1.0], [0.05, 0.0], [0.0, 0.0]], (len(line), 1))
+        v = count + np.arange(len(line))[:, None] * 4 + np.arange(4)[None, :]
+        front = np.concatenate([v[:, [0, 1, 2]], v[:, [0, 2, 3]]])
+        parts_pos.append(qp)
+        parts_uv.append(quv)
+        parts_tri.append(np.concatenate([front, front[:, [0, 2, 1]]]))
+        count += len(qp)
+    positions = np.concatenate(parts_pos)
+    normals = np.tile([0.0, 1.0, 0.0], (len(positions), 1))
+    return Mesh(name, "rail", positions.astype(np.float32), normals.astype(np.float32),
+                np.concatenate(parts_uv).astype(np.float32), np.concatenate(parts_tri).astype(np.int64))
+
+
+def _collider(name: str, line: np.ndarray, base: np.ndarray, frame: LocalFrame) -> Mesh:
+    pos, uv, tri = _strip(line, base + COLLIDER[0], base + COLLIDER[1], frame, 4.0)
+    d = np.diff(line, axis=0)
+    t = np.vstack([d, d[-1:]])
+    t /= np.maximum(np.linalg.norm(t, axis=1, keepdims=True), 1e-9)
+    side = np.repeat(np.column_stack([-t[:, 1], np.zeros(len(t)), -t[:, 0]]), 2, axis=0)  # horizontal, in AC axes
+    return Mesh(name, "rail", pos.astype(np.float32), side.astype(np.float32), uv.astype(np.float32), tri,
+                renderable=False)

@@ -29,6 +29,7 @@ MATERIAL_PROPS = {
     "trees": {"ksAmbient": 0.33, "ksDiffuse": 0.58, "ksSpecular": 0.025, "ksSpecularEXP": 8.0},
     "walls": {"ksAmbient": 0.4, "ksDiffuse": 0.6, "ksSpecular": 0.05, "ksSpecularEXP": 10.0},
     "roof": {"ksAmbient": 0.38, "ksDiffuse": 0.55, "ksSpecular": 0.2, "ksSpecularEXP": 20.0},
+    "rail": {"ksAmbient": 0.4, "ksDiffuse": 0.55, "ksSpecular": 0.35, "ksSpecularEXP": 30.0},
 }
 ALPHA_REF = 0.5
 COUNTRY = {"tas": ("Australia", "Tasmania")}
@@ -134,7 +135,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     if (work.root / scenery_stage.STAGE / "scene.json").exists():
         scenes.append(Scene.load(work.root / scenery_stage.STAGE))
     tex, mats, mat_index = _materials_and_textures(work, scenes)
-    meshes = [kn5.Kn5Mesh(m.name, mat_index[m.material], m.positions, m.normals, m.uvs, m.triangles)
+    meshes = [kn5.Kn5Mesh(m.name, mat_index[m.material], m.positions, m.normals, m.uvs, m.triangles,
+                          cast_shadows=m.renderable, renderable=m.renderable)
               for s in scenes for m in s.meshes]
     attributions = _attributions(region, work)
 

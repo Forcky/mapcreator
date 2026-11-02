@@ -46,6 +46,8 @@ A job with `"layouts": "both"` produces:
 | `1ROAD_###` | ROAD |
 | `1GRASS_V###L/R` (verge and skirt) | GRASS |
 | `1GRASS_T###` (terrain) | GRASS |
+| `1WALL_RAIL_L/R###` (invisible, `isRenderable` 0) and `1WALL_BUILDINGS` | solid barrier (no KEY: any physics mesh named WALL) |
+| `RAIL_*`, `TREES_*`, `BUILDING_ROOF_*` | visual only (no leading digit) |
 
 - Each physics mesh name matches exactly one KEY. There is deliberately no `WALL` KEY, because defining one is reported to make walls driveable.
 - **Logic dummies:**

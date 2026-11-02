@@ -141,4 +141,10 @@ def road_marked(width_m: float = 6.4, size: int = 512, seed: int = 1) -> Image.I
     return Image.fromarray(np.clip(img, 0, 255).astype(np.uint8))
 
 
-LIBRARY = {"asphalt": asphalt, "road_marked": road_marked, "grass": grass, "ground": ground}
+def steel(size: int = 256, seed: int = 21) -> Image.Image:
+    """Weathered galvanised steel for guard rails."""
+    v = 0.6 * tileable_noise(size, 1.2, seed) + 0.4 * tileable_noise(size, 0.3, seed + 1)
+    return Image.fromarray(_mix(np.array([168.0, 172.0, 174.0]), v, np.array([0.25, 0.25, 0.25])))
+
+
+LIBRARY = {"asphalt": asphalt, "road_marked": road_marked, "grass": grass, "ground": ground, "steel": steel}

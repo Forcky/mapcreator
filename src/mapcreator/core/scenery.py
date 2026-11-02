@@ -1,7 +1,8 @@
 """Scenery geometry: trees as crossed cards and buildings as extruded footprints.
 
-Everything here is visual only. Mesh names carry no physics prefix, so cars
-pass through. That's a known v1 limitation; collision proxies can come later.
+Trees are visual only: cars pass through them. That's a known v1 limitation;
+trunk colliders can come later. Building walls are a physics `1WALL_*` mesh,
+so cars stop at houses.
 
 Trees:
 - Each tree is two crossed vertical cards with triangles wound both ways, so
@@ -219,7 +220,7 @@ def building_meshes(polys: list[shapely.Polygon], dem_sample, frame: LocalFrame,
             _flat(roof, p, eave + 0.15, ac)
     out = []
     if walls.count:
-        out.append(walls.mesh("BUILDING_WALLS", "walls"))
+        out.append(walls.mesh("1WALL_BUILDINGS", "walls"))  # solid: cars stop at houses
     for colour, b in roofs.items():
         if b.count:
             out.append(b.mesh(f"BUILDING_ROOF_{colour.upper()}", f"roof_{colour}"))

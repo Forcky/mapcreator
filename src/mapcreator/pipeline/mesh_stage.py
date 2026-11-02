@@ -7,7 +7,7 @@ import math
 import numpy as np
 
 from mapcreator.config import Settings
-from mapcreator.core import mesh
+from mapcreator.core import mesh, roadside
 from mapcreator.core.scene import LocalFrame, Material, Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import profile_stage, section_stage
@@ -36,6 +36,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
                            sec["slope_left"], sec["slope_right"], dem.sample)
     meshes = mesh.ribbon_meshes(rb, c["s"], frame)
     meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, dem.sample, frame)
+    rails, rail_stats = roadside.guard_rails(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"],
+                                             sec["half_right"], sec["slope_left"], sec["slope_right"], dem.sample,
+                                             frame)
+    meshes += rails
 
     scene = Scene(
         frame=frame,
@@ -44,6 +48,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             "road": Material("road", texture="road_marked", uv_scale=1.0),
             "grass": Material("grass", texture="grass"),
             "terrain": Material("terrain", texture="ground"),
+            "rail": Material("rail", texture="steel"),
         },
     )
     out = work.stage(STAGE)
@@ -61,4 +66,5 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "max_vertices_in_a_mesh": int(max(len(m.positions) for m in meshes)),
         "by_kind": {k: {"meshes": len(v), "vertices": int(sum(v))} for k, v in by_kind.items()},
         "frame": [frame.e0, frame.n0, frame.h0],
+        "guard_rails": rail_stats,
     }
