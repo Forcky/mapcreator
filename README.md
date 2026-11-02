@@ -19,6 +19,21 @@ Each stage writes its output to disk and can be rerun on its own. See [docs/arch
 - No Google, Esri, Bing or Mapbox content. Their terms forbid this use whether or not anyone pays.
 - Every track carries an `ATTRIBUTION.txt` and a `centreline.geojson` (ODbL) for the road data it was built from.
 
+## Running the hosted service locally
+
+The service is a web app (map page, job API and queue) and a build worker that pulls jobs from it. To try both on one machine:
+
+```sh
+python -m venv .venv
+.venv/bin/pip install -e ".[service,dev]"        # Windows: .venv\Scripts\pip
+export MAPCREATOR_WORKER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+
+mapcreator-web                                      # http://127.0.0.1:8000
+mapcreator-worker --api http://127.0.0.1:8000       # in a second terminal, with the same token
+```
+
+On PowerShell, set the token with `$env:MAPCREATOR_WORKER_TOKEN = "..."`. Locally, route previews use the public Overpass server (fine for light use, not for the public), finished tracks are served from `out/service/downloads`, and the worker reads its data settings from `config.local.toml` like the CLI. Every service setting is a `MAPCREATOR_*` environment variable; see `src/mapcreator/service/settings.py`. Container examples are in `deploy/examples/`.
+
 ## Not affiliated
 
 This project is not affiliated with or endorsed by Kunos Simulazioni. Assetto Corsa is a trademark of its owner. Custom tracks work in the original Assetto Corsa on PC only.
