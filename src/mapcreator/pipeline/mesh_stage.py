@@ -12,7 +12,7 @@ from mapcreator.core.scene import LocalFrame, Material, Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import profile_stage, section_stage
 from mapcreator.pipeline.workdir import WorkDir
-from mapcreator.regions import region_for
+from mapcreator.regions import FINE_DEM_M, region_for
 
 STAGE = "04_mesh"
 TERRAIN_CORRIDOR_M = 300.0
@@ -36,9 +36,11 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
                            sec["slope_left"], sec["slope_right"], dem.sample)
     meshes = mesh.ribbon_meshes(rb, c["s"], frame)
     meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, dem.sample, frame)
-    rails, rail_stats = roadside.guard_rails(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"],
-                                             sec["half_right"], sec["slope_left"], sec["slope_right"], dem.sample,
-                                             frame)
+    rails, rail_stats = [], {"skipped": "DEM too coarse to place rails"}
+    if getattr(dem, "resolution_m", 2.0) <= FINE_DEM_M:
+        rails, rail_stats = roadside.guard_rails(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"],
+                                                 sec["half_right"], sec["slope_left"], sec["slope_right"],
+                                                 dem.sample, frame)
     meshes += rails
 
     scene = Scene(

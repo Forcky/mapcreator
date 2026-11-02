@@ -34,7 +34,7 @@ Attribution format: `"<dataset name>" from theLIST © State of Tasmania`, with t
 | Need | Dataset | Licence | Notes |
 |---|---|---|---|
 | Roads | OpenStreetMap (Geofabrik extracts) | ODbL | `lanes`, `width`, `surface` coverage is uneven |
-| Elevation, national | Geoscience Australia SRTM 1-second DEM-H | CC BY 4.0 | ~30 m; on public cloud storage |
+| Elevation, national | Geoscience Australia 1-second SRTM DEM-S | CC BY 4.0 | ~30 m smoothed, vegetation offsets removed; one 38 GB COG on DEA's public bucket, read by window. The fallback outside Tasmania: too coarse for camber, bridges or rails, so tracks get a 240 m profile filter and a 15% grade cap |
 | Elevation, fine | GA 5 m LiDAR DEM; state LiDAR via ELVIS | CC BY (varies by state) | NSW, SA, ACT open; VIC 1 m is paid (10 m free); QLD newer than 3 years is paid; WA is not open |
 | Elevation, fallback | Copernicus DEM GLO-30 | Copernicus DEM licence | Surface model (includes trees and buildings); carry its attribution and notice |
 | Imagery as texture | NSW Imagery | CC BY | Best open high-resolution option outside Tasmania |

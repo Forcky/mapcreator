@@ -79,6 +79,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         shapely.prepare(built)
         trees = trees.subset(~shapely.contains_xy(built, trees.xy[:, 0], trees.xy[:, 1]))
     trees = scenery.thin_by_distance(trees, xy, rng)
+    trees = scenery.cap_trees(trees, xy, float(c["s"][-1]), rng)
     ground = dem.sample(trees.xy[:, 0], trees.xy[:, 1]) if len(trees) else np.zeros(0)
     ok = np.isfinite(ground)
     trees, ground = trees.subset(ok), ground[ok]

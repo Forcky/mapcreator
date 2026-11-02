@@ -26,6 +26,7 @@ SPAWNS = ("AC_PIT_0", "AC_START_0", "AC_HOTLAP_START_0")
 SPAWN_HEIGHT = (0.15, 0.5)
 AI_HEIGHT = (0.3, 0.5)
 MIN_GATE_M = 6.0
+MIN_RADIUS_M = 5.0  # tighter than any real hairpin: a routing artefact
 
 
 @dataclass
@@ -140,6 +141,9 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
     lift = [p[1] - h for p in sample if (h := road.height(p[0], p[2])) is not None]
     rep.check(len(lift) > 0.9 * len(sample) and AI_HEIGHT[0] <= min(lift) and max(lift) <= AI_HEIGHT[1],
               f"{label}: AI line {min(lift):.2f}-{max(lift):.2f} m above the road" if lift else f"{label}: AI line off the road")
+    radius = line.extra[:, 4]
+    rep.check(bool(radius.min() >= MIN_RADIUS_M),
+              f"{label}: tightest bend radius {radius.min():.1f} m (needs >= {MIN_RADIUS_M:.0f} m)")
     if "AC_START_0" in dummies:
         fwd = dummies["AC_START_0"]["matrix"][2, :3]
         ai_dir = line.pos[min(40, len(line.pos) - 1)] - line.pos[0]

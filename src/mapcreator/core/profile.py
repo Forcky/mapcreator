@@ -94,7 +94,11 @@ def narrow_dips(s: np.ndarray, z: np.ndarray, *, max_width_m: float = 20.0, min_
     return (closed - zz) > min_depth_m
 
 
-def smooth_profile(s: np.ndarray, z_raw: np.ndarray, fill_mask: np.ndarray, *, cutoff_m: float = 40.0) -> Profile:
+DEFAULT_CUTOFF_M = 40.0
+
+
+def smooth_profile(s: np.ndarray, z_raw: np.ndarray, fill_mask: np.ndarray, *,
+                   cutoff_m: float = DEFAULT_CUTOFF_M) -> Profile:
     fill_mask = fill_mask | narrow_dips(s, z_raw)
     z_filled, filled = fill_runs(s, z_raw, fill_mask)
     spline = make_smoothing_spline(s, z_filled, lam=lam_for_cutoff(cutoff_m))
@@ -102,6 +106,30 @@ def smooth_profile(s: np.ndarray, z_raw: np.ndarray, fill_mask: np.ndarray, *, c
     grade = spline.derivative(1)(s)
     vc = spline.derivative(2)(s)
     return Profile(z_raw=z_raw, z=z, grade=grade, vertical_curvature=vc, filled=filled)
+
+
+COARSE_MAX_GRADE = 0.15
+
+
+def limit_grade(s: np.ndarray, z: np.ndarray, max_grade: float = COARSE_MAX_GRADE) -> np.ndarray:
+    """Cap the grade while keeping both end heights.
+
+    On a coarse DEM a hillside road samples the hillside, not the road, and
+    reads 30%+ grades. Integrate the clipped grade, then spread the height it
+    loses or gains back over the stations that weren't clipped, so the climb
+    between the ends is unchanged.
+    """
+    ds = np.diff(s)
+    g = np.diff(z) / ds
+    clipped = np.clip(g, -max_grade, max_grade)
+    for _ in range(20):
+        missing = (z[-1] - z[0]) - float(np.sum(clipped * ds))
+        free = np.abs(clipped) < max_grade - 1e-9
+        if abs(missing) < 1e-6 or not free.any():
+            break
+        clipped[free] += missing / float(np.sum(ds[free]))
+        clipped = np.clip(clipped, -max_grade, max_grade)
+    return z[0] + np.concatenate([[0.0], np.cumsum(clipped * ds)])
 
 
 def _windowed_grade(s: np.ndarray, z: np.ndarray, window_m: float) -> float:

@@ -37,6 +37,7 @@ BUILDING_REACH_M = 250.0
 STOREY_M = 3.0
 SINK_M = 0.4
 CHUNK_M = 300.0
+MAX_TREES_PER_KM = 2500  # keeps dense forest within a frame-rate budget
 
 
 @dataclass
@@ -74,6 +75,19 @@ def thin_by_distance(trees: Trees, centre_xy: np.ndarray, rng: np.random.Generat
         band = (d > lower) & (d <= reach)
         keep |= band & (rng.random(len(trees)) < share)
         lower = reach
+    return trees.subset(keep)
+
+
+def cap_trees(trees: Trees, centre_xy: np.ndarray, length_m: float, rng: np.random.Generator,
+              per_km: float = MAX_TREES_PER_KM) -> Trees:
+    """Thin to a per-km budget. Nearer trees are kept first; the far bands give way."""
+    budget = int(per_km * length_m / 1000)
+    if len(trees) <= budget:
+        return trees
+    d, _ = cKDTree(centre_xy).query(trees.xy, workers=-1)
+    order = np.argsort(d + rng.uniform(0, 30, len(d)))  # mostly by distance, mixed a little at band edges
+    keep = np.zeros(len(trees), dtype=bool)
+    keep[order[:budget]] = True
     return trees.subset(keep)
 
 

@@ -1,14 +1,26 @@
-"""Which providers serve which part of the map."""
+"""Which providers serve which part of the map.
+
+Regions are checked in order, best data first:
+- Tasmania has 2 m LiDAR elevation, a canopy model and building footprints.
+- Anywhere else in Australia falls back to national data: GA's ~30 m DEM-S
+  and ESA WorldCover trees, with no building layer yet. That region works in
+  the MGA zone of the route's start.
+"""
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Callable
 
 from pyproj import Transformer
 
 from mapcreator.config import Settings
 from mapcreator.providers.base import OSM, Attribution
+
+# A DEM coarser than this can't resolve a road's camber or the drop beside it.
+FINE_DEM_M = 5.0
 
 
 @dataclass(frozen=True)
@@ -23,6 +35,9 @@ class Region:
     canopy: Callable[[Settings], object] | None = None
     buildings: Callable[[tuple, Settings], list] | None = None
     buildings_attribution: Attribution | None = None
+    country: str = "Australia"
+    state: str = ""
+    height_datum: str = "AHD"
 
     def contains(self, lon: float, lat: float) -> bool:
         w, s, e, n = self.bbox
@@ -77,9 +92,30 @@ TASMANIA = Region(
     canopy=_tas_canopy,
     buildings=_tas_buildings,
     buildings_attribution=_tas_buildings_attribution(),
+    state="Tasmania",
 )
 
-REGIONS = (TASMANIA,)
+AUSTRALIA_BBOX = (112.0, -44.0, 154.0, -9.0)
+
+
+def mga_zone(lon: float) -> int:
+    """UTM/MGA zone number for a longitude (Australia spans zones 49 to 56)."""
+    return int(math.floor((lon + 180) / 6)) + 1
+
+
+@lru_cache(maxsize=None)
+def australia(zone: int) -> Region:
+    epsg = 28300 + zone  # GDA94 / MGA zone N
+
+    def elevation(settings: Settings):
+        from mapcreator.providers.ga.dem_s import GaDemS
+
+        return GaDemS(settings.cache_dir, epsg)
+
+    from mapcreator.providers.ga.dem_s import ATTRIBUTION as DEM_S
+
+    return Region(key=f"au{zone}", name="Australia", epsg=epsg, bbox=AUSTRALIA_BBOX, elevation=elevation,
+                  attributions=(OSM, DEM_S), height_datum="AHD (approximately; SRTM-derived)")
 
 
 class OutOfArea(ValueError):
@@ -87,8 +123,17 @@ class OutOfArea(ValueError):
 
 
 def region_for(lon: float, lat: float) -> Region:
-    for region in REGIONS:
-        if region.contains(lon, lat):
-            return region
-    names = ", ".join(r.name for r in REGIONS)
-    raise OutOfArea(f"({lon:.4f}, {lat:.4f}) is outside the supported regions: {names}")
+    if TASMANIA.contains(lon, lat):
+        return TASMANIA
+    w, s, e, n = AUSTRALIA_BBOX
+    if w <= lon <= e and s <= lat <= n:
+        return australia(mga_zone(lon))
+    raise OutOfArea(f"({lon:.4f}, {lat:.4f}) is outside the supported area: Australia")
+
+
+def same_region(points: list[tuple[float, float]]) -> Region:
+    """The region for a set of points. All must fall in one region (and one MGA zone outside Tasmania)."""
+    regions = {region_for(lon, lat).key for lon, lat in points}
+    if len(regions) > 1:
+        raise OutOfArea("all waypoints must be in the same region (and, outside Tasmania, the same map zone)")
+    return region_for(*points[0])

@@ -99,3 +99,12 @@ def test_tree_uv_cells_tile_the_atlas():
                                           (115.86, -31.95, "S33E114"), (-0.1, 51.5, "N51W003")])
 def test_worldcover_tile_names(lon, lat, name):
     assert tile_name(lon, lat) == name
+
+
+def test_tree_cap_keeps_the_nearest_trees():
+    rng = np.random.default_rng(4)
+    pts = np.column_stack([rng.uniform(500_000, 501_000, 10000), 5_200_000 + rng.uniform(-250, 250, 10000)])
+    capped = scenery.cap_trees(scenery.Trees(pts, np.full(len(pts), 15.0)), CENTRE, 1000.0, rng, per_km=2000)
+    assert len(capped) == 2000
+    d = np.abs(capped.xy[:, 1] - 5_200_000)
+    assert np.percentile(d, 95) < 80  # the far bands gave way

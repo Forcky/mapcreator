@@ -10,7 +10,7 @@ from mapcreator.core import profile as pf
 from mapcreator.job import Job
 from mapcreator.pipeline import route_stage
 from mapcreator.pipeline.workdir import WorkDir
-from mapcreator.regions import region_for
+from mapcreator.regions import FINE_DEM_M, region_for
 
 STAGE = "02_profile"
 # DEM tiles are fetched this far either side of the road, enough for the terrain corridor later.
@@ -37,7 +37,17 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     tiles = dem.load_corridor(line.xy, CORRIDOR_M)
     z_raw = dem.sample(line.xy[:, 0], line.xy[:, 1])
 
-    prof = pf.smooth_profile(line.s, z_raw, _fill_mask(run_idx, runs))
+    # A coarse DEM samples the hillside as much as the road: filter far above its cell size
+    # and cap the grade at what a sealed road plausibly has.
+    resolution = getattr(dem, "resolution_m", 2.0)
+    coarse = resolution > FINE_DEM_M
+    cutoff = max(pf.DEFAULT_CUTOFF_M, 8.0 * resolution) if coarse else pf.DEFAULT_CUTOFF_M
+    prof = pf.smooth_profile(line.s, z_raw, _fill_mask(run_idx, runs), cutoff_m=cutoff)
+    if coarse:
+        first = prof
+        capped = pf.limit_grade(line.s, first.z)
+        prof = pf.smooth_profile(line.s, capped, np.zeros(len(line.s), bool), cutoff_m=pf.DEFAULT_CUTOFF_M)
+        prof.z_raw, prof.filled = z_raw, first.filled
     st = pf.stats(line.s, prof)
 
     np.savez_compressed(
@@ -47,6 +57,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     )
     summary = st.as_dict() | {
         "dem_tiles": tiles,
+        "dem_resolution_m": getattr(dem, "resolution_m", None),
+        "profile_cutoff_m": cutoff,
+        "grade_capped": coarse,
         "centreline_max_deviation_m": round(line.max_deviation_m, 2),
         "min_radius_m": round(float(1 / max(np.abs(line.curvature).max(), 1e-9)), 1),
     }

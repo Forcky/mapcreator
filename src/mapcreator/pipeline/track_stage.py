@@ -32,7 +32,6 @@ MATERIAL_PROPS = {
     "rail": {"ksAmbient": 0.4, "ksDiffuse": 0.55, "ksSpecular": 0.35, "ksSpecularEXP": 30.0},
 }
 ALPHA_REF = 0.5
-COUNTRY = {"tas": ("Australia", "Tasmania")}
 
 
 PREVIEW_REACH_M = 1500.0
@@ -185,7 +184,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         name = f"{title} ({direction})" if multi else title
         mid = len(road.e) // 2
         lon, lat = lonlat.transform(road.e[mid], road.n[mid])
-        country, city = COUNTRY.get(region.key, ("", region.name))
+        country, city = region.country, region.state
         description = (
             f"{title}, {direction}bound, generated from open data by mapcreator. "
             + " ".join(a.line().rstrip(".") + "." for a in attributions)
@@ -253,7 +252,7 @@ def _write_centreline(track_dir, job: Job, c, sec, region, lonlat) -> None:
             "station_m": [round(float(v), 1) for v in c["s"][idx]],
             "width_m": [round(float(v), 2) for v in width],
             "superelevation": [round(float(v), 4) for v in sec["superelevation"][idx]],
-            "height_datum": "AHD" if region.key == "tas" else "unknown",
+            "height_datum": region.height_datum,
             "license": "ODbL-1.0",
             "attribution": "; ".join(a.line() for a in region.attributions),
         },

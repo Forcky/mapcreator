@@ -11,7 +11,7 @@ from mapcreator.core import section as sec
 from mapcreator.job import Job
 from mapcreator.pipeline import profile_stage, route_stage
 from mapcreator.pipeline.workdir import WorkDir
-from mapcreator.regions import region_for
+from mapcreator.regions import FINE_DEM_M, region_for
 
 STAGE = "03_section"
 
@@ -34,6 +34,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     zl = dem.sample(*(c["xy"] + n * probe[:, None]).T)
     zr = dem.sample(*(c["xy"] - n * probe[:, None]).T)
     e = pf.cross_slope(c["s"], zl, zr, probe, clamp=sec.MAX_SUPERELEVATION)
+    if getattr(dem, "resolution_m", 2.0) > FINE_DEM_M:
+        e = np.zeros_like(e)  # a coarse DEM can't see a road's camber: crown only
     slope_l, slope_r = sec.half_slopes(e)
 
     np.savez_compressed(work.stage(STAGE) / "section.npz", s=c["s"], half_left=half, half_right=half,

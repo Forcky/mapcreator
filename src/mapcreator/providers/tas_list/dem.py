@@ -19,5 +19,7 @@ BLOCK = 512
 
 
 class TasDem(BlockRaster):
+    resolution_m = 2.0
+
     def __init__(self, source: str, cache_dir: Path, *, workers: int = 8):
         super().__init__(source, cache_dir, region_epsg=EPSG, block=BLOCK, workers=workers, cache_name="tas_dem")

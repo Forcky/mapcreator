@@ -10,7 +10,7 @@ from mapcreator.job import Job
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.providers.osm import graph as osm_graph
 from mapcreator.providers.osm import overpass
-from mapcreator.regions import OutOfArea, region_for
+from mapcreator.regions import same_region
 
 STAGE = "01_route"
 KEEP_TAGS = ("highway", "ref", "name", "lanes", "width", "surface", "oneway", "maxspeed", "bridge", "tunnel", "layer")
@@ -41,10 +41,7 @@ def runs(route: osm_graph.Route) -> list[dict]:
 
 
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
-    region = region_for(job.waypoints[0].lon, job.waypoints[0].lat)
-    for w in job.waypoints[1:]:
-        if region_for(w.lon, w.lat) is not region:
-            raise OutOfArea("all waypoints must be in the same region")
+    region = same_region([(w.lon, w.lat) for w in job.waypoints])
 
     data = overpass.fetch(overpass.query_for_bbox(*_bbox(job, 0.02)), settings)
     to_xy = region.to_xy()
@@ -56,6 +53,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     if length > job.max_length_km * 1000:
         raise ValueError(f"route is {length / 1000:.1f} km; the limit is {job.max_length_km:g} km")
 
+    sharp = sharp_turns(route.xy)
     lon, lat = region.to_lonlat().transform(route.xy[:, 0], route.xy[:, 1])
     route_runs = runs(route)
     geojson = {
@@ -76,7 +74,30 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     )
     work.write_json(STAGE, "runs.json", route_runs)
     return {"length_m": round(length, 1), "retraced_m": round(route.retraced_m, 1), "ways": len(route_runs),
-            "region": region.key}
+            "region": region.key, "sharp_turns": sharp}
+
+
+SHARP_TURN_DEG = 100.0
+
+
+def sharp_turns(xy: np.ndarray, limit_deg: float = SHARP_TURN_DEG) -> list[dict]:
+    """Places where the route turns harder than `limit_deg` at a single node.
+
+    A real hairpin is drawn in OSM as many nodes, each turning a little. One
+    node turning 100°+ is nearly always the route doubling back at a junction,
+    usually because a waypoint landed on the wrong road. That can't be smoothed
+    into a drivable bend, so it's reported for the person picking the route.
+    """
+    seg = np.diff(xy, axis=0)
+    keep = np.hypot(*seg.T) > 1e-6
+    seg = seg[keep]
+    if len(seg) < 2:
+        return []
+    h = np.arctan2(seg[:, 1], seg[:, 0])
+    turn = np.degrees(np.abs(np.angle(np.exp(1j * np.diff(h)))))
+    cum = np.concatenate([[0.0], np.cumsum(np.hypot(*seg.T))])
+    return [{"at_m": round(float(cum[i + 1]), 1), "turn_deg": round(float(turn[i]), 1)}
+            for i in np.flatnonzero(turn > limit_deg)]
 
 
 def _seg_run_index(route: osm_graph.Route, route_runs: list[dict]) -> np.ndarray:
