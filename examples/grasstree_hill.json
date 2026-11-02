@@ -1,0 +1,10 @@
+{
+  "track_id": "grasstree_hill",
+  "waypoints": [
+    {"lon": 147.335987, "lat": -42.810979},
+    {"lon": 147.393220, "lat": -42.764900},
+    {"lon": 147.420060, "lat": -42.742901}
+  ],
+  "width": "as_mapped",
+  "layouts": "both"
+}

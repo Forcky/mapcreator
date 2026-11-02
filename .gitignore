@@ -1,5 +1,6 @@
 # Local configuration and secrets
-config.local.yaml
+config.local.toml
+.private-markers
 .env
 *.env
 !*.env.example

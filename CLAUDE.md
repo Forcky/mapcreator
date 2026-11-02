@@ -4,7 +4,7 @@ Generates Assetto Corsa tracks from real roads using open data. Read `README.md`
 
 ## This repo is written to be published
 - **No private information, ever:** hostnames, IP addresses, subnets, tunnel or account IDs, secret names, personal paths, or anything about the maintainer's own infrastructure. Deployment specifics live in a separate private repo.
-- Configuration comes from environment variables or a gitignored `config.local.yaml`. Commit only `*.example` files with placeholders.
+- Configuration comes from environment variables or a gitignored `config.local.toml`. Commit only `*.example` files with placeholders.
 - Ported third-party code keeps a provenance header (source URL, licence, commit) and an entry in `THIRD_PARTY_NOTICES.md`. Don't copy code from repos without a licence. For MS-PL sources (e.g. AcTools), re-implement the format; don't copy the code.
 - Strip EXIF from any photo before it goes into `docs/`.
 

@@ -1,0 +1,7 @@
+# Install once per clone:  pip install pre-commit && pre-commit install
+# gitleaks scans each commit for credentials before it lands in history.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.2
+    hooks:
+      - id: gitleaks
