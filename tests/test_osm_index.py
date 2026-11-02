@@ -188,6 +188,24 @@ def test_pbf_needs_pyosmium_when_reading_with_the_standard_library(tmp_path):
         index.build_index(tmp_path / "x.osm.pbf", tmp_path / "x.sqlite", reader="xml")
 
 
+@pytest.mark.parametrize("reader", ["auto", "osmium"])
+def test_a_pyosmium_that_fails_to_load_is_reported_as_such(reader, tmp_path, monkeypatch):
+    # Installed but broken (e.g. a missing system library) must not read as "not installed".
+    import builtins
+
+    real_import = builtins.__import__
+
+    def broken(name, *args, **kwargs):
+        if name == "osmium" or name.startswith("osmium."):
+            raise ImportError("libexpat.so.1: cannot open shared object file")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", broken)
+    (tmp_path / "x.osm.pbf").write_bytes(b"")
+    with pytest.raises(RuntimeError, match="installed but failed to load: libexpat"):
+        index.build_index(tmp_path / "x.osm.pbf", tmp_path / "x.sqlite", reader=reader)
+
+
 def test_pyosmium_builds_the_same_index_from_xml_and_pbf(extract, osm_index, tmp_path):
     osmium = pytest.importorskip("osmium")
     import osmium.io

@@ -24,14 +24,15 @@ Mirrors make builds fast. Without them the worker reads elevation over HTTPS at 
 | OpenStreetMap, Australia | ~0.9 GB `.osm.pbf` | `https://download.geofabrik.de/australia-oceania/australia-latest.osm.pbf` |
 | OSM index | SQLite, built from the extract | `python -m mapcreator.providers.osm.index build australia-latest.osm.pbf australia.sqlite` (needs the `osm` extra: pyosmium) |
 
-To build the index without installing Python on the host, use a throwaway container:
+To build the index without installing Python on the host, use the one-shot index image:
 
 ```sh
-docker run --rm -v <repo>:/src:ro -v <osm dir>:/data python:3.12-slim sh -c \
-  "cp -r /src /tmp/src && pip install -q '/tmp/src[osm]' && python -m mapcreator.providers.osm.index build /data/australia-latest.osm.pbf /data/australia.sqlite"
+docker build -f deploy/examples/Dockerfile.index -t mapcreator-index:local .
+docker run --rm -v <osm dir>:/data mapcreator-index:local \
+  /data/australia-latest.osm.pbf /data/australia.sqlite
 ```
 
-pip builds inside the source folder, so the container copies the read-only mount first.
+Don't use a bare `python:3.12-slim` container for this. pyosmium's wheel links the system's libexpat, which the slim image doesn't ship, so `import osmium` fails there. The example Dockerfiles install it.
 
 Refresh the extract and rebuild the index now and then (e.g. monthly). The index records the extract's timestamp (`metadata()` in `providers/osm/index.py`). Node locations are held in memory by default. If the build host is short of RAM, add `--locations sparse_file_array,/data/nodes.bin` to keep them on disk.
 

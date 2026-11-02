@@ -74,7 +74,7 @@ def _plot(work: WorkDir, line: cl.Centreline, prof: pf.Profile, summary: dict) -
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-    except ImportError:
+    except ModuleNotFoundError:  # plots are optional
         return
     km = line.s / 1000
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 9), sharex=True, height_ratios=[3, 1.4, 1.4])

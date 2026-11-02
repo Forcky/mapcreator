@@ -1,0 +1,27 @@
+# Example only: a one-shot image that builds the local OSM index from a .osm.pbf extract.
+# Workers only query the index, so they don't need pyosmium. Build from the repository root:
+#   docker build -f deploy/examples/Dockerfile.index -t mapcreator-index:local .
+#   docker run --rm -v <osm dir>:/data mapcreator-index:local \
+#     /data/australia-latest.osm.pbf /data/australia.sqlite
+# Pinned (Debian 13.7): a base-image change can't silently drop a library. Update on purpose.
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# rasterio's and pyosmium's wheels bundle GDAL and libosmium, but both link the system's libexpat,
+# which python:3.12-slim doesn't ship.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libexpat1 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/mapcreator
+COPY pyproject.toml README.md LICENSE THIRD_PARTY_NOTICES.md ./
+COPY src ./src
+RUN pip install ".[osm]" && rm -rf /opt/mapcreator/src /opt/mapcreator/build
+
+# Fail the image build, not the index build, if pyosmium can't load.
+RUN python -c "import osmium, mapcreator.providers.osm.index"
+ENTRYPOINT ["python", "-m", "mapcreator.providers.osm.index", "build"]

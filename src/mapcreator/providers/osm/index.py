@@ -210,8 +210,13 @@ def _open_reader(src: Path, reader: str, locations: str) -> tuple[Iterator[_Way 
         try:
             import osmium  # noqa: F401
             reader = "osmium"
-        except ImportError:
+        except ModuleNotFoundError as e:
+            if e.name != "osmium":
+                raise  # osmium is there, but something it needs isn't
             reader = "xml"
+        except ImportError as e:
+            # Installed but unloadable (e.g. a missing system library): say so, don't fall back to XML.
+            raise RuntimeError(f"pyosmium is installed but failed to load: {e}") from e
     if reader == "xml":
         if not src.name.lower().endswith(XML_SUFFIXES):
             raise RuntimeError(f"{src.name}: reading anything but .osm XML needs pyosmium "
@@ -227,8 +232,12 @@ def _read_osmium(src: Path, locations: str) -> tuple[Iterator[_Way | None], dict
         import osmium.geom
         import osmium.io
         import osmium.version
-    except ImportError:
+    except ModuleNotFoundError as e:
+        if e.name != "osmium":
+            raise
         raise RuntimeError("pyosmium isn't installed: pip install -e .[osm]") from None
+    except ImportError as e:
+        raise RuntimeError(f"pyosmium is installed but failed to load: {e}") from e
 
     # Geofabrik records the time of the data in the header; a closed reader leaves no threads behind.
     with osmium.io.Reader(str(src), osmium.osm.NOTHING) as r:
