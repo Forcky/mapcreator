@@ -100,7 +100,8 @@ TASMANIA = Region(
     state="Tasmania",
 )
 
-AUSTRALIA_BBOX = (112.0, -44.0, 154.0, -9.0)
+# GA's DEM-S coverage (its header: 113 to 154 E, 10 to 44 S). Beyond it there's no national elevation.
+AUSTRALIA_BBOX = (113.0, -44.0, 154.0, -10.0)
 
 
 def _osm_buildings(epsg: int) -> Callable[[tuple, Settings], list]:

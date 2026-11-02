@@ -52,3 +52,17 @@ def test_every_stage_and_the_router_agree_on_the_region():
         check_region(wps(HOBART, TORQUAY))
     with pytest.raises(OutOfArea, match="Point 2 is outside"):
         check_region(wps(HOBART, (174.78, -41.29)))
+
+
+def test_the_national_fallback_stops_where_its_elevation_data_does():
+    with pytest.raises(OutOfArea):
+        region_for(142.2, -9.4)  # Torres Strait, north of DEM-S
+    with pytest.raises(OutOfArea):
+        region_for(112.5, -25.0)  # west of DEM-S
+
+
+def test_no_elevation_under_a_road_is_explained_to_the_user():
+    from mapcreator.core.profile import NoElevation
+    from mapcreator.service.worker import public_error
+
+    assert public_error(NoElevation("there's no elevation data along this road")).startswith("There's no elevation")

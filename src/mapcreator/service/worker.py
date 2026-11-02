@@ -41,6 +41,7 @@ from pathlib import Path
 import httpx
 from pydantic import ValidationError
 
+from mapcreator.core.profile import NoElevation
 from mapcreator.job import Job
 from mapcreator.providers.osm.graph import RouteError
 from mapcreator.regions import OutOfArea
@@ -54,7 +55,7 @@ INTERNAL_ERROR = "The build failed with an internal error. It has been logged fo
 BUILD_TIMEOUT_S = 3600.0
 STUCK_EXIT_CODE = 70
 # Exceptions whose message is about the user's road, written for people, and safe to show.
-USER_FACING = (RouteError, OutOfArea)
+USER_FACING = (RouteError, OutOfArea, NoElevation)
 
 
 @dataclass(frozen=True)

@@ -46,6 +46,11 @@ class ProfileStats:
         return {k: round(v, 3) for k, v in self.__dict__.items()}
 
 
+
+class NoElevation(ValueError):
+    """The DEM has (almost) nothing under the route: the sea, or past the edge of its coverage."""
+
+
 def lam_for_cutoff(cutoff_m: float) -> float:
     """Smoothing-spline penalty whose half-power point is at wavelength `cutoff_m`."""
     return (cutoff_m / (2 * math.pi)) ** 4
@@ -62,7 +67,7 @@ def fill_runs(s: np.ndarray, z: np.ndarray, mask: np.ndarray, pad_m: float = 3.0
             bad[max(i - pad, 0) : i + pad + 1] = True
     good = ~bad
     if good.sum() < 2:
-        raise ValueError("not enough elevation data along the route")
+        raise NoElevation("there's no elevation data along this road, so it can't be built")
     out = z.copy()
     out[bad] = np.interp(s[bad], s[good], z[good])
     return out, bad
