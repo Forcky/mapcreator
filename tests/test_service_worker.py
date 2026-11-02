@@ -249,3 +249,21 @@ def test_the_stage_names_match_the_cli():
     from mapcreator.pipeline import STAGE_NAMES
 
     assert tuple(STAGES) == STAGE_NAMES
+
+
+def test_an_older_web_app_that_refuses_stages_still_gets_heartbeats():
+    beats = []
+
+    def api(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if "stage" in body:
+            return httpx.Response(422, json={"detail": "extra fields not permitted"})
+        beats.append(body)
+        return httpx.Response(200, json={"ok": True})
+
+    from mapcreator.service.worker import WorkerApi
+
+    worker_api = WorkerApi(httpx.Client(transport=httpx.MockTransport(api)), "https://api.example.org", TOKEN)
+    assert worker_api.heartbeat("j" * 22, "k" * 22, "mesh")
+    assert worker_api.heartbeat("j" * 22, "k" * 22, "track")  # straight to the plain form now
+    assert beats == [{"worker_id": "k" * 22}, {"worker_id": "k" * 22}]

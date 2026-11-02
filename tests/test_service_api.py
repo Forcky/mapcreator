@@ -308,6 +308,18 @@ def test_client_address_from_a_trusted_proxy_only(make):
     assert other.post("/api/jobs", json={"job": job(147.34)}, headers=fwd("198.51.100.4")).status_code == 429
 
 
+def test_a_proxy_missing_from_the_trusted_list_is_named_in_the_log(make, caplog):
+    c = make(trusted_proxies=("203.0.113.1",), client_ip_header="CF-Connecting-IP")
+    gateway = c("fd00:abcd::1")  # say, a bridge gateway the operator didn't list
+    with caplog.at_level("WARNING", logger="mapcreator.service.api"):
+        for lon in (147.30, 147.31):
+            gateway.post("/api/jobs", json={"job": job(lon)}, headers={"CF-Connecting-IP": "198.51.100.1"})
+        c("198.51.100.9").post("/api/jobs", json={"job": job(147.32)},  # a public peer: no warning
+                               headers={"CF-Connecting-IP": "198.51.100.1"})
+    warnings = [r.getMessage() for r in caplog.records if "TRUSTED_PROXIES" in r.getMessage()]
+    assert len(warnings) == 1 and "fd00:abcd::1" in warnings[0]
+
+
 def test_ipv6_clients_are_counted_per_64(make):
     c = make(jobs_per_ip_per_day=1)
     assert submit(c("2001:db8:1:2::1"), job(147.30)).status_code == 201

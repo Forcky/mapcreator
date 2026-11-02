@@ -26,7 +26,13 @@ GENERIC = [
     (r"\b192\.168\.\d{1,3}\.\d{1,3}\b", "private IPv4 (192.168/16)"),
     (r"\b172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b", "private IPv4 (172.16/12)"),
     (r"[A-Za-z]:[\\/]+Users[\\/]+\w+", "personal Windows path"),
+    (r"/Users/\w+", "personal path (macOS, Git Bash /c/Users, WSL /mnt/c/Users)"),
     (r"/home/\w+/", "personal Linux path"),
+    (r"[A-Za-z0-9._%+-]+@(?!example\.(?:org|com|net)\b)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}",
+     "email address"),
+    # Cloudflare account, zone and R2 ids are 32 hex digits; tunnel ids and many others are UUIDs.
+    (r"\b[0-9a-f]{32}\b", "32-hex id (Cloudflare account, zone or similar)"),
+    (r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", "UUID (tunnel or account id)"),
     (r"-----BEGIN [A-Z ]*PRIVATE KEY-----", "private key"),
     (r"\bAKIA[0-9A-Z]{16}\b", "AWS access key id"),
     (r"\bgh[pousr]_[A-Za-z0-9]{30,}\b", "GitHub token"),

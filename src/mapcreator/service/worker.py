@@ -107,6 +107,7 @@ class WorkerApi:
         self._client = client
         self._base = api_base.rstrip("/")
         self._headers = {"Authorization": f"Bearer {token}"}
+        self._send_stage = True  # off if the web app predates stage reporting
 
     def _post(self, path: str, body: dict | None = None) -> httpx.Response:
         try:
@@ -125,8 +126,15 @@ class WorkerApi:
 
     def heartbeat(self, job_id: str, worker_id: str, stage: str | None = None) -> bool:
         """False when the job has been taken away from this worker."""
-        body = {"worker_id": worker_id} if stage is None else {"worker_id": worker_id, "stage": stage}
-        return self._expect(self._post(f"/jobs/{job_id}/heartbeat", body), 200, 409) == 200
+        path = f"/jobs/{job_id}/heartbeat"
+        if stage is not None and self._send_stage:
+            r = self._post(path, {"worker_id": worker_id, "stage": stage})
+            if r.status_code != 422:
+                return self._expect(r, 200, 409) == 200
+            # An older web app refuses the unknown field. Keep the job alive without it.
+            log.warning("the web app doesn't take build stages; heartbeats will leave them out")
+            self._send_stage = False
+        return self._expect(self._post(path, {"worker_id": worker_id}), 200, 409) == 200
 
     def complete(self, job_id: str, worker_id: str, result: dict) -> bool:
         r = self._post(f"/jobs/{job_id}/complete", {"worker_id": worker_id, "result": result})

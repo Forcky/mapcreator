@@ -182,12 +182,18 @@ class ClientIdentity:
     proxy, in which case the configured header names the client (its last
     entry, which is the one that proxy added). IPv6 clients are counted per
     /64, since one connection usually has a whole /64 to rotate through.
+
+    A wrong trusted-proxy address fails quietly: every client then looks like
+    the proxy, and the per-client limits become one limit for everyone. So the
+    first time the header arrives from a private address that isn't trusted,
+    that address is logged as the likely proxy.
     """
 
     def __init__(self, settings: ServiceSettings):
         self._proxies = [ipaddress.ip_network(p, strict=False) for p in settings.trusted_proxies]
         self._header = settings.client_ip_header
         self._salt = settings.ip_salt.encode()
+        self._warned = False
 
     def address(self, request: Request) -> str:
         peer = request.client.host if request.client else ""
@@ -197,7 +203,20 @@ class ClientIdentity:
                 return str(ipaddress.ip_address(claimed))
             except ValueError:
                 pass
+        elif self._header and not self._warned and request.headers.get(self._header):
+            self._warn_untrusted(peer)
         return peer
+
+    def _warn_untrusted(self, peer: str) -> None:
+        try:
+            private = ipaddress.ip_address(peer).is_private
+        except ValueError:
+            return
+        if private:
+            self._warned = True
+            log.warning("requests from %s carry %s, but %s isn't in MAPCREATOR_TRUSTED_PROXIES, so every client "
+                        "behind it counts as one for the rate limits. If it's your reverse proxy, add it.",
+                        peer, self._header, peer)
 
     def _is_trusted(self, peer: str) -> bool:
         try:
