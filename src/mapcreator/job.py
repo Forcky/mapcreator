@@ -8,13 +8,17 @@ anywhere except to a stretch of road.
 from __future__ import annotations
 
 import json
+import math
 import re
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MAX_WAYPOINTS = 25
+# A waypoint further than this from any drivable road is refused when the route is built.
+MAX_SNAP_M = 150.0
+EARTH_RADIUS_M = 6_371_008.8
 
 
 class WidthOption(StrEnum):
@@ -40,6 +44,18 @@ class Waypoint(BaseModel):
     lat: float = Field(ge=-90, le=90)
 
 
+def straight_line_m(waypoints: list[Waypoint]) -> float:
+    """Great-circle length of the waypoint sequence: no road through them in order can be shorter,
+    give or take the distance each one moves to snap onto a road."""
+    total = 0.0
+    for a, b in zip(waypoints, waypoints[1:]):
+        p1, p2 = math.radians(a.lat), math.radians(b.lat)
+        dp, dl = p2 - p1, math.radians(b.lon - a.lon)
+        h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+        total += 2 * EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(h)))
+    return total
+
+
 class Job(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -57,6 +73,15 @@ class Job(BaseModel):
             if (a.lon, a.lat) == (b.lon, b.lat):
                 raise ValueError("consecutive waypoints must differ")
         return wps
+
+    @model_validator(mode="after")
+    def _within_reach(self) -> Job:
+        # Refused here, before any build loads the roads in the waypoints' box: points hundreds of km apart
+        # would otherwise pull a whole region's roads into memory only to fail the length check after.
+        slack_m = 2 * MAX_SNAP_M * (len(self.waypoints) - 1)
+        if straight_line_m(self.waypoints) > self.max_length_km * 1000 + slack_m:
+            raise ValueError(f"the points are too far apart for a road of at most {self.max_length_km:g} km")
+        return self
 
 
 PUBLIC_PREFIX = "mc_"

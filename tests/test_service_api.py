@@ -109,13 +109,17 @@ def test_invalid_jobs_get_a_plain_message(client, body):
 
 
 def test_out_of_area_names_the_supported_regions(client):
-    r = submit(client, {**job(), "waypoints": [job()["waypoints"][0], AUCKLAND]})
+    # South of Tasmania, 22 km apart: near enough to pass the distance check, so the region check answers.
+    r = submit(client, {**job(), "waypoints": [{"lon": 147.0, "lat": -43.85}, {"lon": 147.0, "lat": -44.05}]})
     assert r.status_code == 422
     assert r.json()["detail"] == "Point 2 is outside the supported area. Supported regions: Tasmania, Australia."
+    far = submit(client, {**job(), "waypoints": [job()["waypoints"][0], AUCKLAND]})
+    assert far.status_code == 422 and "too far apart" in far.json()["detail"]
 
 
 def test_points_in_different_regions_are_refused(client):
-    r = submit(client, {**job(), "waypoints": [job()["waypoints"][0], MELBOURNE]})
+    # Either side of Tasmania's northern edge in Bass Strait, 11 km apart.
+    r = submit(client, {**job(), "waypoints": [{"lon": 146.4, "lat": -39.25}, {"lon": 146.4, "lat": -39.35}]})
     assert r.status_code == 422
     assert r.json()["detail"] == "All points must be in the same region."
 
@@ -398,3 +402,12 @@ def test_missing_downloads_are_plain_404s_not_pages(tmp_path, path):
     r = c.get(path)
     assert r.status_code == 404
     assert "text/html" not in r.headers.get("Content-Type", "")
+
+
+def test_public_jobs_and_previews_stay_within_the_length_limit(make):
+    c = make()()
+    r = c.post("/api/jobs", json={"job": {**job(), "max_length_km": 75}})
+    assert r.status_code == 422 and "30 km" in r.json()["detail"]
+    far = {"waypoints": [{"lon": 147.0, "lat": -42.0}, {"lon": 148.0, "lat": -41.0}]}
+    r = c.post("/api/route-preview", json=far)
+    assert r.status_code == 422 and "too far apart" in r.json()["detail"]

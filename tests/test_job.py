@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from mapcreator.job import Job, WidthOption
+from mapcreator.job import Job, WidthOption, straight_line_m
 
 WP = [{"lon": 147.33, "lat": -42.81}, {"lon": 147.42, "lat": -42.74}]
 
@@ -35,3 +35,16 @@ def test_waypoint_bounds_and_counts():
 def test_width_factors():
     assert WidthOption("plus_15").factor == pytest.approx(1.15)
     assert WidthOption("plus_30").factor == pytest.approx(1.30)
+
+
+def test_points_too_far_apart_for_the_length_limit_are_refused_before_any_build():
+    perth_brisbane = [{"lon": 115.86, "lat": -31.95}, {"lon": 153.03, "lat": -27.47}]
+    with pytest.raises(ValidationError, match="too far apart"):
+        Job.model_validate({"track_id": "far", "waypoints": perth_brisbane})
+    # 28 km in a straight line fits 30 km; with three points 0.6 km of snapping slack is allowed on top.
+    near = [{"lon": 147.0, "lat": -42.0}, {"lon": 147.0, "lat": -42.252}]
+    assert 27_900 < straight_line_m(Job.model_validate({"track_id": "near", "waypoints": near}).waypoints) < 28_100
+    with pytest.raises(ValidationError, match="too far apart"):
+        Job.model_validate({"track_id": "x", "waypoints": [{"lon": 147.0, "lat": -42.0}, {"lon": 147.0, "lat": -42.28}]})
+    assert Job.model_validate({"track_id": "x", "max_length_km": 75,
+                               "waypoints": [{"lon": 147.0, "lat": -42.0}, {"lon": 147.0, "lat": -42.28}]})

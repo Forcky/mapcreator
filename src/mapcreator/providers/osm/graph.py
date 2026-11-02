@@ -15,6 +15,8 @@ from pyproj import Transformer
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import dijkstra
 
+from mapcreator.job import MAX_SNAP_M
+
 # Mild preference for bigger roads, so a route between sparse waypoints follows
 # the main road rather than a parallel residential street of equal length.
 CLASS_FACTOR = {
@@ -121,7 +123,7 @@ def _nearest_segment(g: RoadGraph, p: np.ndarray) -> tuple[int, float, np.ndarra
     return i, float(t[i]), proj[i], float(dist[i])
 
 
-def route(g: RoadGraph, waypoints_xy: np.ndarray, *, max_snap_m: float = 150.0) -> Route:
+def route(g: RoadGraph, waypoints_xy: np.ndarray, *, max_snap_m: float = MAX_SNAP_M) -> Route:
     """Shortest class-weighted route through the waypoints in order, respecting one-way rules."""
     n = len(g.xy)
     seg_len = np.hypot(*(g.xy[g.seg_b] - g.xy[g.seg_a]).T)

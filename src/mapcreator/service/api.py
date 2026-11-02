@@ -38,7 +38,7 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from mapcreator import __version__
-from mapcreator.job import MAX_WAYPOINTS, Job, Waypoint, public_track_id
+from mapcreator.job import MAX_SNAP_M, MAX_WAYPOINTS, Job, Waypoint, public_track_id, straight_line_m
 from mapcreator.pipeline import STAGE_NAMES
 from mapcreator.regions import REGIONS
 from mapcreator.service.db import JobStore, route_hash
@@ -410,6 +410,8 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
     @app.post("/api/jobs", status_code=201)
     def submit_job(body: JobRequest, request: Request, response: Response) -> dict:
         maybe_prune()
+        if body.job.max_length_km > max_length_km:
+            raise HTTPException(422, f"Roads are limited to {max_length_km:g} km.")
         if turnstile is not None and not turnstile.verify(body.turnstile_token or ""):
             raise HTTPException(403, "The anti-robot check didn't pass. Reload the page and try again.")
         try:
@@ -477,6 +479,10 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
         if not previews.allow(identity.key(request)):
             raise HTTPException(429, "That's a lot of route previews. Wait a minute and try again.",
                                 headers={"Retry-After": "60"})
+        # The router could answer, but no job could be built from it: say so without asking.
+        if straight_line_m(body.waypoints) > max_length_km * 1000 + 2 * MAX_SNAP_M * (len(body.waypoints) - 1):
+            raise HTTPException(422, f"The points are too far apart for a road of at most {max_length_km:g} km. "
+                                     "Move them closer together.")
         try:
             return router.preview(body.waypoints)
         except OutOfArea as e:
