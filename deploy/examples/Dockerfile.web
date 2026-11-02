@@ -18,7 +18,7 @@ WORKDIR /opt/mapcreator
 COPY pyproject.toml README.md LICENSE THIRD_PARTY_NOTICES.md ./
 COPY src ./src
 # The only network access at build time is pip fetching the package's dependencies.
-RUN pip install ".[service]" && rm -rf /opt/mapcreator/src /opt/mapcreator/build
+RUN pip install ".[service,s3]" && rm -rf /opt/mapcreator/src /opt/mapcreator/build
 
 USER 10001:10001
 ENV HOME=/tmp \

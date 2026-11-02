@@ -1,4 +1,4 @@
-# Example only: a build worker (mapcreator-worker). It needs the base package only;
+# Example only: a build worker (mapcreator-worker). It needs the base package plus boto3 (s3) for uploads;
 # the [service] extra (FastAPI, uvicorn) is for the web side.
 # Build from the repository root:
 #   docker build -f deploy/examples/Dockerfile.worker -t mapcreator-worker:local .
@@ -19,7 +19,7 @@ COPY pyproject.toml README.md LICENSE THIRD_PARTY_NOTICES.md ./
 COPY src ./src
 # The only network access at build time is pip fetching the package's dependencies
 # (rasterio's wheels bundle GDAL, so no system packages are needed).
-RUN pip install . && rm -rf /opt/mapcreator/src /opt/mapcreator/build
+RUN pip install ".[s3]" && rm -rf /opt/mapcreator/src /opt/mapcreator/build
 
 USER 10001:10001
 # Scratch space for each job's work folder; mount a size-limited tmpfs here.
