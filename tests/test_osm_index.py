@@ -189,8 +189,11 @@ def test_pyosmium_builds_the_same_index_from_xml_and_pbf(extract, osm_index, tmp
     pbf = tmp_path / "fixture.osm.pbf"
     header = osmium.io.Header()
     header.set("osmosis_replication_timestamp", "2026-11-01T20:21:02Z")  # as Geofabrik's extracts carry
+    # Objects from a FileProcessor, not osmium.apply(): every reader and writer here owns its thread
+    # pool and frees it with itself, so nothing is left to tear down when the process exits.
     with osmium.SimpleWriter(str(pbf), header=header) as writer:
-        osmium.apply(str(extract), writer)
+        for obj in osmium.FileProcessor(str(extract)):
+            writer.add(obj)
     expected = _ways_table(osm_index)
     for source in (extract, pbf):
         out = tmp_path / (source.name + ".sqlite")
