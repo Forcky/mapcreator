@@ -47,13 +47,23 @@ Write these into the private deployment notes:
 - frame rate on the GTX 1660 Ti, with and without CSP
 - every log error
 
-## Later: automated checks with a CSP Lua app
+## Automated probe (CSP Lua app, untested)
 
-A Custom Shaders Patch Lua app can drive the whole check without a person:
+`csp_app/mc_probe/` is a Custom Shaders Patch Lua app. It presses Drive, teleports the car along the track and records, at each point:
+- wheel contact, and whether the surface is valid track
+- a downward raycast, which finds holes in the collision mesh
+- the lateral offset on the AI spline
 
-1. Press Drive with `ac.tryToStart`.
-2. Teleport the car every 200 m along the road with `physics.setCarPosition`.
-3. At each point, read wheel contact and whether the surface is valid track, and take a screenshot.
-4. Write the results to JSON and quit.
+To run it:
 
-The MIT-licensed `claude_bridge` app in stormbuster/assetto-corsa-mcp already does teleporting and screenshots this way. Teleporting is confirmed in offline practice only.
+```powershell
+python harness/ac_harness.py probe-install                     # once: copy the app into AC's apps/lua
+python harness/ac_harness.py probe-points out/grasstree_hill/05_track/grasstree_hill --layout forward --every 200 --quit --screenshots-every 10
+python harness/ac_harness.py launch grasstree_hill --layout forward
+# ...the app drives itself through every point, writes results.json and quits AC
+python harness/ac_harness.py probe-report                      # PASS or a list of problem points
+```
+
+- Results and screenshots land in `Documents/Assetto Corsa/mapcreator_probe/`.
+- A teleport the game ignores is reported as a harness problem, not a track problem.
+- Teleporting is only known to work in offline practice.

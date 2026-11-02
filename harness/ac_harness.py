@@ -228,6 +228,77 @@ def results() -> int:
     return 0
 
 
+# -- automated probe (CSP Lua app) --------------------------------------------------
+
+PROBE_APP = ROOT / "harness" / "csp_app" / "mc_probe"
+TELEPORT_TOLERANCE_M = 3.0
+MAX_WHEEL_GAP_M = 1.0  # car centre to wheel contact, vertically
+
+
+def _probe_dir() -> Path:
+    return ac_docs() / "mapcreator_probe"
+
+
+def probe_install() -> None:
+    dest = ac_root() / "apps" / "lua" / "mc_probe"
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(PROBE_APP, dest)
+    print(f"installed the probe app -> {dest} (needs Custom Shaders Patch)")
+
+
+def probe_points(track_dir: Path, layout: str, every_m: float, quit_after: bool, shots_every: int) -> None:
+    """Points along the layout's AI line (already 0.4 m above the road) for the Lua app to visit."""
+    sys.path.insert(0, str(ROOT / "src"))
+    from mapcreator.core import ai_line  # the harness runs from the repo's venv
+
+    base = track_dir / layout if layout else track_dir
+    line = ai_line.read(base / "ai" / "fast_lane.ai")
+    step = max(int(round(every_m / max(float(line.length[1] - line.length[0]), 1e-6))), 1)
+    pts = []
+    for i in range(0, len(line.pos), step):
+        fwd = line.extra[i, 13:16]
+        pts.append({"pos": [round(float(v), 3) for v in line.pos[i] + [0.0, 0.6, 0.0]],
+                    "dir": [round(float(v), 4) for v in fwd], "s_m": round(float(line.length[i]), 1)})
+    out = _probe_dir()
+    out.mkdir(parents=True, exist_ok=True)
+    for old in ("results.json", "status.json"):
+        (out / old).unlink(missing_ok=True)
+    (out / "points.json").write_text(json.dumps({"points": pts, "quit": quit_after,
+                                                 "screenshots_every": shots_every}), encoding="utf-8")
+    print(f"wrote {len(pts)} probe points every ~{every_m:.0f} m to {out / 'points.json'}")
+
+
+def probe_report() -> int:
+    path = _probe_dir() / "results.json"
+    if not path.exists():
+        print(f"{path} not found (has the probe finished?)")
+        return 1
+    data = json.loads(path.read_text(encoding="utf-8"))
+    problems, n = [], 0
+    for r in data.get("results", []):
+        n += 1
+        req, pos = r["requested"], r["position"]
+        moved = sum((a - b) ** 2 for a, b in zip(req, pos)) ** 0.5
+        if moved > TELEPORT_TOLERANCE_M:
+            problems.append(f"point {r['i']}: teleport ignored or car slid {moved:.1f} m (harness issue, not track)")
+            continue
+        gaps = [pos[1] - w["contact"][1] for w in r["wheels"]]
+        if any(g > MAX_WHEEL_GAP_M or g < -0.5 for g in gaps):
+            problems.append(f"point {r['i']}: wheel contact gaps {[round(g, 2) for g in gaps]} m")
+        if not all(w["valid_track"] for w in r["wheels"]):
+            problems.append(f"point {r['i']}: a wheel is not on valid track")
+        if r.get("raycast_m", -1) < 0:
+            problems.append(f"point {r['i']}: downward raycast found no surface (hole in collision)")
+        if abs(r.get("lateral", 0)) > 1.0:
+            problems.append(f"point {r['i']}: {r['lateral']:.2f} outside the AI spline's width")
+    print(f"probe points checked: {n}, CSP build {data.get('csp')}")
+    for p in problems[:50]:
+        print("  ", p)
+    print("PASS" if n and not problems else "FAIL")
+    return 0 if n and not problems else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="ac_harness")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -247,7 +318,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("track_id")
     sub.add_parser("probe")
     sub.add_parser("results")
+    sub.add_parser("probe-install")
+    p = sub.add_parser("probe-points")
+    p.add_argument("track_dir", type=Path)
+    p.add_argument("--layout", default="forward")
+    p.add_argument("--every", type=float, default=200.0, help="metres between probe points")
+    p.add_argument("--quit", action="store_true", help="quit AC when the probe finishes")
+    p.add_argument("--screenshots-every", type=int, default=0, help="screenshot every Nth point (0 = none)")
+    sub.add_parser("probe-report")
     args = ap.parse_args(argv)
+    if args.cmd == "probe-install":
+        probe_install()
+        return 0
+    if args.cmd == "probe-points":
+        probe_points(args.track_dir, args.layout, args.every, args.quit, args.screenshots_every)
+        return 0
+    if args.cmd == "probe-report":
+        return probe_report()
     if args.cmd == "showroom":
         _cm(str(args.kn5.resolve()))
     elif args.cmd == "install":
