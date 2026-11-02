@@ -61,6 +61,15 @@ CREATE INDEX IF NOT EXISTS jobs_ip_created ON jobs (ip_hash, created_at);
 """
 
 
+def new_job_id() -> str:
+    """A random job id that never starts with "-": one in 64 of token_urlsafe's would, and a command line
+    then reads the id as an option (mapcreator-admin show -abc... fails)."""
+    while True:
+        job_id = secrets.token_urlsafe(16)
+        if not job_id.startswith("-"):
+            return job_id
+
+
 def route_hash(job: Job) -> str:
     """Identity of the road a job builds: the canonical job without its name.
 
@@ -147,7 +156,7 @@ class JobStore:
         return JobRecord._from_row(row) if row else None
 
     def create(self, job: Job, *, ip_hash: str) -> JobRecord:
-        job_id = secrets.token_urlsafe(16)
+        job_id = new_job_id()
         with self._connect() as con:
             con.execute(
                 "INSERT INTO jobs (id, status, job_json, route_hash, ip_hash, created_at) "
@@ -177,7 +186,7 @@ class JobStore:
                                  (ip_hash, now - 86400.0)).fetchone()[0]
             if recent >= per_ip_per_day:
                 return "ip_limit", None
-            job_id = secrets.token_urlsafe(16)
+            job_id = new_job_id()
             con.execute("INSERT INTO jobs (id, status, job_json, route_hash, ip_hash, created_at) "
                         "VALUES (?, 'queued', ?, ?, ?, ?)", (job_id, job.model_dump_json(), same, ip_hash, now))
             created = con.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()

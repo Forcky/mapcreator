@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>About mapcreator: data, licences and privacy</title>
+  <meta name="description" content="How mapcreator builds Assetto Corsa tracks from open data, where the data comes from, and what the service keeps about you.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site-header">
+    <h1><a class="home-link" href="./">mapcreator</a></h1>
+    <p>About, data sources and privacy.</p>
+  </header>
+
+  <main class="prose">
+    <h2>What this is</h2>
+    <p>mapcreator turns a stretch of real road into a track for Assetto Corsa on PC. You pick the road on the map; a build server snaps it to OpenStreetMap, lays it over a terrain model, adds verges, trees, buildings, timing gates and an AI line, and packs it as a zip you can install with Content Manager or by hand. It's free, and it uses open data only.</p>
+    <p>Roads in Tasmania use the state's 2 metre terrain model, tree heights and building outlines. Elsewhere in Australia, a road uses Geoscience Australia's 5 metre LiDAR model where it covers the whole road, and the 30 metre national model otherwise, so mainland roads away from towns come out smoother than the real thing.</p>
+
+    <h2>Where the data comes from</h2>
+    <ul>
+      <li><strong>Roads:</strong> © <a href="https://www.openstreetmap.org/copyright" rel="noopener">OpenStreetMap contributors</a>, under the Open Database Licence (ODbL).</li>
+      <li><strong>Tasmania:</strong> the 2 metre DEM, Tree Canopy Height and 2D Building Polygons from <a href="https://www.thelist.tas.gov.au/" rel="noopener">theLIST</a>, © State of Tasmania, <a href="https://creativecommons.org/licenses/by/3.0/au/" rel="noopener">CC BY 3.0 AU</a>.</li>
+      <li><strong>Elevation elsewhere:</strong> Geoscience Australia's DEM of Australia derived from LiDAR 5 Metre Grid and 1 second SRTM DEM-S, © Commonwealth of Australia, <a href="https://creativecommons.org/licenses/by/4.0/" rel="noopener">CC BY 4.0</a>.</li>
+      <li><strong>Trees elsewhere:</strong> ESA WorldCover 10 m 2021, © ESA WorldCover project 2021, containing modified Copernicus Sentinel data, CC BY 4.0.</li>
+      <li><strong>The map on this page:</strong> <a href="https://openfreemap.org/" rel="noopener">OpenFreeMap</a>, © <a href="https://openmaptiles.org/" rel="noopener">OpenMapTiles</a>, and theLIST's Topographic Basemap.</li>
+    </ul>
+    <p>Every track carries an <code>ATTRIBUTION.txt</code> naming exactly the sources it was built from. It also carries the road's centreline, with its heights and widths, as <code>centreline.geojson</code> under the ODbL. If you share a track, keep both files with it.</p>
+    <p>No Google, Esri, Bing or Mapbox data is used anywhere in a build.</p>
+
+    <h2>Using the tracks</h2>
+    <p>Install with the Content Manager link on your job's page, or unzip the download into <code>assettocorsa/content/tracks</code>. Each road can come with a layout for each direction. The tracks are generated, not hand-made: expect the odd rough edge, especially where the map data is thin.</p>
+    <p>mapcreator is not affiliated with or endorsed by Kunos Simulazioni. Assetto Corsa is a trademark of its owner. The service never runs the game; it only writes files that the game can read.</p>
+
+    <h2>Privacy</h2>
+    <p>There are no accounts, no analytics and no advertising, and mapcreator sets no cookies. Here is everything it keeps:</p>
+    <ul>
+      <li><strong>Your job:</strong> the points you placed, the options you chose and the track name you typed. It's deleted 30 days after the build finishes. The finished zip is deleted from the download server a few days after that.</li>
+      <li><strong>A scrambled form of your internet address,</strong> used only to limit each person to five tracks a day. It's a keyed hash, not the address itself, and it's blanked after two days.</li>
+      <li><strong>Route previews</strong> are limited per address per minute. That count is held in memory for a minute and never written down.</li>
+    </ul>
+    <p>The server keeps no access log: it doesn't record your address or which pages you load. It logs each job's id as it's queued, built and finished.</p>
+    <p>Anyone with your job's link can see its status and download its track. If someone else asks for exactly the same road with the same options, they're given the same job rather than a second build, so they see the track name you typed.</p>
+    <p>Three other services see your request when you use the page:</p>
+    <ul>
+      <li><strong>Cloudflare</strong> carries the site and runs the <a href="https://www.cloudflare.com/turnstile-privacy-policy/" rel="noopener">Turnstile</a> check that keeps scripts from filling the queue.</li>
+      <li><strong>OpenFreeMap</strong> serves the map tiles.</li>
+      <li><strong>theLIST</strong> serves the topographic map, if you switch it on.</li>
+    </ul>
+    <p>Those services receive your address the way any website you load does.</p>
+
+    <p><a href="./">Back to the map</a></p>
+  </main>
+
+  <footer class="site-footer">
+    <p>Not affiliated with or endorsed by Kunos Simulazioni. Assetto Corsa is a trademark of its owner.</p>
+  </footer>
+</body>
+</html>

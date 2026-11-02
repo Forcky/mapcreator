@@ -75,3 +75,27 @@ def test_static_files_are_served_with_the_security_headers(tmp_path):
         r = client.get(path)
         assert r.status_code == 200 and kind in r.headers["content-type"], path
         assert r.headers["Content-Security-Policy"] == csp
+
+
+ABOUT = STATIC / "about.html"
+
+
+def test_about_page_runs_no_script_and_links_only_to_what_exists():
+    html = ABOUT.read_text(encoding="utf-8")
+    assert not re.search(r"<script\b|<style\b|\sstyle\s*=|\son[a-z]+\s*=", html, re.I)
+    assert "javascript:" not in html.lower()
+    local = [ref for ref in re.findall(r'(?:src|href)="([^"]+)"', html)
+             if not ref.startswith(("https://", "#", "data:")) and not ref.endswith("/")]
+    assert local and [ref for ref in local if not (STATIC / ref).is_file()] == []
+    # The map page links to it, and it says what is kept about people.
+    assert 'href="about.html"' in INDEX.read_text(encoding="utf-8")
+    for promise in ("no cookies", "30 days", "two days", "Kunos"):
+        assert promise in html, promise
+
+
+def test_about_page_is_served_with_the_security_headers(tmp_path):
+    settings = ServiceSettings(db_path=tmp_path / "jobs.sqlite3", storage_dir=tmp_path / "downloads", ip_salt="s")
+    client = TestClient(create_app(settings, router=object()))
+    page = client.get("/about.html")
+    assert page.status_code == 200 and "Privacy" in page.text
+    assert "unsafe-inline" not in page.headers["Content-Security-Policy"]

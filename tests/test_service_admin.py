@@ -68,3 +68,18 @@ def test_delete_removes_the_download_too(store, tmp_path):
     store.complete(claimed.id, claimed.worker_id, {"key": key})
     assert admin.main(["delete", job.id], store=store, storage=downloads) == 0
     assert not (tmp_path / "downloads" / key).exists()
+
+
+def test_job_ids_never_start_with_a_dash(monkeypatch):
+    from mapcreator.service import db
+
+    ids = iter(["-dashFirst0123456789", "Z" * 22])
+    monkeypatch.setattr(db.secrets, "token_urlsafe", lambda n: next(ids))
+    assert db.new_job_id() == "Z" * 22
+
+
+def test_an_old_id_starting_with_a_dash_still_works_after_double_dash(store, capsys):
+    job = make(store, 1)[0]
+    with store._connect() as con:
+        con.execute("UPDATE jobs SET id = ? WHERE id = ?", ("-old" + job.id, job.id))
+    assert admin.main(["show", "--", "-old" + job.id], store=store) == 0

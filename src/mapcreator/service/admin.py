@@ -8,7 +8,8 @@ example inside its container:
     docker exec <web container> mapcreator-admin requeue <job id>
 
 It works on the database directly, so it needs no token and no network. It
-never prints client-address hashes.
+never prints client-address hashes. New job ids never start with "-"; for an
+older one that does, put `--` before it: `mapcreator-admin show -- -abc...`.
 """
 
 from __future__ import annotations
