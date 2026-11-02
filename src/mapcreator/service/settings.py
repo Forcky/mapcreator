@@ -44,7 +44,7 @@ class ServiceSettings:
     # address the request came in on is used, which is right locally but not always behind a proxy.
     public_url: str | None = None
     # Abuse limits.
-    jobs_per_ip_per_day: int = 5
+    jobs_per_ip_per_day: int = 10
     max_queued_jobs: int = 50
     previews_per_ip_per_minute: int = 30
     # Client IPs are only ever stored as a keyed hash. Without a configured salt a random one is used,

@@ -53,7 +53,7 @@ Operator flows, outside any job: downloading the OSM extract and building the in
    - verifies the Turnstile token (when configured);
    - checks every point is in one supported region;
    - looks for the same road with the same options (the route hash): an existing job, done or in progress, is handed back instead of building it again;
-   - refuses when the queue holds `MAPCREATOR_MAX_QUEUED_JOBS` (50) or this client has submitted `MAPCREATOR_JOBS_PER_IP_PER_DAY` (5) today;
+   - refuses when the queue holds `MAPCREATOR_MAX_QUEUED_JOBS` (50) or this client has submitted `MAPCREATOR_JOBS_PER_IP_PER_DAY` (10) today;
    - names the track `mc_<slug>_<first 8 of the route hash>` and stores the job as `queued`.
    The page then polls `GET /api/jobs/<id>` every 5 seconds. The id is in the page's address (`#job=<id>`), so the link can be bookmarked.
 3. **Claim.** The worker asks `POST /api/worker/claim` every 15 seconds when idle. The oldest queued job becomes `running`, with a fresh random `worker_id` that every later call must present. Any worker request also records when a worker was last heard from; the page says the builder is offline after 2 minutes of silence.
@@ -114,7 +114,7 @@ Service settings (`service/settings.py`), all from the environment:
 | `MAPCREATOR_PUBLIC_URL` | yes | | makes download links absolute when downloads are served by the web app |
 | `MAPCREATOR_ROUTER`, `MAPCREATOR_GRAPHHOPPER_URL` | yes | | `graphhopper` in production; the dev router reads the OSM index or Overpass |
 | `MAPCREATOR_TRUSTED_PROXIES`, `MAPCREATOR_CLIENT_IP_HEADER` | yes | | the proxy's address as the app sees it, and the header it overwrites |
-| `MAPCREATOR_JOBS_PER_IP_PER_DAY`, `MAPCREATOR_MAX_QUEUED_JOBS`, `MAPCREATOR_PREVIEWS_PER_IP_PER_MINUTE` | yes | | 5, 50, 30 |
+| `MAPCREATOR_JOBS_PER_IP_PER_DAY`, `MAPCREATOR_MAX_QUEUED_JOBS`, `MAPCREATOR_PREVIEWS_PER_IP_PER_MINUTE` | yes | | 10, 50, 30 |
 | `MAPCREATOR_STALE_MINUTES`, `MAPCREATOR_KEEP_DAYS`, `MAPCREATOR_IP_HASH_DAYS` | yes | | requeue silent jobs; retention |
 | `MAPCREATOR_STORAGE` | `public` (or `local`, `s3`) | `s3` (or `local`) | where zips go, and whether this side holds a key |
 | `MAPCREATOR_DOWNLOAD_BASE` | yes | yes | the public URL (or, for `local`, path) downloads are served from |
