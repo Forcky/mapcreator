@@ -241,3 +241,13 @@ def test_simultaneous_submissions_cannot_pass_the_limits(tmp_path):
     # The same road twenty times at once: one job, and everyone else joins it.
     second = race(lambda i: job(f"s{i}", lon=147.35), per_ip=100)
     assert second.count("created") == 1 and second.count("existing") == 19
+
+
+def test_typical_build_time_is_the_median_of_recent_builds(store, clock):
+    assert store.typical_build_s() is None
+    for i, minutes in enumerate((2, 3, 10)):
+        store.create(job(f"b{i}", lon=147.33 + i / 1000), ip_hash="h")
+        claimed = store.claim_next()
+        clock.t += minutes * 60
+        store.complete(claimed.id, claimed.worker_id, {"key": f"{claimed.id}/x.zip"})
+    assert store.typical_build_s() == 180.0

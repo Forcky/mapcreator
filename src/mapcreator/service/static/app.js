@@ -538,10 +538,13 @@
     const stage = job.stage && STAGE_TEXT[job.stage.name]
       ? ` Step ${job.stage.number} of ${job.stage.of}: ${STAGE_TEXT[job.stage.name]}.`
       : " This usually takes a few minutes.";
+    const wait = Number.isInteger(job.estimated_wait_minutes) && job.estimated_wait_minutes > 0
+      ? ` Ready in about ${job.estimated_wait_minutes} minute${job.estimated_wait_minutes === 1 ? "" : "s"}.`
+      : "";
     const messages = {
       queued: (job.queue_position
         ? `Waiting in the queue: number ${job.queue_position}.`
-        : "Waiting in the queue.") + offline,
+        : "Waiting in the queue.") + wait + offline,
       running: `Building your track.${stage}${offline}`,
       done: "Your track is ready.",
       failed: `The build failed. ${job.error || ""}`.trim(),

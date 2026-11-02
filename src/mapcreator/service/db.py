@@ -319,6 +319,15 @@ class JobStore:
             row = con.execute("SELECT value FROM meta WHERE key = 'worker_seen'").fetchone()
         return row["value"] if row else None
 
+    def typical_build_s(self, recent: int = 20) -> float | None:
+        """Median build time of the most recent finished builds, or None before there are any."""
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT finished_at - started_at AS took FROM jobs WHERE status = 'done' AND started_at IS NOT NULL "
+                "ORDER BY finished_at DESC LIMIT ?", (recent,)).fetchall()
+        took = sorted(r["took"] for r in rows if r["took"] is not None and r["took"] >= 0)
+        return took[len(took) // 2] if took else None
+
     def count_queued(self) -> int:
         with self._connect() as con:
             return con.execute("SELECT COUNT(*) FROM jobs WHERE status = 'queued'").fetchone()[0]

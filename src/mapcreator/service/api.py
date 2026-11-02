@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import logging
 import re
 import threading
@@ -439,10 +440,15 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
         store.count_queued()  # proves the database answers
         return {"status": "ok"}
 
+    def typical_minutes() -> int | None:
+        took = store.typical_build_s()
+        return max(1, math.ceil(took / 60)) if took is not None else None
+
     @app.get("/api/status")
     def service_status() -> dict:
         """Whether tracks are being built right now, for the page to warn before someone submits."""
-        return {"builder_online": builder_online(), "queued": store.count_queued()}
+        return {"builder_online": builder_online(), "queued": store.count_queued(),
+                "typical_build_minutes": typical_minutes()}
 
     @app.get("/api/config")
     def client_config() -> dict:
@@ -503,6 +509,7 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
             "queue_position": store.queue_position(record),
             "stage": None,
             "builder_online": None,
+            "estimated_wait_minutes": None,
             "summary": None,
             "download_url": None,
             "error": None,
@@ -512,6 +519,10 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
                             "of": len(STAGE_NAMES)}
         if record.status in ("queued", "running"):
             out["builder_online"] = builder_online()
+        typical = typical_minutes() if out["builder_online"] else None
+        if typical is not None and out["queue_position"]:
+            # One builder: everything ahead of this job, then this job itself.
+            out["estimated_wait_minutes"] = typical * out["queue_position"]
         if record.status == "done" and record.result:
             out["summary"] = record.result.get("summary") or {}
             out["download_url"] = absolute(storage.url(record.result["key"]), request)

@@ -231,11 +231,11 @@ def test_run_pipeline_runs_every_stage_in_order(monkeypatch, tmp_path):
 
 def test_the_page_can_tell_whether_a_builder_is_online(env):
     _, client, _, store = env
-    assert client.get("/api/status").json() == {"builder_online": False, "queued": 0}
+    assert client.get("/api/status").json() == {"builder_online": False, "queued": 0, "typical_build_minutes": None}
     job_id = client.post("/api/jobs", json={"job": JOB}).json()["id"]
     assert client.get(f"/api/jobs/{job_id}").json()["builder_online"] is False
     lease = client.post("/api/worker/claim", headers={"Authorization": f"Bearer {TOKEN}"}).json()
-    assert client.get("/api/status").json() == {"builder_online": True, "queued": 0}
+    assert client.get("/api/status").json() == {"builder_online": True, "queued": 0, "typical_build_minutes": None}
     assert client.get(f"/api/jobs/{job_id}").json()["builder_online"] is True
     bad = client.post(f"/api/worker/jobs/{job_id}/heartbeat", headers={"Authorization": f"Bearer {TOKEN}"},
                       json={"worker_id": lease["worker_id"], "stage": "rm -rf"})
@@ -284,3 +284,21 @@ def test_a_build_past_the_time_limit_stops_heartbeating_and_is_abandoned(env):
     record = store.get(job_id)
     assert record.status == "running" and record.stage == "profile"  # nothing reported: it goes stale and is requeued
     assert storage.keys == []  # the build that finished after the limit was neither uploaded nor reported
+
+
+def test_a_queued_job_gets_a_wait_estimate_once_builds_have_been_timed(env):
+    _, client, _, store = env
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    first = client.post("/api/jobs", json={"job": JOB}).json()["id"]
+    assert client.get("/api/status").json()["typical_build_minutes"] is None
+    lease = client.post("/api/worker/claim", headers=auth).json()
+    record = store.get(first)
+    store.clock = lambda: record.started_at + 150  # a build of two and a half minutes
+    client.post(f"/api/worker/jobs/{first}/complete", headers=auth,
+                json={"worker_id": lease["worker_id"], "result": {"key": f"{first}/x.zip"}})
+    store.clock = lambda: record.started_at + 160
+    store.worker_seen()  # a builder is online
+    other = {**JOB, "waypoints": [{"lon": 147.34, "lat": -42.81}, JOB["waypoints"][1]]}
+    queued = client.post("/api/jobs", json={"job": other}).json()["id"]
+    assert client.get("/api/status").json()["typical_build_minutes"] == 3
+    assert client.get(f"/api/jobs/{queued}").json()["estimated_wait_minutes"] == 3
