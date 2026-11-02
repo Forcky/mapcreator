@@ -1,0 +1,2 @@
+# Vendored third-party files are stored byte for byte, so their recorded hashes stay checkable.
+src/mapcreator/service/static/vendor/** -text

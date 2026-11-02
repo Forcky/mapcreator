@@ -2,7 +2,21 @@
 
 ## Code included in this repository
 
-None yet. Any ported code will carry a provenance header (source URL, licence, commit) and an entry here.
+Any ported code carries a provenance header (source URL, licence, commit) and an entry here.
+
+### MapLibre GL JS 5.24.0
+
+- Where: `src/mapcreator/service/static/vendor/maplibre-gl/` (the map page's map library)
+- Source: https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/ (`maplibre-gl.js`, `maplibre-gl.css`, `LICENSE.txt`)
+- Project: https://github.com/maplibre/maplibre-gl-js
+- Licence: BSD-3-Clause, full text in `LICENSE.txt` beside the files
+- Change: the trailing `//# sourceMappingURL=maplibre-gl.js.map` line was removed from `maplibre-gl.js`, because the source map isn't shipped. Nothing else was changed.
+- SHA-256 as downloaded:
+  - `maplibre-gl.js` `45a9b07a9189ce56054c620a947ccf41e291e58c95e9b61533b740aaa65ee5cb` (after the change: `8b2c6bfadb8cc2d720aea2816ac368e51ab75dbb81ee3fac2f8b97256ebd1585`)
+  - `maplibre-gl.css` `ab1e70d59ec40465bae7e7030da2f3ccf28133fd502e62bd598eefbadfd7a732`
+  - `LICENSE.txt` `ee5fc05a0677eaf69601d2c7db0d9ecd6cc27c3abc1d0733bc9ed34707cf8ef2`
+
+To update: download the same three files for the new version, delete the `sourceMappingURL` line, update the version and hashes here and the hash check in `tests/test_service_static.py`.
 
 ## Format references
 
