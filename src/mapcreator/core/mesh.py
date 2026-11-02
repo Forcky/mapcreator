@@ -24,6 +24,7 @@ from scipy.ndimage import minimum_filter1d, uniform_filter1d
 from scipy.spatial import Delaunay, cKDTree
 
 from mapcreator.core.scene import MAX_VERTICES, LocalFrame, Mesh
+from mapcreator.core.textures import ROAD_TILE_M
 
 VERGE_M = 2.0
 VERGE_FALL = 0.06
@@ -138,7 +139,7 @@ def _mesh(name, material, pos, tri, uv) -> Mesh:
                 uv.astype(np.float32), tri.astype(np.int64))
 
 
-def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, road_uv_m: float = 10.0,
+def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, road_uv_m: float = ROAD_TILE_M,
                   grass_uv_m: float = 6.0) -> list[Mesh]:
     """Road chunks named 1ROAD_###, verge/skirt chunks named 1GRASS_V###."""
     rows = len(s)

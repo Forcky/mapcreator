@@ -113,4 +113,32 @@ def to_dds_dxt1(im: Image.Image) -> bytes:
     return to_dds(im, "DXT1")
 
 
-LIBRARY = {"asphalt": asphalt, "grass": grass, "ground": ground}
+ROAD_TILE_M = 12.0  # one texture repeat along the road: a 3 m dash and a 9 m gap (Australian rural centre line)
+LINE_W_M = 0.10
+EDGE_INSET_M = 0.15
+DASH_M = 3.0
+
+
+def road_marked(width_m: float = 6.4, size: int = 512, seed: int = 1) -> Image.Image:
+    """Asphalt with white edge lines and a dashed centre line.
+
+    The road mesh stretches u = 0..1 across the carriageway and repeats the
+    texture every ROAD_TILE_M along it, so markings sit on the real edges
+    whatever the road's width (line widths scale a little with it).
+    """
+    img = np.asarray(asphalt(size, seed)).astype(float)
+    u = (np.arange(size) + 0.5) / size
+    v = (np.arange(size) + 0.5) / size
+    paint = np.zeros((size, size), dtype=bool)
+    half_line = LINE_W_M / width_m / 2
+    for centre in (EDGE_INSET_M / width_m, 1 - EDGE_INSET_M / width_m):
+        paint[:, np.abs(u - centre) <= half_line] = True
+    dash_rows = v < DASH_M / ROAD_TILE_M
+    paint[np.ix_(dash_rows, np.abs(u - 0.5) <= half_line)] = True
+    wear = tileable_noise(size, 0.8, seed + 9)
+    white = np.array([225.0, 225.0, 218.0]) * (0.88 + 0.12 * wear)[..., None]
+    img[paint] = white[paint]
+    return Image.fromarray(np.clip(img, 0, 255).astype(np.uint8))
+
+
+LIBRARY = {"asphalt": asphalt, "road_marked": road_marked, "grass": grass, "ground": ground}

@@ -41,7 +41,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         frame=frame,
         meshes=meshes,
         materials={
-            "road": Material("road", texture="asphalt", uv_scale=1.0),
+            "road": Material("road", texture="road_marked", uv_scale=1.0),
             "grass": Material("grass", texture="grass"),
             "terrain": Material("terrain", texture="ground"),
         },
