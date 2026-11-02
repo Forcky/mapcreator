@@ -108,3 +108,30 @@ def test_tree_cap_keeps_the_nearest_trees():
     assert len(capped) == 2000
     d = np.abs(capped.xy[:, 1] - 5_200_000)
     assert np.percentile(d, 95) < 80  # the far bands gave way
+
+
+def _house_meshes(width: float, depth: float):
+    e0, n0 = 500000.0, 5250000.0
+    house = shapely.Polygon([(e0 + 50, n0 + 50), (e0 + 50 + width, n0 + 50), (e0 + 50 + width, n0 + 50 + depth),
+                             (e0 + 50, n0 + 50 + depth)])
+    polys = scenery.select_buildings([house], np.array([[e0, n0], [e0 + 200, n0]]), shapely.Point(e0, n0).buffer(1))
+    return scenery.building_meshes(polys, lambda e, n: np.full(np.shape(e), 10.0), LocalFrame(e0, n0, 0.0),
+                                   np.random.default_rng(1))
+
+
+def test_every_wall_and_gable_end_faces_out_of_the_house():
+    walls = next(m for m in _house_meshes(12, 8) if m.name.startswith("1WALL"))
+    p, t = walls.positions.astype(float), walls.triangles
+    centre = p.mean(axis=0)
+    tri_centre = p[t].mean(axis=1)
+    outward = tri_centre - centre
+    outward[:, 1] = 0
+    winding = np.cross(p[t[:, 1]] - p[t[:, 0]], p[t[:, 2]] - p[t[:, 0]])
+    assert ((winding * outward).sum(axis=1) > 0).all()  # front faces seen from outside, gable ends included
+    assert ((walls.normals.astype(float)[t[:, 0]] * outward).sum(axis=1) > 0).all()
+
+
+def test_flat_roof_uvs_are_local_so_float32_keeps_them():
+    roofs = [m for m in _house_meshes(30, 25) if m.name.startswith("BUILDING_ROOF")]
+    uv = np.concatenate([m.uvs for m in roofs])
+    assert np.abs(uv).max() < 100  # metres from the building's corner / 4, not map coordinates

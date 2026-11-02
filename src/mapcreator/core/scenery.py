@@ -261,19 +261,24 @@ def _gable(roof: _Builder, walls: _Builder, rc: np.ndarray, sides: np.ndarray, e
         depth = float(np.hypot(np.linalg.norm(inward), rise))
         roof.quad(ac(*p0, eave), ac(*p1, eave), ac(*q1, ridge), ac(*q0, ridge), n,
                   [(0, depth / 4), (length / 4, depth / 4), (length / 4, 0), (0, 0)])
+    centre = rc.mean(axis=0)
     for (p0, p1, m) in ((b, c, m_bc), (d, a, m_da)):
         edge = p1 - p0
         out = np.array([edge[1], -edge[0]]) / max(np.linalg.norm(edge), 1e-6)
+        if np.dot(out, (p0 + p1) / 2 - centre) < 0:  # away from the building, whichever way the ring winds
+            out = -out
         w = float(np.linalg.norm(edge)) / 3.0
         walls.triangle(ac(*p0, eave), ac(*p1, eave), ac(*m, ridge), ac_dir(out[0], out[1], 0.0),
                        [(0, rise / 3.0), (w, rise / 3.0), (w / 2, 0)])
 
 
 def _flat(roof: _Builder, poly: shapely.Polygon, height: float, ac) -> None:
+    # UVs from the building's own corner: map coordinates (millions of metres) lose their fraction in float32.
+    e0, n0 = np.floor(poly.bounds[:2])
     for t in shapely.constrained_delaunay_triangles(poly).geoms:
         c = np.asarray(t.exterior.coords)[:3]
         roof.triangle(*(ac(e, n, height) for e, n in c), np.array([0.0, 1.0, 0.0]),
-                      [(e / 4.0, n / 4.0) for e, n in c])
+                      [((e - e0) / 4.0, (n - n0) / 4.0) for e, n in c])
 
 
 def _split(meshes: list[Mesh]) -> list[Mesh]:

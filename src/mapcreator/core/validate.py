@@ -25,7 +25,9 @@ KNOWN_DUMMY = re.compile(r"^AC_(PIT_\d+|START_\d+|HOTLAP_START_\d+|AB_(START|FIN
 SPAWNS = ("AC_PIT_0", "AC_START_0", "AC_HOTLAP_START_0")
 SPAWN_HEIGHT = (0.15, 0.5)
 AI_HEIGHT = (0.3, 0.5)
-MIN_GATE_M = 6.0
+# A gate must reach past both road edges; any span is fine as long as it does. This floor only catches
+# a degenerate gate (both ends in one place).
+MIN_GATE_M = 3.0
 # Content Manager's own length pattern (TrackObjectBase): a number followed by a unit.
 CM_LENGTH = re.compile(r"^\W*(\d+(?:[\.,]\d+)?)\W*(?:(km|kilometers)|(mi|miles?)|m)\b")
 MIN_RADIUS_M = 5.0  # tighter than any real hairpin: a routing artefact
@@ -127,8 +129,9 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
         pl, pr = left["matrix"][3, :3], right["matrix"][3, :3]
         span = float(np.linalg.norm(pl - pr))
         mid = (pl + pr) / 2
-        rep.check(span >= MIN_GATE_M and road.height(mid[0], mid[2]) is not None,
-                  f"{label}: {gate} gate spans the road ({span:.1f} m)")
+        spans = (span >= MIN_GATE_M and road.height(mid[0], mid[2]) is not None
+                 and road.height(pl[0], pl[2]) is None and road.height(pr[0], pr[2]) is None)
+        rep.check(spans, f"{label}: {gate} gate spans the road ({span:.1f} m, ends beyond both edges)")
 
     try:
         line = ai_line.read(ai_path)
