@@ -113,8 +113,9 @@ class Ga5mDem:
         return len(self.tiles)
 
     def sample(self, x, y) -> np.ndarray:
-        """Bilinear heights; NaN outside loaded tiles or where there's no LiDAR."""
-        lon, lat = self.to_ll.transform(np.asarray(x, dtype=float), np.asarray(y, dtype=float))
+        """Bilinear heights, any array shape; NaN outside loaded tiles or where there's no LiDAR."""
+        shape = np.shape(x)
+        lon, lat = self.to_ll.transform(np.ravel(np.asarray(x, dtype=float)), np.ravel(np.asarray(y, dtype=float)))
         lon, lat = np.atleast_1d(lon), np.atleast_1d(lat)
         # Continuous cell coordinates over the whole tile grid (cell centres at half steps).
         col = lon / RES_DEG - 0.5
@@ -124,7 +125,7 @@ class Ga5mDem:
         out = np.zeros(lon.shape)
         for dr, dc, w in ((0, 0, (1 - fr) * (1 - fc)), (0, 1, (1 - fr) * fc), (1, 0, fr * (1 - fc)), (1, 1, fr * fc)):
             out += w * self._cells(r0 + dr, c0 + dc)
-        return out.reshape(np.shape(x)) if np.ndim(x) else out
+        return out.reshape(shape) if shape else out
 
     def _cells(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
         px = self.tile_px

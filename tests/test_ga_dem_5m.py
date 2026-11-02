@@ -49,6 +49,12 @@ def test_tiles_are_stitched_and_sampled_exactly(tmp_path):
     assert loaded == len(calls) > 4
     lon, lat = TO_LL.transform(xy[:, 0], xy[:, 1])
     assert dem.sample(xy[:, 0], xy[:, 1]) == pytest.approx(plane(lon, lat), abs=1e-3)
+    # Any array shape, as the track stage samples a grid for its preview image.
+    grid_x, grid_y = np.meshgrid(xy[::40, 0], xy[::40, 1])
+    glon, glat = TO_LL.transform(grid_x, grid_y)
+    got = dem.sample(grid_x, grid_y)
+    assert got.shape == grid_x.shape
+    assert got[np.isfinite(got)] == pytest.approx(plane(glon, glat)[np.isfinite(got)], abs=1e-3)
     # A second build reads the cached tiles without asking the service.
     again = Ga5mDem(tmp_path, EPSG, fetch=lambda *a: pytest.fail("fetched a cached tile"))
     again.load_corridor(xy, 300.0)
