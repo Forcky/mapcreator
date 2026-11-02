@@ -72,8 +72,9 @@ services:
       - ./squid.conf:/etc/squid/squid.conf:ro
       - ./egress-allowlist.txt:/etc/squid/egress-allowlist.txt:ro
     tmpfs:
-      - /var/spool/squid
-      - /var/log/squid
+      # Owned by Squid's own user (uid 13 in ubuntu/squid), which writes them after dropping root.
+      - /var/spool/squid:uid=13,gid=13
+      - /var/log/squid:size=64m,uid=13,gid=13
       - /run
     # Squid starts as root and switches to its own user, so it needs these two back.
     cap_add: [SETUID, SETGID]
