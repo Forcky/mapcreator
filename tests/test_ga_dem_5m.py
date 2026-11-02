@@ -170,14 +170,14 @@ def test_the_finest_source_that_covers_the_road_wins(tmp_path):
     assert partial.chosen.name == "ga_dem_5m" and partial.resolution_m == 5.0
 
 
-def test_a_decision_from_before_the_ranking_is_still_read(tmp_path):
-    import hashlib
-    import json
-
+def test_adding_a_source_makes_a_road_decide_again(tmp_path):
     xy = road(147.015, -42.815, 147.035, -42.805)
-    key = hashlib.sha256(np.round(xy, 2).tobytes()).hexdigest()[:24]
-    (tmp_path / "ga_dem_5m" / "decisions").mkdir(parents=True)
-    (tmp_path / "ga_dem_5m" / "decisions" / f"{key}.json").write_text(json.dumps({"use_fine": True, "coverage": 1.0}))
-    dem = national(tmp_path, fake_service())
-    dem.load_corridor(xy, 300.0)
-    assert dem.use_fine and dem.chosen.name == "ga_dem_5m"
+    alone = NationalElevation(tmp_path, EPSG, coarse=FakeCoarse(),
+                              fines=[Ga5mDem(tmp_path, EPSG, fetch=fake_service(no_lidar_east_of=146.0))])
+    alone.load_corridor(xy, 300.0)
+    assert not alone.use_fine  # GA has nothing here, and that's remembered...
+    more = NationalElevation(tmp_path, EPSG, coarse=FakeCoarse(),
+                             fines=[Ga5mDem(tmp_path, EPSG, fetch=fake_service(no_lidar_east_of=146.0)),
+                                    state_1m(tmp_path, metric_service())])
+    more.load_corridor(xy, 300.0)
+    assert more.chosen.name == "state_1m"  # ...but not for a list with a new source in it

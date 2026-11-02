@@ -121,11 +121,11 @@ class NationalElevation:
     def load_corridor(self, line_xy, buffer_m: float) -> int:
         line_xy = np.asarray(line_xy, dtype=float)
         tiles = self.coarse.load_corridor(line_xy, buffer_m)
-        key = hashlib.sha256(np.round(line_xy, 2).tobytes()).hexdigest()[:24]
+        # Keyed by the road and by the list of sources, so adding a source makes every road decide again
+        # (a decision made before Victoria's DEM existed would otherwise keep the Dandenongs on DEM-S).
+        sources = ",".join(f.name for f in self.fines).encode()
+        key = hashlib.sha256(np.round(line_xy, 2).tobytes() + b"|" + sources).hexdigest()[:24]
         decided = cache.read_json(self.decisions / f"{key}.json")
-        if decided is not None and "use_fine" in decided:  # written before there was a list of sources
-            decided = {"source": "ga_dem_5m" if decided["use_fine"] else None, "coverage": decided["coverage"]}
-
         if decided is not None:
             chosen = self._by_name(decided.get("source"))
             if chosen is not None:

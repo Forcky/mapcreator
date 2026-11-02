@@ -17,6 +17,7 @@ dist/
 
 # Data and build outputs (large, derived, or licence-bound)
 data/
+!tests/data/
 out/
 cache/
 *.tif
