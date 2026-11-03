@@ -9,9 +9,11 @@ anything runs, so even a compromised web server can only ask for a stretch
 of road. Each job runs in a fresh temporary folder that is removed after.
 
 Errors shown to the public are chosen here: messages from exceptions that
-describe the user's road (no road near a point, no connection) are passed
-on, and anything else becomes a generic line, with the traceback kept in the
-worker's own log. Paths and internals never leave the machine.
+describe the user's road (no road near a point, no connection, a bend too
+tight to drive) are passed on, and anything else becomes a generic line, with
+the traceback kept in the worker's own log. Paths and internals never leave
+the machine. A too-tight bend also goes back as a code and its place, so the
+page can mark it on the map and offer to build the road anyway.
 
 Stopping: the first Ctrl+C or SIGTERM finishes the current job and exits;
 a second one aborts at once, and the abandoned job goes back in the queue
@@ -43,6 +45,7 @@ from pydantic import ValidationError
 
 from mapcreator.core.profile import NoElevation
 from mapcreator.job import Job
+from mapcreator.pipeline.validate_stage import TightBend
 from mapcreator.providers.osm.graph import RouteError
 from mapcreator.regions import OutOfArea
 from mapcreator.service.settings import ServiceSettings
@@ -55,7 +58,7 @@ INTERNAL_ERROR = "The build failed with an internal error. It has been logged fo
 BUILD_TIMEOUT_S = 3600.0
 STUCK_EXIT_CODE = 70
 # Exceptions whose message is about the user's road, written for people, and safe to show.
-USER_FACING = (RouteError, OutOfArea, NoElevation)
+USER_FACING = (RouteError, OutOfArea, NoElevation, TightBend)
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,8 @@ def run_pipeline(job: Job, work_root: Path,
         "layouts": [{"name": v["name"], "length_m": v["length_m"]} for v in track["layouts"].values()],
         "zip_mb": track["zip_mb"],
     }
+    if results.get("validate", {}).get("tight_bend"):
+        summary["tight_bend"] = results["validate"]["tight_bend"]
     return BuildOutput(work.root / track_stage.STAGE / f"{job.track_id}.zip", summary)
 
 
@@ -104,6 +109,13 @@ def public_error(exc: BaseException) -> str:
         text = text[:1].upper() + text[1:]
         return text if text.endswith(".") else text + "."
     return INTERNAL_ERROR
+
+
+def failure_detail(exc: BaseException) -> tuple[str | None, dict | None]:
+    """A machine-readable code and detail for failures the page can do more with than show a message."""
+    if isinstance(exc, TightBend):
+        return "tight_bend", exc.detail()
+    return None, None
 
 
 class ApiError(RuntimeError):
@@ -118,6 +130,7 @@ class WorkerApi:
         self._base = api_base.rstrip("/")
         self._headers = {"Authorization": f"Bearer {token}"}
         self._send_stage = True  # off if the web app predates stage reporting
+        self._send_failure_detail = True  # off if the web app predates failure codes
 
     def _post(self, path: str, body: dict | None = None) -> httpx.Response:
         try:
@@ -150,9 +163,18 @@ class WorkerApi:
         r = self._post(f"/jobs/{job_id}/complete", {"worker_id": worker_id, "result": result})
         return self._expect(r, 200, 409) == 200
 
-    def fail(self, job_id: str, worker_id: str, error: str) -> bool:
-        return self._expect(self._post(f"/jobs/{job_id}/fail", {"worker_id": worker_id, "error": error}),
-                            200, 409) == 200
+    def fail(self, job_id: str, worker_id: str, error: str, code: str | None = None,
+             detail: dict | None = None) -> bool:
+        path = f"/jobs/{job_id}/fail"
+        body = {"worker_id": worker_id, "error": error}
+        if code is not None and self._send_failure_detail:
+            r = self._post(path, {**body, "code": code, "detail": detail})
+            if r.status_code != 422:
+                return self._expect(r, 200, 409) == 200
+            # An older web app refuses the unknown fields. Report the failure without them.
+            log.warning("the web app doesn't take failure codes; failures will carry the message only")
+            self._send_failure_detail = False
+        return self._expect(self._post(path, body), 200, 409) == 200
 
 
 class Heartbeat(threading.Thread):
@@ -278,7 +300,7 @@ def _build_one(claim: dict, api: WorkerApi, pipeline: Pipeline, storage: Storage
     except Exception as exc:
         log.exception("job %s failed", job_id)
         if not beat.lost:
-            _report_failure(api, job_id, worker_id, public_error(exc))
+            _report_failure(api, job_id, worker_id, public_error(exc), *failure_detail(exc))
         return
     finally:
         beat.halt()
@@ -302,9 +324,10 @@ def _report_success(api: WorkerApi, job_id: str, worker_id: str, result: dict, *
     log.error("job %s was built but never reported; it will be requeued when its heartbeat goes stale", job_id)
 
 
-def _report_failure(api: WorkerApi, job_id: str, worker_id: str, message: str) -> None:
+def _report_failure(api: WorkerApi, job_id: str, worker_id: str, message: str, code: str | None = None,
+                    detail: dict | None = None) -> None:
     try:
-        api.fail(job_id, worker_id, message)
+        api.fail(job_id, worker_id, message, code, detail)
     except ApiError as e:
         log.warning("couldn't report the failure of job %s (%s); it will time out instead", job_id, e)
 

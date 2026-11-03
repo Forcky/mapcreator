@@ -90,12 +90,12 @@ SHARP_TURN_DEG = 100.0
 
 
 def sharp_turns(xy: np.ndarray, limit_deg: float = SHARP_TURN_DEG) -> list[dict]:
-    """Places where the route turns harder than `limit_deg` at a single node.
+    """Places where the route turns harder than `limit_deg` at a single node, for the stage's summary.
 
-    A real hairpin is drawn in OSM as many nodes, each turning a little. One
-    node turning 100°+ is nearly always the route doubling back at a junction,
-    usually because a waypoint landed on the wrong road. That can't be smoothed
-    into a drivable bend, so it's reported for the person picking the route.
+    A real hairpin is drawn in OSM as many nodes, each turning a little. One node turning 100°+ is a turn
+    into a side street at an acute junction (Richmond's Bridge Street into Wellington Street turns 108°),
+    which the profile stage rounds to a drivable corner, or, past 150°, the route doubling back because a
+    waypoint landed on the wrong road, which validation reports with its place.
     """
     seg = np.diff(xy, axis=0)
     keep = np.hypot(*seg.T) > 1e-6

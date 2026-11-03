@@ -118,6 +118,79 @@ def test_internal_errors_stay_internal(env):
     assert not seen["work"].exists()
 
 
+def test_a_tight_bend_is_explained_marked_and_can_be_built_anyway(env):
+    from mapcreator.pipeline.validate_stage import TightBend
+
+    client = env[1]
+    job_id = submit(env)
+
+    def tight():
+        raise TightBend(3.2, 442.0, 147.438942, -42.733729, True)
+
+    work(env, pipeline_that(tight))
+    status = client.get(f"/api/jobs/{job_id}").json()
+    assert status["status"] == "failed" and "3.2 m radius, about 0.4 km from the start" in status["error"]
+    assert status["failure"] == {"code": "tight_bend", "radius_m": 3.2, "km": 0.4, "lon": 147.438942,
+                                 "lat": -42.733729}
+    assert status["can_override"] is True
+    retry = status["retry_job"]
+    assert retry == {**JOB, "track_id": "test_road", "width": "as_mapped", "layouts": "both",
+                     "max_length_km": 64.0, "allow_tight_bends": True}
+
+    # Building it anyway is a new job with its own track id, and it isn't offered again.
+    second = client.post("/api/jobs", json={"job": retry})
+    assert second.status_code == 201 and second.json()["id"] != job_id
+    work(env, pipeline_that(tight))
+    again = client.get(f"/api/jobs/{second.json()['id']}").json()
+    assert again["failure"] is not None and again["can_override"] is False and again["retry_job"] is None
+    first_id = env[3].get(job_id).job["track_id"]
+    assert env[3].get(second.json()["id"]).job["track_id"] != first_id
+
+
+def test_a_bend_below_the_floor_is_explained_but_not_offered(env):
+    from mapcreator.pipeline.validate_stage import TightBend
+
+    job_id = submit(env)
+
+    def spot():
+        raise TightBend(1.1, 2500.0, 147.4, -42.7, False)
+
+    work(env, pipeline_that(spot))
+    status = env[1].get(f"/api/jobs/{job_id}").json()
+    assert status["failure"]["code"] == "tight_bend" and status["can_override"] is False
+
+
+def test_other_validation_failures_stay_internal(env):
+    from mapcreator.pipeline.validate_stage import ValidationFailed
+
+    job_id = submit(env)
+
+    def broken():
+        raise ValidationFailed("main: AC_START_0 sits off the road")
+
+    work(env, pipeline_that(broken))
+    status = env[1].get(f"/api/jobs/{job_id}").json()
+    assert status["error"] == INTERNAL_ERROR and status["failure"] is None and status["can_override"] is False
+
+
+def test_an_older_web_app_that_refuses_failure_codes_still_gets_the_failure():
+    calls = []
+
+    def api(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        calls.append(body)
+        if "code" in body:
+            return httpx.Response(422, json={"detail": "extra fields not permitted"})
+        return httpx.Response(200, json={"ok": True})
+
+    from mapcreator.service.worker import WorkerApi
+
+    worker_api = WorkerApi(httpx.Client(transport=httpx.MockTransport(api)), "https://api.example.org", TOKEN)
+    assert worker_api.fail("j" * 22, "k" * 22, "Too tight.", "tight_bend", {"radius_m": 3.2})
+    assert worker_api.fail("j" * 22, "k" * 22, "Too tight.", "tight_bend", {"radius_m": 3.2})
+    assert calls[1] == calls[2] == {"worker_id": "k" * 22, "error": "Too tight."}  # straight to the plain form now
+
+
 def test_reports_each_stage_and_the_job_page_shows_it(env):
     _, client, _, store = env
     job_id = client.post("/api/jobs", json={"job": JOB}).json()["id"]

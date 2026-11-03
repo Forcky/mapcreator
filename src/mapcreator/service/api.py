@@ -117,8 +117,21 @@ class CompleteRequest(WorkerLease):
     result: JobResult
 
 
+class TightBendDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    radius_m: float = Field(ge=0, le=1000)
+    along_m: float = Field(ge=0, le=100_000)
+    lon: float = Field(ge=-180, le=180)
+    lat: float = Field(ge=-90, le=90)
+    overridable: bool
+
+
 class FailRequest(WorkerLease):
     error: str = Field(max_length=20_000)
+    # A failure the page can act on: a bend too tight to drive, and where it is.
+    code: Literal["tight_bend"] | None = None
+    detail: TightBendDetail | None = None
 
 
 # ----- helpers -----
@@ -127,6 +140,16 @@ def _iso(t: float | None) -> str | None:
     if t is None:
         return None
     return datetime.fromtimestamp(t, UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+HOSTED_ID = re.compile(r"^mc_(?P<base>[a-z0-9_]*?)_[0-9a-f]{8}$")
+
+
+def _retry_job(job: dict) -> dict:
+    """The job to submit to build a failed road anyway: the same road and options, the name it was given."""
+    m = HOSTED_ID.match(job.get("track_id", ""))
+    name = (m.group("base") if m else job.get("track_id", "")) or "road"
+    return {**job, "track_id": name, "allow_tight_bends": True}
 
 
 def _clean_error(text: str) -> str:
@@ -513,6 +536,9 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
             "summary": None,
             "download_url": None,
             "error": None,
+            "failure": None,
+            "can_override": False,
+            "retry_job": None,
         }
         if record.status == "running" and record.stage in STAGE_NAMES:
             out["stage"] = {"name": record.stage, "number": STAGE_NAMES.index(record.stage) + 1,
@@ -528,6 +554,15 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
             out["download_url"] = absolute(storage.url(record.result["key"]), request)
         elif record.status == "failed":
             out["error"] = record.error or "The build failed."
+            failure = record.failure or {}
+            if failure.get("code") == "tight_bend":
+                out["failure"] = {"code": "tight_bend", "radius_m": failure["radius_m"],
+                                  "km": round(failure["along_m"] / 1000, 1), "lon": failure["lon"],
+                                  "lat": failure["lat"]}
+                # Offered once: a road built anyway that still fails is below the floor, or broken.
+                if failure.get("overridable") and not record.job.get("allow_tight_bends"):
+                    out["can_override"] = True
+                    out["retry_job"] = _retry_job(record.job)
         return out
 
     @app.post("/api/route-preview")
@@ -582,7 +617,8 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
     @app.post(WORKER_PREFIX + "/jobs/{job_id}/fail", include_in_schema=False)
     def worker_fail(job_id: str, body: FailRequest) -> dict:
         store.worker_seen()
-        if not store.fail(job_id, body.worker_id, _clean_error(body.error)):
+        failure = {"code": body.code, **body.detail.model_dump()} if body.code and body.detail else None
+        if not store.fail(job_id, body.worker_id, _clean_error(body.error), failure):
             raise _lost()
         log.info("job %s failed", job_id)
         return {"ok": True}

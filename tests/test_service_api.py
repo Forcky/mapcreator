@@ -363,7 +363,7 @@ def test_health_and_config(make):
     assert c.get("/api/health").json() == {"status": "ok"}
     cfg = c.get("/api/config").json()
     assert cfg["regions"][0]["name"] == "Tasmania" and cfg["max_waypoints"] == 25
-    assert cfg["max_length_km"] == 30.0 and cfg["turnstile_site_key"] == "site-key"
+    assert cfg["max_length_km"] == 64.0 and cfg["turnstile_site_key"] == "site-key"
 
 
 def finished_download(tmp_path, **overrides) -> tuple[TestClient, str, bytes]:
@@ -422,7 +422,7 @@ def test_missing_downloads_are_plain_404s_not_pages(tmp_path, path):
 def test_public_jobs_and_previews_stay_within_the_length_limit(make):
     c = make()()
     r = c.post("/api/jobs", json={"job": {**job(), "max_length_km": 75}})
-    assert r.status_code == 422 and "30 km" in r.json()["detail"]
+    assert r.status_code == 422 and "64 km" in r.json()["detail"]
     far = {"waypoints": [{"lon": 147.0, "lat": -42.0}, {"lon": 148.0, "lat": -41.0}]}
     r = c.post("/api/route-preview", json=far)
     assert r.status_code == 422 and "too far apart" in r.json()["detail"]

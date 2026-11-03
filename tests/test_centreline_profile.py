@@ -19,6 +19,37 @@ def test_arc_keeps_its_radius_and_is_sampled_every_metre():
     assert line.max_deviation_m < 1.5
 
 
+def test_a_junction_corner_is_rounded_to_a_drivable_turn():
+    # Richmond, Nov 2026: Bridge Street into Wellington Street, 108 degrees at one node, nodes 5-7 m either side.
+    a = np.array([[-60.0, 0.0], [-5.3, 0.0], [0.0, 0.0]])
+    turn = np.radians(108.0)
+    out = np.array([np.cos(turn), np.sin(turn)])
+    line = cl.smooth(np.vstack([a, out * 7.0, out * 15.7, out * 60.0]))
+    radius = 1 / np.abs(line.curvature).max()
+    assert radius == pytest.approx(cl.CORNER_RADIUS_M, rel=0.25)
+    # It passes r (1 - cos(turn / 2)) inside the two roads, about 3.3 m here, and no more.
+    assert line.max_deviation_m == pytest.approx(cl.CORNER_RADIUS_M * (1 - np.cos(turn / 2)), abs=0.5)
+
+
+def test_fillet_keeps_the_source_segments_and_leaves_reversals_alone():
+    corner = np.array([[0.0, 0.0], [50.0, 0.0], [50.0, 50.0], [100.0, 50.0]])
+    pts, src = cl.fillet(corner)
+    assert len(src) == len(pts) - 1 and set(src) == {0, 1, 2}
+    assert (np.diff(src) >= 0).all()
+    assert np.allclose(pts[0], corner[0]) and np.allclose(pts[-1], corner[-1])
+    # Both corners are 90 degrees with 50 m between them: each gets the full 8 m radius, 8 m either side.
+    assert np.allclose(pts[1], [42.0, 0.0]) and len(pts) > 20
+    back = np.array([[0.0, 0.0], [50.0, 0.0], [0.0, 2.0]])  # 177 degrees: going back the way it came
+    pts, src = cl.fillet(back)
+    assert np.allclose(pts, back) and list(src) == [0, 1]
+
+
+def test_gentle_bends_are_not_filleted():
+    line = _arc(60.0, 120.0, 12.0)
+    pts, _ = cl.fillet(line)
+    assert np.allclose(pts, line)
+
+
 def test_straight_line_has_no_curvature():
     line = cl.smooth(np.array([[0, 0], [300, 0], [600, 0.0]]))
     assert np.abs(line.curvature).max() < 1e-4

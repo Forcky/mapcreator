@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     finished_at REAL,
     result_json TEXT,
     error TEXT,
-    stage TEXT
+    stage TEXT,
+    failure_json TEXT
 );
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -70,14 +71,38 @@ def new_job_id() -> str:
             return job_id
 
 
+# Job fields added later, left out of hashes and stored jobs while they hold their default. Hashes of
+# earlier jobs then stay the same (a rebuild keeps its track id), and a worker that predates a field
+# (its Job forbids unknown fields) can still build every job that doesn't use it.
+LATER_FIELDS = {"allow_tight_bends": False}
+# A job's length limit decides whether the road builds, not what it builds, so it isn't part of the road's
+# identity. Hashes carry the 30 km every job had before the limit was raised, so earlier ids stay the same.
+HASHED_MAX_LENGTH_KM = 30.0
+
+
+def job_dict(job: Job) -> dict:
+    d = job.model_dump(mode="json")
+    for name, default in LATER_FIELDS.items():
+        if d.get(name) == default:
+            d.pop(name, None)
+    return d
+
+
+def job_json(job: Job) -> str:
+    return json.dumps(job_dict(job))
+
+
 def route_hash(job: Job) -> str:
     """Identity of the road a job builds: the canonical job without its name.
 
     Two people asking for the same road with the same options get the same
-    track, so the second request can reuse the first one's build.
+    track, so the second request can reuse the first one's build. Asking for
+    a tight bend to be built anyway is a different option, so a different track.
     """
-    canonical = json.dumps(job.model_dump(mode="json", exclude={"track_id"}), sort_keys=True,
-                           separators=(",", ":"))
+    d = job_dict(job)
+    d.pop("track_id", None)
+    d["max_length_km"] = HASHED_MAX_LENGTH_KM
+    canonical = json.dumps(d, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
@@ -97,6 +122,7 @@ class JobRecord:
     result: dict | None
     error: str | None
     stage: str | None = None
+    failure: dict | None = None  # code and detail of a failure the page can act on (a tight bend)
 
     @classmethod
     def _from_row(cls, row: sqlite3.Row) -> JobRecord:
@@ -107,6 +133,7 @@ class JobRecord:
             finished_at=row["finished_at"],
             result=json.loads(row["result_json"]) if row["result_json"] else None, error=row["error"],
             stage=row["stage"],
+            failure=json.loads(row["failure_json"]) if row["failure_json"] else None,
         )
 
 
@@ -119,10 +146,13 @@ class JobStore:
         with self._connect() as con:
             con.execute("PRAGMA journal_mode = WAL")
             con.executescript(SCHEMA)
-            # Databases from before stage reporting. ADD COLUMN is cheap and keeps every row.
-            if "stage" not in {r["name"] for r in con.execute("PRAGMA table_info(jobs)")}:
+            # Databases from before stage reporting and failure codes. ADD COLUMN is cheap and keeps every row.
+            have = {r["name"] for r in con.execute("PRAGMA table_info(jobs)")}
+            for column in ("stage", "failure_json"):
+                if column in have:
+                    continue
                 try:
-                    con.execute("ALTER TABLE jobs ADD COLUMN stage TEXT")
+                    con.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT")
                 except sqlite3.OperationalError as e:
                     if "duplicate column" not in str(e):
                         raise  # another process added it between our check and the ALTER: fine
@@ -161,7 +191,7 @@ class JobStore:
             con.execute(
                 "INSERT INTO jobs (id, status, job_json, route_hash, ip_hash, created_at) "
                 "VALUES (?, 'queued', ?, ?, ?, ?)",
-                (job_id, job.model_dump_json(), route_hash(job), ip_hash, self.clock()),
+                (job_id, job_json(job), route_hash(job), ip_hash, self.clock()),
             )
         return self.get(job_id)
 
@@ -188,7 +218,7 @@ class JobStore:
                 return "ip_limit", None
             job_id = new_job_id()
             con.execute("INSERT INTO jobs (id, status, job_json, route_hash, ip_hash, created_at) "
-                        "VALUES (?, 'queued', ?, ?, ?, ?)", (job_id, job.model_dump_json(), same, ip_hash, now))
+                        "VALUES (?, 'queued', ?, ?, ?, ?)", (job_id, job_json(job), same, ip_hash, now))
             created = con.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return "created", JobRecord._from_row(created)
 
@@ -231,11 +261,12 @@ class JobStore:
                                     "status = 'done', heartbeat_at = ?, finished_at = ?, result_json = ?, stage = NULL",
                                     (now, now, json.dumps(result)))
 
-    def fail(self, job_id: str, worker_id: str, error: str) -> bool:
+    def fail(self, job_id: str, worker_id: str, error: str, failure: dict | None = None) -> bool:
         now = self.clock()
-        return self._update_running(job_id, worker_id,
-                                    "status = 'failed', heartbeat_at = ?, finished_at = ?, error = ?, stage = NULL",
-                                    (now, now, error))
+        return self._update_running(
+            job_id, worker_id,
+            "status = 'failed', heartbeat_at = ?, finished_at = ?, error = ?, stage = NULL, failure_json = ?",
+            (now, now, error, json.dumps(failure) if failure else None))
 
     def requeue_stale(self, stale_after_s: float, *, max_attempts: int = MAX_ATTEMPTS) -> tuple[int, int]:
         """Take running jobs back from workers that stopped heartbeating.
@@ -300,7 +331,7 @@ class JobStore:
         with self._connect() as con:
             cur = con.execute(
                 "UPDATE jobs SET status = 'queued', worker_id = NULL, attempts = 0, started_at = NULL, "
-                "heartbeat_at = NULL, finished_at = NULL, error = NULL, stage = NULL "
+                "heartbeat_at = NULL, finished_at = NULL, error = NULL, stage = NULL, failure_json = NULL "
                 "WHERE id = ? AND status IN ('failed', 'running')", (job_id,))
         return cur.rowcount == 1
 

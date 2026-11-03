@@ -12,7 +12,7 @@ import numpy as np
 
 from mapcreator import __version__
 from mapcreator.config import Settings
-from mapcreator.core import ai_line, kn5, package, textures, treefx
+from mapcreator.core import ai_line, kn5, package, textures, treefx, validate
 from mapcreator.core.layout import Layout, RoadModel, layouts_for, logic_dummies
 from mapcreator.core.scene import Scene
 from mapcreator.job import Job
@@ -174,6 +174,11 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
 
         line = ai_line.build(road, scene.frame)
         ai_line.write(layout_dir / "ai" / "fast_lane.ai", line)
+        tight = ""
+        if job.allow_tight_bends and line.extra[:, 4].min() < validate.MIN_RADIUS_M:
+            i = int(np.argmin(line.extra[:, 4]))
+            tight = (f" Built as asked with a {line.extra[i, 4]:.1f} m bend about {line.length[i] / 1000:.1f} km in: "
+                     "some cars can't turn that tightly, and AI cars may stop there.")
 
         xz = scene.frame.to_ac(road.e, road.n, road.z)[:, [0, 2]]
         map_png, map_ini = package.map_files(xz)
@@ -191,7 +196,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         lon, lat = lonlat.transform(road.e[mid], road.n[mid])
         country, city = region.country, region.state
         description = (
-            f"{title}, {direction}bound, generated from open data by mapcreator. "
+            f"{title}, {direction}bound, generated from open data by mapcreator.{tight} "
             + " ".join(a.line().rstrip(".") + "." for a in attributions)
             + (" Trees need Custom Shaders Patch 0.1.79 or later." if tree_list else "")
             + " Not affiliated with or endorsed by Kunos Simulazioni."

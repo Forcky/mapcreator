@@ -50,11 +50,14 @@
     download: $("download"),
     downloadLink: $("download-link"),
     contentManagerLink: $("cm-link"),
+    override: $("override"),
+    overrideButton: $("override-button"),
+    bendNote: $("bend-note"),
     error: $("error"),
   };
 
   const state = {
-    config: { max_waypoints: 25, max_length_km: 30, turnstile_site_key: null },
+    config: { max_waypoints: 25, max_length_km: 64, turnstile_site_key: null },
     map: null,
     mapReady: false,
     points: [], // { lng, lat, marker, node }
@@ -68,6 +71,8 @@
     submitting: false,
     jobId: null,
     pollTimer: null,
+    retryJob: null, // the job that builds a failed road anyway, when the build offers it
+    bendMarker: null,
     fallbackId: "track_" + randomSuffix(6),
   };
 
@@ -460,6 +465,7 @@
     const needsChallenge = Boolean(state.config.turnstile_site_key);
     el.submit.disabled = state.submitting || state.points.length < 2 || !state.routeUsable ||
       (needsChallenge && !state.turnstileToken);
+    el.overrideButton.disabled = state.submitting || !state.retryJob || (needsChallenge && !state.turnstileToken);
   }
 
   function updateTrackId() {
@@ -469,27 +475,35 @@
   async function submitJob(event) {
     event.preventDefault();
     if (el.submit.disabled) return;
+    await send({
+      track_id: trackId(),
+      waypoints: jobWaypoints(),
+      width: checkedValue("width"),
+      layouts: checkedValue("layouts"),
+    }, el.submit, "Build my track");
+  }
+
+  // The same road again, built with its tight bend: a new job, so a fresh anti-robot token and the usual limits.
+  async function buildAnyway() {
+    if (el.overrideButton.disabled || !state.retryJob) return;
+    await send(state.retryJob, el.overrideButton, "Generate anyway");
+  }
+
+  async function send(job, button, label) {
     clearError();
-    const body = {
-      job: {
-        track_id: trackId(),
-        waypoints: jobWaypoints(),
-        width: checkedValue("width"),
-        layouts: checkedValue("layouts"),
-      },
-    };
+    const body = { job };
     if (state.config.turnstile_site_key) body.turnstile_token = state.turnstileToken;
     state.submitting = true;
-    el.submit.textContent = "Sending…";
+    button.textContent = "Sending…";
     updateSubmit();
     try {
-      const job = await api("/api/jobs", { body });
-      trackJob(job.id);
+      const created = await api("/api/jobs", { body });
+      trackJob(created.id);
     } catch (err) {
       showError(err.message);
     } finally {
       state.submitting = false;
-      el.submit.textContent = "Build my track";
+      button.textContent = label;
       resetTurnstile();
       updateSubmit();
     }
@@ -506,6 +520,10 @@
     el.job.hidden = false;
     el.download.hidden = true;
     el.summary.hidden = true;
+    state.retryJob = null;
+    el.override.hidden = true;
+    el.bendNote.hidden = true;
+    showBend(null);
     el.jobStatus.textContent = "Checking on your track…";
     // The job section sits below the form: bring it into view, or a new or resumed job looks like nothing.
     el.job.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -550,6 +568,19 @@
       failed: `The build failed. ${job.error || ""}`.trim(),
     };
     el.jobStatus.textContent = messages[job.status] || "Unknown status.";
+    const failure = job.status === "failed" && job.failure && job.failure.code === "tight_bend" ? job.failure : null;
+    showBend(failure);
+    state.retryJob = failure && job.can_override && job.retry_job ? job.retry_job : null;
+    el.override.hidden = !state.retryJob;
+    updateSubmit();
+    const built = job.status === "done" && job.summary && job.summary.tight_bend;
+    if (built && typeof built.radius_m === "number" && typeof built.along_m === "number") {
+      el.bendNote.textContent = `Built with a ${built.radius_m} m bend about ${(built.along_m / 1000).toFixed(1)} km ` +
+        "in. Some cars can't turn that tightly, and AI cars may stop there.";
+      el.bendNote.hidden = false;
+    } else {
+      el.bendNote.hidden = true;
+    }
     const url = job.status === "done" ? downloadUrl(job.download_url) : null;
     if (url) {
       el.downloadLink.href = url;
@@ -557,6 +588,24 @@
       el.download.hidden = false;
       showSummary(job.summary || {});
     }
+  }
+
+  // Mark the bend a build found too tight, and bring it into view; or clear the mark.
+  function showBend(failure) {
+    if (state.bendMarker) {
+      state.bendMarker.remove();
+      state.bendMarker = null;
+    }
+    const ok = failure && Number.isFinite(failure.lon) && Number.isFinite(failure.lat);
+    if (!ok || !state.map || typeof maplibregl === "undefined") return;
+    const node = document.createElement("span");
+    node.className = "marker-bend";
+    node.textContent = "!";
+    node.title = `Bend too tight: ${failure.radius_m} m radius`;
+    state.bendMarker = new maplibregl.Marker({ element: node, anchor: "center" })
+      .setLngLat([failure.lon, failure.lat])
+      .addTo(state.map);
+    state.map.flyTo({ center: [failure.lon, failure.lat], zoom: Math.max(state.map.getZoom(), 15) });
   }
 
   // Warn before anyone submits if no builder has been heard from lately. Nothing to say if this fails.
@@ -640,6 +689,7 @@
     el.clear.addEventListener("click", clearPoints);
     el.trackName.addEventListener("input", updateTrackId);
     el.form.addEventListener("submit", submitJob);
+    el.overrideButton.addEventListener("click", buildAnyway);
 
     updateTrackId();
     renderPoints();

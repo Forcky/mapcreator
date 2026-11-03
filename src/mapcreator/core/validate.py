@@ -3,6 +3,16 @@
 Each rule comes from a known cause of load failures or crashes (see
 docs/ac-format.md). The in-game checks (does it load, are the wheels on the
 ground, does the AI finish) live in the Windows test harness.
+
+Two kinds of failure:
+- **Build failures** (`Report.failed`): a malformed KN5, a missing dummy, a
+  broken AI file. They're our pipeline's fault, and the person who drew the
+  road can't do anything about them.
+- **Route failures** (`Report.route_failed`): a bend tighter than any real
+  road (`MIN_RADIUS_M`). Usually the route turns back on itself at a junction,
+  or a waypoint sits just off the road, and moving a waypoint fixes it. A road
+  that really is that tight can be built anyway (`allow_tight_bends`), down to
+  `FLOOR_RADIUS_M`; the bend is then a warning.
 """
 
 from __future__ import annotations
@@ -30,13 +40,29 @@ AI_HEIGHT = (0.3, 0.5)
 MIN_GATE_M = 3.0
 # Content Manager's own length pattern (TrackObjectBase): a number followed by a unit.
 CM_LENGTH = re.compile(r"^\W*(\d+(?:[\.,]\d+)?)\W*(?:(km|kilometers)|(mi|miles?)|m)\b")
-MIN_RADIUS_M = 5.0  # tighter than any real hairpin: a routing artefact
+MIN_RADIUS_M = 5.0  # tighter than any real hairpin: usually a routing artefact
+# Not even on request below this: the route turns on the spot. It also keeps the AI line's slowest speed,
+# sqrt(MU * G * r), above the 5 m/s the speed check wants.
+FLOOR_RADIUS_M = 2.5
+MIN_AI_SPEED = 5.0
+
+
+@dataclass(frozen=True)
+class TightBend:
+    """The tightest point of a layout's AI line, where that's under MIN_RADIUS_M."""
+    layout: str
+    radius_m: float
+    x: float  # AC coordinates
+    z: float
 
 
 @dataclass
 class Report:
     passed: list[str] = field(default_factory=list)
-    failed: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)  # build failures: ours
+    route_failed: list[str] = field(default_factory=list)  # about the drawn road: fixable, or can be accepted
+    warnings: list[str] = field(default_factory=list)
+    bends: list[TightBend] = field(default_factory=list)
 
     def check(self, ok: bool, what: str) -> bool:
         (self.passed if ok else self.failed).append(what)
@@ -44,7 +70,26 @@ class Report:
 
     @property
     def ok(self) -> bool:
-        return not self.failed
+        return not self.failed and not self.route_failed
+
+
+def bend_checks(rep: Report, label: str, line: ai_line.AiLine, *, allow_tight_bends: bool = False) -> None:
+    """The AI line's speeds and tightest bend. A slow AI line is put down to the bend when there's one."""
+    radius = line.extra[:, 4]
+    i = int(np.argmin(radius))
+    r = float(radius[i])
+    v = line.extra[:, 0]
+    rep.check(bool(np.isfinite(v).all() and (v.min() > MIN_AI_SPEED or r < MIN_RADIUS_M)),
+              f"{label}: AI speeds finite and above 18 km/h")
+    what = f"{label}: tightest bend radius {r:.1f} m (needs >= {MIN_RADIUS_M:.0f} m)"
+    if r >= MIN_RADIUS_M:
+        rep.check(True, what)
+        return
+    rep.bends.append(TightBend(label, r, float(line.pos[i][0]), float(line.pos[i][2])))
+    if allow_tight_bends and r >= FLOOR_RADIUS_M:
+        rep.warnings.append(f"{what}; built anyway, as asked")
+    else:
+        rep.route_failed.append(what)
 
 
 class RoadSurface:
@@ -113,7 +158,8 @@ def _kn5_checks(rep: Report, path: Path) -> tuple[dict, dict] | None:
     return data, dummies
 
 
-def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: Path) -> None:
+def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: Path, *,
+                   allow_tight_bends: bool = False) -> None:
     road = RoadSurface(data["nodes"])
     for name in SPAWNS:
         if name not in dummies:
@@ -140,15 +186,11 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
         return
     rep.check(True, f"{label}: fast_lane.ai v7 reads back ({len(line.pos)} points)")
     rep.check(bool(np.all(np.diff(line.length) > 0)), f"{label}: AI distances strictly increase")
-    v = line.extra[:, 0]
-    rep.check(bool(np.isfinite(v).all() and v.min() > 5), f"{label}: AI speeds finite and above 18 km/h")
     sample = line.pos[:: max(len(line.pos) // 200, 1)]
     lift = [p[1] - h for p in sample if (h := road.height(p[0], p[2])) is not None]
     rep.check(len(lift) > 0.9 * len(sample) and AI_HEIGHT[0] <= min(lift) and max(lift) <= AI_HEIGHT[1],
               f"{label}: AI line {min(lift):.2f}-{max(lift):.2f} m above the road" if lift else f"{label}: AI line off the road")
-    radius = line.extra[:, 4]
-    rep.check(bool(radius.min() >= MIN_RADIUS_M),
-              f"{label}: tightest bend radius {radius.min():.1f} m (needs >= {MIN_RADIUS_M:.0f} m)")
+    bend_checks(rep, label, line, allow_tight_bends=allow_tight_bends)
     if "AC_START_0" in dummies:
         # The AI line's own direction where the car stands: a chord from the line's start would cut across
         # a hairpin there and fail a spawn that faces exactly the right way.
@@ -161,7 +203,7 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
         rep.check(float(fwd @ ai_dir) > 0.8, f"{label}: spawn faces the AI line's direction")
 
 
-def track_folder(track_dir: Path) -> Report:
+def track_folder(track_dir: Path, *, allow_tight_bends: bool = False) -> Report:
     rep = Report()
     tid = track_dir.name
     rep.check(bool(re.fullmatch(r"[a-z0-9_]{1,32}", tid)), f"track folder name '{tid}' is valid")
@@ -204,7 +246,8 @@ def track_folder(track_dir: Path) -> Report:
                       f"{label}: length parses with a unit (as CM reads it) and year is an integer")
         if datas:
             merged = {"nodes": [n for d in datas for n in d["nodes"]], "materials": datas[0]["materials"]}
-            _layout_checks(rep, label, merged, all_dummies, base / "ai" / "fast_lane.ai")
+            _layout_checks(rep, label, merged, all_dummies, base / "ai" / "fast_lane.ai",
+                           allow_tight_bends=allow_tight_bends)
     for rel in ("ATTRIBUTION.txt", "centreline.geojson", "extension/ext_config.ini"):
         rep.check((track_dir / rel).exists(), f"{rel} present")
     return rep

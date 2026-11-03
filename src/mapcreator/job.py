@@ -64,7 +64,11 @@ class Job(BaseModel):
     waypoints: list[Waypoint] = Field(min_length=2, max_length=MAX_WAYPOINTS)
     width: WidthOption = WidthOption.AS_MAPPED
     layouts: Layouts = Layouts.BOTH
-    max_length_km: float = Field(default=30.0, gt=0, le=75)
+    # The public limit. Targa Tasmania's longest stage, Mt Arrowsmith, is 53 km; this is 20% more.
+    max_length_km: float = Field(default=64.0, gt=0, le=75)
+    # Build even with a bend tighter than validation's 5 m (down to its 2.5 m floor): for a road that really
+    # is that tight, after the person who drew it has been told where the bend is.
+    allow_tight_bends: bool = False
 
     @field_validator("waypoints")
     @classmethod

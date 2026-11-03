@@ -75,6 +75,33 @@ def test_route_hash_ignores_the_name_only():
     assert route_hash(wider) != route_hash(job("a"))
 
 
+def test_hashes_and_stored_jobs_are_unchanged_by_later_fields(store):
+    import hashlib
+    import json
+
+    j = job("a")
+    # The formula every hash was made with before allow_tight_bends and the 64 km limit.
+    old = json.dumps({**j.model_dump(mode="json", exclude={"track_id", "allow_tight_bends"}), "max_length_km": 30.0},
+                     sort_keys=True, separators=(",", ":"))
+    assert route_hash(j) == hashlib.sha256(old.encode()).hexdigest()
+    longer = Job.model_validate({**j.model_dump(), "max_length_km": 75})
+    assert route_hash(longer) == route_hash(j)  # a limit, not part of the road
+    anyway = Job.model_validate({**j.model_dump(), "allow_tight_bends": True})
+    assert route_hash(anyway) != route_hash(j)
+    # A worker that predates the flag (its Job forbids unknown fields) still gets jobs it can read.
+    assert "allow_tight_bends" not in store.create(j, ip_hash="ip").job
+    assert store.create(anyway, ip_hash="ip").job["allow_tight_bends"] is True
+
+
+def test_a_failure_code_is_kept_and_cleared_on_requeue(store):
+    rec = store.create(job(), ip_hash="ip1")
+    lease = store.claim_next()
+    bend = {"code": "tight_bend", "radius_m": 3.2, "along_m": 442.0, "lon": 147.4, "lat": -42.7, "overridable": True}
+    assert store.fail(rec.id, lease.worker_id, "Too tight.", bend)
+    assert store.get(rec.id).failure == bend
+    assert store.requeue(rec.id) and store.get(rec.id).failure is None
+
+
 def test_create_and_get(store):
     rec = store.create(job(), ip_hash="ip1")
     assert rec.status == "queued" and rec.attempts == 0 and rec.worker_id is None

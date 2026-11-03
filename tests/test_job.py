@@ -41,10 +41,14 @@ def test_points_too_far_apart_for_the_length_limit_are_refused_before_any_build(
     perth_brisbane = [{"lon": 115.86, "lat": -31.95}, {"lon": 153.03, "lat": -27.47}]
     with pytest.raises(ValidationError, match="too far apart"):
         Job.model_validate({"track_id": "far", "waypoints": perth_brisbane})
-    # 28 km in a straight line fits 30 km; with three points 0.6 km of snapping slack is allowed on top.
-    near = [{"lon": 147.0, "lat": -42.0}, {"lon": 147.0, "lat": -42.252}]
-    assert 27_900 < straight_line_m(Job.model_validate({"track_id": "near", "waypoints": near}).waypoints) < 28_100
+    # 62 km in a straight line fits the 64 km limit; two points get 0.3 km of snapping slack on top.
+    near = [{"lon": 147.0, "lat": -42.0}, {"lon": 147.0, "lat": -42.558}]
+    assert 61_900 < straight_line_m(Job.model_validate({"track_id": "near", "waypoints": near}).waypoints) < 62_100
+    far = [{"lon": 147.0, "lat": -42.0}, {"lon": 147.0, "lat": -42.6}]  # 66.7 km
     with pytest.raises(ValidationError, match="too far apart"):
-        Job.model_validate({"track_id": "x", "waypoints": [{"lon": 147.0, "lat": -42.0}, {"lon": 147.0, "lat": -42.28}]})
-    assert Job.model_validate({"track_id": "x", "max_length_km": 75,
-                               "waypoints": [{"lon": 147.0, "lat": -42.0}, {"lon": 147.0, "lat": -42.28}]})
+        Job.model_validate({"track_id": "x", "waypoints": far})
+    assert Job.model_validate({"track_id": "x", "max_length_km": 75, "waypoints": far})
+
+
+def test_the_limit_is_a_fifth_more_than_targas_longest_stage():
+    assert Job.model_fields["max_length_km"].default == pytest.approx(53 * 1.2, abs=0.5)
