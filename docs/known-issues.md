@@ -16,6 +16,7 @@ These need the in-game harness on a machine with Assetto Corsa (`docs/dev-handov
 - in the Tree FX model files: the meaning of the trailer's `4`, and whether `size` scales exactly as assumed (model height × size)
 - CSP rewrites each tree `.bin` the first time it loads it: the same entries, re-packed in another order and about 9 KB larger. Harmless so far, but it suggests our zip differs from the layout CSP's own writer uses.
 - what race.ini's `[AUTOSPAWN]` does
+- AI opponents, now that each layout has up to 8 grid spots: do they spawn at them and race to the finish, on both layouts?
 - whether AI cars now stop in the run-off after the finish. The setup: 250 m of road after the finish, the AI line ending 40 m before the end wall, and the pace ramping 0.5, 0.2, 0.05. A single half-pace hint still let the AI hit the end wall at about 45 km/h (3 Nov).
 
 Answered at milestone M3 (Grasstree Hill, both layouts; CSP 0.2.11, Content Manager's default starter):

@@ -3,7 +3,9 @@
 A point-to-point track needs:
 - AC_AB_START_L/R and AC_AB_FINISH_L/R: timing gates just outside each road edge
   (L = left of the driving direction).
-- AC_PIT_0 (the track won't load without one) and AC_START_0: where the car spawns.
+- AC_PIT_k and AC_START_k: where cars spawn, one pair of dummies per grid spot
+  (`grid`). The track won't load without AC_PIT_0. Content Manager offers as many
+  AI opponents as there are pit boxes less one, so a single spot meant none.
 - AC_HOTLAP_START_0: the hot-lap spawn, further back so the car is moving at the gate.
 
 Spawn dummies point +Z along the driving direction with +Y up, and sit 0.3 m
@@ -40,6 +42,11 @@ SPAWN_BEFORE_GATE_M = 8.0
 HOTLAP_BEFORE_GATE_M = 30.0
 SPAWN_HEIGHT_M = 0.3
 GATE_OUTSIDE_EDGE_M = 0.5
+GRID_MAX = 8  # grid spots (pit boxes) per layout: the player and up to seven AI opponents
+GRID_ROW_M = 8.0  # between rows, along the road
+GRID_SIDE_M = 2.0  # a pair stands this far either side of the centreline
+GRID_CAR_HALF_M = 1.0  # half a car's width, with a margin: a pair needs GRID_SIDE_M + this on both sides
+GRID_CLEAR_OF_START_M = 8.0  # the last row stays this far from the road's start (its end wall is 1 m in)
 
 
 @dataclass(frozen=True)
@@ -101,6 +108,28 @@ def finish_distance(length: float) -> float:
     return length - max(GATE_FROM_END_M, min(RUNOFF_M, RUNOFF_SHARE * length))
 
 
+def grid(road: RoadModel) -> list[tuple[float, float]]:
+    """Grid spots as (distance along the layout, offset from the centreline, + = left), front first.
+
+    Spot 0 is on the centreline, SPAWN_BEFORE_GATE_M before the start gate, where M3 checked the spawn. Behind
+    it come pairs, GRID_ROW_M apart, or single file where the road is too narrow for two cars side by side, as
+    many as fit before the road's start, up to GRID_MAX.
+    """
+    front = GATE_FROM_END_M - SPAWN_BEFORE_GATE_M
+    spots = [(front, 0.0)]
+    d = front
+    while len(spots) < GRID_MAX:
+        d -= GRID_ROW_M
+        if d < GRID_CLEAR_OF_START_M:
+            break
+        p = road.at(d)
+        if min(p["half_left"], p["half_right"]) >= GRID_SIDE_M + GRID_CAR_HALF_M:
+            spots += [(d, off) for off in (GRID_SIDE_M, -GRID_SIDE_M)][:GRID_MAX - len(spots)]
+        else:
+            spots.append((d, 0.0))
+    return spots
+
+
 def _forward_ac(heading: float) -> list[float]:
     # Direction of travel (cos h, sin h) in E/N -> AC (x = east, z = -north).
     return [float(np.cos(heading)), 0.0, float(-np.sin(heading))]
@@ -121,16 +150,21 @@ def logic_dummies(road: RoadModel, frame: LocalFrame) -> list[Dummy]:
             h = p["z"] - slope * half
             out.append(Dummy(f"{prefix}_{side}", frame.to_ac(e, n, h).tolist(), _forward_ac(p["heading"])))
 
-    def spawn(name: str, d: float) -> None:
+    def spawn(name: str, d: float, offset: float = 0.0) -> None:
         p = road.at(d)
-        pos = frame.to_ac(p["e"], p["n"], p["z"] + SPAWN_HEIGHT_M).tolist()
-        out.append(Dummy(name, pos, _forward_ac(p["heading"])))
+        left = np.array([-np.sin(p["heading"]), np.cos(p["heading"])])
+        e, n = np.array([p["e"], p["n"]]) + left * offset
+        # The road falls from its crown to each edge: follow it, so an offset spot sits as high above the road.
+        fall = p["slope_left"] if offset > 0 else p["slope_right"]
+        h = p["z"] - fall * abs(offset) + SPAWN_HEIGHT_M
+        out.append(Dummy(name, frame.to_ac(e, n, h).tolist(), _forward_ac(p["heading"])))
 
     start = GATE_FROM_END_M
     finish = finish_distance(road.length)
     gate("AC_AB_START", start)
     gate("AC_AB_FINISH", finish)
-    spawn("AC_PIT_0", start - SPAWN_BEFORE_GATE_M)
-    spawn("AC_START_0", start - SPAWN_BEFORE_GATE_M)
+    for k, (d, offset) in enumerate(grid(road)):
+        spawn(f"AC_PIT_{k}", d, offset)
+        spawn(f"AC_START_{k}", d, offset)
     spawn("AC_HOTLAP_START_0", start - HOTLAP_BEFORE_GATE_M)
     return out

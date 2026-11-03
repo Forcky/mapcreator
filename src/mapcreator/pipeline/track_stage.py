@@ -169,6 +169,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
                                      sec["half_left"], sec["half_right"], sec["slope_left"], sec["slope_right"],
                                      lay.reverse)
         dummies = logic_dummies(road, scene.frame)
+        pits = sum(1 for d in dummies if d.name.startswith("AC_PIT_"))
         kdummies = [kn5.Kn5Dummy(d.name, kn5.dummy_matrix(d.position, d.forward, d.up)) for d in dummies]
         kn5_name = f"{job.track_id}_{lay.key}.kn5" if multi else f"{job.track_id}.kn5"
         kn5.write(track_dir / kn5_name, root=job.track_id, textures=tex, materials=mats, meshes=meshes,
@@ -219,12 +220,14 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             tags=["point to point", "real road", country.lower(), region.name.lower()],
             lat=float(lat), lon=float(lon), country=country, city=city, length_m=road.length,
             width_m=(float(width.min()), float(width.max())), run="point-to-point", version=__version__,
-            year=dt.date.today().year, priority=(1 if multi and not lay.reverse else None)), encoding="ascii")
+            year=dt.date.today().year, priority=(1 if multi and not lay.reverse else None), pitboxes=pits),
+            encoding="ascii")
         package.outline_png(xz).save(ui_dir / "outline.png")
         package.preview_png(shade, alpha, pframe, xz).save(ui_dir / "preview.png")
 
         summary["layouts"][lay.key or "main"] = {
             "name": name, "kn5": kn5_name, "length_m": round(road.length, 1), "ai_points": len(line.pos),
+            "grid": pits,
             "top_speed_kmh": round(float(line.extra[:, 0].max() * 3.6), 1),
             "slowest_kmh": round(float(line.extra[:, 0].min() * 3.6), 1),
         }
