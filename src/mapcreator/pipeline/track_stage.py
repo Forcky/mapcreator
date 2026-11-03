@@ -13,7 +13,7 @@ import numpy as np
 from mapcreator import __version__
 from mapcreator.config import Settings
 from mapcreator.core import ai_line, kn5, package, textures, treefx, validate
-from mapcreator.core.layout import Layout, RoadModel, layouts_for, logic_dummies
+from mapcreator.core.layout import AI_END_SHORT_M, Layout, RoadModel, finish_distance, layouts_for, logic_dummies
 from mapcreator.core.scene import Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import mesh_stage, profile_stage, route_stage, scenery_stage, section_stage
@@ -178,7 +178,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         if multi:
             _write_text(track_dir / f"models_{lay.key}.ini", package.models_ini([kn5_name]), encoding="ascii")
 
-        line = ai_line.build(road, scene.frame)
+        line = ai_line.build(road, scene.frame, end_short_m=AI_END_SHORT_M)
         ai_line.write(layout_dir / "ai" / "fast_lane.ai", line)
         tight = ""
         if job.allow_tight_bends and line.extra[:, 4].min() < validate.MIN_RADIUS_M:
@@ -195,6 +195,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         _write_text(data / "lighting.ini", package.lighting_ini(), encoding="ascii")
         _write_text(data / "groove.ini", package.groove_ini(), encoding="ascii")
         _write_text(data / "crew.ini", package.crew_ini(), encoding="ascii")
+        # Ramp the AI down over the run-off after the finish, to all but stopped where its line ends.
+        _write_text(data / "ai_hints.ini",
+                    package.ai_hints_ini(ai_line.runoff_hints(road.length, finish_distance(road.length))),
+                    encoding="ascii")
 
         direction = package.compass(float(np.arctan2(road.n[-1] - road.n[0], road.e[-1] - road.e[0])))
         name = f"{title} ({direction})" if multi else title

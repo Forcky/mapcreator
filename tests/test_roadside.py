@@ -50,3 +50,24 @@ def test_rail_on_the_falling_side_only_with_an_invisible_collider():
     verge = 50.0 - 0.025 * 3.2 - roadside.RAIL_OFFSET_M * roadside.VERGE_FALL
     assert h.max() == pytest.approx(verge + roadside.COLLIDER[1], abs=1e-3)
     assert e.min() < 500_100 and e.max() > 500_300  # extended past the drop
+
+
+def test_both_ends_of_the_road_are_closed_by_invisible_walls():
+    from mapcreator.core import roadside
+    from mapcreator.core.scene import LocalFrame
+
+    s = np.arange(0.0, 500.0)
+    xy = np.column_stack([500000 + s, np.full(s.size, 5250000.0)])
+    z = np.full(s.size, 100.0)
+    walls = roadside.end_walls(s, xy, z, np.zeros(s.size), lambda e, n: np.full(np.shape(e), 98.0),
+                               LocalFrame(500000, 5250000, 100))
+    assert [w.name for w in walls] == ["1WALL_END_START", "1WALL_END_FINISH"]
+    for w in walls:
+        w.validate()
+        assert not w.renderable
+        p = w.positions.astype(float)
+        assert p[:, 2].min() <= -roadside.END_WALL_HALF_M + 1e-3 and p[:, 2].max() >= roadside.END_WALL_HALF_M - 1e-3
+        assert p[:, 1].min() == pytest.approx(98.0 - 100.0 + roadside.END_WALL[0], abs=1e-3)
+        assert p[:, 1].max() == pytest.approx(roadside.END_WALL[1], abs=1e-3)
+    assert walls[0].positions[:, 0].mean() == pytest.approx(1.0, abs=1e-3)
+    assert walls[1].positions[:, 0].mean() == pytest.approx(498.0, abs=1e-3)
