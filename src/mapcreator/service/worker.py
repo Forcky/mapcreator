@@ -298,7 +298,12 @@ def _build_one(claim: dict, api: WorkerApi, pipeline: Pipeline, storage: Storage
         key = f"{job_id}/{job.track_id}.zip"
         storage.put(out.zip_path, key)
     except Exception as exc:
-        log.exception("job %s failed", job_id)
+        if isinstance(exc, USER_FACING):
+            # About the road as drawn, and the page tells the user why: not an error in the service, so it
+            # stays out of the error-level alerts. Internal failures are errors, with the traceback.
+            log.warning("job %s: the road can't be built as drawn: %s", job_id, public_error(exc))
+        else:
+            log.exception("job %s failed", job_id)
         if not beat.lost:
             _report_failure(api, job_id, worker_id, public_error(exc), *failure_detail(exc))
         return

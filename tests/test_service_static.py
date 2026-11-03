@@ -99,3 +99,31 @@ def test_about_page_is_served_with_the_security_headers(tmp_path):
     page = client.get("/about.html")
     assert page.status_code == 200 and "Privacy" in page.text
     assert "unsafe-inline" not in page.headers["Content-Security-Policy"]
+
+
+def test_pages_are_never_cached_and_name_assets_by_their_contents(tmp_path):
+    import hashlib
+    import re as _re
+
+    from fastapi.testclient import TestClient
+
+    from mapcreator.service.api import IMMUTABLE, create_app
+    from mapcreator.service.settings import ServiceSettings
+
+    settings = ServiceSettings(db_path=tmp_path / "jobs.sqlite3", storage_dir=tmp_path / "dl", download_base="/dl",
+                               worker_token="w" * 40, ip_salt="s")
+    client = TestClient(create_app(settings, router=object()))
+    static = Path(__file__).parents[1] / "src" / "mapcreator" / "service" / "static"
+    v = hashlib.sha256((static / "app.js").read_bytes()).hexdigest()[:10]
+    for path in ("/", "/index.html"):
+        r = client.get(path)
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+        assert f'src="app.js?v={v}"' in r.text and _re.search(r'href="style\.css\?v=[0-9a-f]{10}"', r.text)
+        assert _re.search(r'src="vendor/maplibre-gl/maplibre-gl\.js\?v=[0-9a-f]{10}"', r.text)
+    about = client.get("/about.html")
+    assert about.headers["cache-control"] == "no-cache" and "style.css?v=" in about.text
+    assert "Content-Security-Policy" in about.headers  # the security headers still apply
+    assert client.get(f"/app.js?v={v}").headers["cache-control"] == IMMUTABLE
+    assert client.get("/app.js").headers["cache-control"] == "no-cache"  # unversioned: always revalidated
+    assert client.get("/app.js?v=0000000000").headers["cache-control"] == "no-cache"  # an old name
+    assert client.get("/api/health").headers["cache-control"] == "no-store"

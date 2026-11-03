@@ -105,6 +105,32 @@ def test_problems_with_the_road_are_shown_to_the_user(env):
     assert env[2].keys == []
 
 
+def test_road_problems_log_as_warnings_and_internal_ones_as_errors(env, caplog):
+    import logging
+
+    from mapcreator.pipeline.validate_stage import TightBend
+
+    submit(env)
+
+    def tight():
+        raise TightBend(3.2, 442.0, 147.4, -42.7, True)
+
+    with caplog.at_level(logging.INFO, logger="mapcreator.service.worker"):
+        work(env, pipeline_that(tight))
+    failures = [r for r in caplog.records if "job" in r.getMessage() and r.levelno >= logging.WARNING]
+    assert [r.levelname for r in failures] == ["WARNING"] and "can't be built as drawn" in failures[0].getMessage()
+
+    env[1].post("/api/jobs", json={"job": {**JOB, "width": "plus_15"}})
+    caplog.clear()
+
+    def broken():
+        raise OSError("disk full")
+
+    with caplog.at_level(logging.INFO, logger="mapcreator.service.worker"):
+        work(env, pipeline_that(broken))
+    assert any(r.levelname == "ERROR" and r.exc_info for r in caplog.records)
+
+
 def test_internal_errors_stay_internal(env):
     job_id = submit(env)
     seen = {}

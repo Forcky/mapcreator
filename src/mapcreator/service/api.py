@@ -33,7 +33,7 @@ from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.datastructures import Headers, MutableHeaders
@@ -323,6 +323,62 @@ class SecurityHeaders:
                     headers[name] = value
                 if is_api and "cache-control" not in headers:
                     headers["Cache-Control"] = "no-store"
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+# Pages are never cached, so a deploy is seen at once. They name each script and stylesheet with a hash of
+# its contents (app.js?v=1a2b3c4d), and a request carrying the current hash may be cached for a year: a new
+# deploy changes the name, so no one runs an old script against a new API. Anything else gets no-cache,
+# which Cloudflare doesn't cache either.
+PAGES = ("index.html", "about.html")
+ASSET_REF = re.compile(r'(?P<attr>(?:src|href)=")(?P<path>(?:vendor/)?[A-Za-z0-9_./-]+\.(?:js|css))(?=")')
+IMMUTABLE = "public, max-age=31536000, immutable"
+
+
+def asset_versions(static_dir: Path) -> dict[str, str]:
+    """Each script and stylesheet under `static_dir` (by its path there) -> a short hash of its contents."""
+    out = {}
+    for p in sorted(static_dir.rglob("*")):
+        if p.suffix in (".js", ".css") and p.is_file():
+            out[p.relative_to(static_dir).as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()[:10]
+    return out
+
+
+def versioned_page(html: str, versions: dict[str, str]) -> str:
+    """The page with each local script and stylesheet reference carrying its hash."""
+    def tag(m: re.Match) -> str:
+        v = versions.get(m.group("path"))
+        return m.group("attr") + m.group("path") + (f"?v={v}" if v else "")
+
+    return ASSET_REF.sub(tag, html)
+
+
+class CacheHeaders:
+    """Cache-Control for the static files: immutable for a script or stylesheet named with its current hash,
+    no-cache for everything else that doesn't set its own."""
+
+    def __init__(self, app: ASGIApp, *, versions: dict[str, str]):
+        self.app = app
+        self.versions = versions
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["path"].startswith("/api/"):
+            await self.app(scope, receive, send)
+            return
+        path = scope["path"].lstrip("/")
+        query = scope.get("query_string", b"").decode("latin-1")
+        current = path in self.versions and query == f"v={self.versions[path]}"
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                ok = 200 <= message["status"] < 300
+                if current and ok:
+                    headers["Cache-Control"] = IMMUTABLE
+                elif "cache-control" not in headers:
+                    headers["Cache-Control"] = "no-cache"
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
@@ -642,7 +698,19 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
                 raise HTTPException(404, "There's no download here. It may have expired.")
             return FileResponse(path, media_type=headers.pop("Content-Type"), headers=headers)
 
+    versions = asset_versions(STATIC_DIR)
+    pages = {name: versioned_page((STATIC_DIR / name).read_text(encoding="utf-8"), versions) for name in PAGES}
+
+    def page(name: str):
+        def serve() -> HTMLResponse:
+            return HTMLResponse(pages[name], headers={"Cache-Control": "no-cache"})
+        return serve
+
+    app.add_api_route("/", page("index.html"), methods=["GET", "HEAD"], include_in_schema=False)
+    for name in PAGES:
+        app.add_api_route(f"/{name}", page(name), methods=["GET", "HEAD"], include_in_schema=False)
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+    app.add_middleware(CacheHeaders, versions=versions)
     return app
 
 
