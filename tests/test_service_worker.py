@@ -225,8 +225,15 @@ def test_reports_each_stage_and_the_job_page_shows_it(env):
     def stages(job, work: Path, on_stage) -> BuildOutput:
         for name in ("route", "mesh"):
             on_stage(name)
-            time.sleep(0.15)  # a heartbeat goes out at once with the new stage
-            seen.append(client.get(f"/api/jobs/{job_id}").json()["stage"])
+            # A heartbeat goes out at once with the new stage. Wait for it rather than a fixed time: a busy CI
+            # runner took longer than 0.15 s.
+            deadline = time.monotonic() + 5.0
+            while True:
+                stage = client.get(f"/api/jobs/{job_id}").json()["stage"]
+                if (stage and stage["name"] == name) or time.monotonic() > deadline:
+                    break
+                time.sleep(0.02)
+            seen.append(stage)
         return pipeline_that()(job, work)
 
     work(env, stages, heartbeat_s=30.0)
