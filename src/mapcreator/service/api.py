@@ -39,7 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from mapcreator import __version__
+from mapcreator import __version__, buildinfo
 from mapcreator.job import MAX_SNAP_M, MAX_WAYPOINTS, Job, Waypoint, public_track_id, straight_line_m
 from mapcreator.pipeline import STAGE_NAMES
 from mapcreator.regions import REGIONS
@@ -555,7 +555,7 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
         # job), then the queue cap, then the per-client daily limit.
         job = body.job.model_copy(update={"track_id": public_track_id(body.job.track_id, route_hash(body.job))})
         outcome, record = store.submit(job, ip_hash=identity.key(request), max_queued=settings.max_queued_jobs,
-                                       per_ip_per_day=settings.jobs_per_ip_per_day)
+                                       per_ip_per_day=settings.jobs_per_ip_per_day, build=buildinfo.version())
         if outcome == "queue_full":
             raise HTTPException(503, "The build queue is full right now. Please try again later.",
                                 headers={"Retry-After": "900"})
@@ -607,7 +607,10 @@ def create_app(settings: ServiceSettings, *, router: Router | None = None, turns
             out["estimated_wait_minutes"] = typical * out["queue_position"]
         if record.status == "done" and record.result:
             out["summary"] = record.result.get("summary") or {}
-            out["download_url"] = absolute(storage.url(record.result["key"]), request)
+            # The build's time in the link: a track rebuilt in place (`mapcreator-admin requeue --done`) gets a
+            # new link, so a CDN's copy of the old zip is never served for it. Storage ignores the query.
+            built = f"?v={int(record.finished_at)}" if record.finished_at else ""
+            out["download_url"] = absolute(storage.url(record.result["key"]), request) + built
         elif record.status == "failed":
             out["error"] = record.error or "The build failed."
             failure = record.failure or {}

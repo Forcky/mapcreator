@@ -62,6 +62,14 @@ CREATE INDEX IF NOT EXISTS jobs_ip_created ON jobs (ip_hash, created_at);
 """
 
 
+def _built_by(row: sqlite3.Row, build: str) -> bool:
+    try:
+        result = json.loads(row["result_json"] or "{}")
+    except ValueError:
+        return False
+    return isinstance(result, dict) and (result.get("summary") or {}).get("build") == build
+
+
 def new_job_id() -> str:
     """A random job id that never starts with "-": one in 64 of token_urlsafe's would, and a command line
     then reads the id as an option (mapcreator-admin show -abc... fails)."""
@@ -195,18 +203,27 @@ class JobStore:
             )
         return self.get(job_id)
 
-    def submit(self, job: Job, *, ip_hash: str, max_queued: int, per_ip_per_day: int) -> tuple[str, JobRecord | None]:
+    def submit(self, job: Job, *, ip_hash: str, max_queued: int, per_ip_per_day: int,
+               build: str | None = None) -> tuple[str, JobRecord | None]:
         """Admit a public job, atomically, so simultaneous submissions can't slip past the limits.
 
         Returns ("existing", the job already done or under way for the same road), ("queue_full", None),
         ("ip_limit", None) or ("created", the new job), checked in that order.
+
+        With `build` (the web app's `buildinfo.version()`), a finished job counts as existing only if that same
+        code built it. One built by older code is left alone and the road is built again as a new job, so a fix
+        reaches the next person who asks.
         """
         same = route_hash(job)
         with self._transaction() as con:
-            row = (con.execute("SELECT * FROM jobs WHERE route_hash = ? AND status = 'done' "
-                               "ORDER BY finished_at DESC LIMIT 1", (same,)).fetchone()
-                   or con.execute("SELECT * FROM jobs WHERE route_hash = ? AND status IN ('queued', 'running') "
-                                  "ORDER BY created_at LIMIT 1", (same,)).fetchone())
+            row = None
+            for done in con.execute("SELECT * FROM jobs WHERE route_hash = ? AND status = 'done' "
+                                    "ORDER BY finished_at DESC", (same,)):
+                if build is None or _built_by(done, build):
+                    row = done
+                    break
+            row = row or con.execute("SELECT * FROM jobs WHERE route_hash = ? AND status IN ('queued', 'running') "
+                                     "ORDER BY created_at LIMIT 1", (same,)).fetchone()
             if row is not None:
                 return "existing", JobRecord._from_row(row)
             if con.execute("SELECT COUNT(*) FROM jobs WHERE status = 'queued'").fetchone()[0] >= max_queued:

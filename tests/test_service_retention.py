@@ -161,7 +161,7 @@ def test_a_keyless_web_app_links_to_the_bucket_and_still_expires_old_jobs(tmp_pa
     key = f"{job_id}/{lease['job']['track_id']}.zip"
     c.post(f"/api/worker/jobs/{job_id}/complete", headers=AUTH,
            json={"worker_id": lease["worker_id"], "result": {"key": key}})
-    assert c.get(f"/api/jobs/{job_id}").json()["download_url"] == f"https://downloads.example.org/{key}"
+    assert c.get(f"/api/jobs/{job_id}").json()["download_url"].split("?v=")[0] == f"https://downloads.example.org/{key}"
 
     clock.t += 31 * DAY
     c.post("/api/worker/claim", headers=AUTH)  # the prune runs; the bucket's lifecycle rule does the deleting
