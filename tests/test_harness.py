@@ -96,3 +96,27 @@ def test_the_log_check_reads_a_csp_load_and_catches_a_tree_failure(tmp_path, mon
     capsys.readouterr()
     ac_harness.check_log("grasstree")  # an id that's only a prefix of the loaded one
     assert "track model loaded: False" in capsys.readouterr().out
+
+
+def test_probe_points_keep_a_car_length_off_both_ends(tmp_path, monkeypatch):
+    import json
+
+    import numpy as np
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from mapcreator.core import ai_line
+
+    n = 301  # a straight 300 m line, a point every metre
+    pos = np.column_stack([np.arange(n, dtype=float), np.zeros(n), np.zeros(n)])
+    extra = np.zeros((n, 18))
+    extra[:, 13] = 1.0  # forward along +x
+    (tmp_path / "track" / "ai").mkdir(parents=True)
+    ai_line.write(tmp_path / "track" / "ai" / "fast_lane.ai",
+                  ai_line.AiLine(pos=pos, length=np.arange(n, dtype=float), extra=extra))
+    monkeypatch.setattr(ac_harness, "ac_docs", lambda: tmp_path / "docs")
+    ac_harness.probe_points(tmp_path / "track", "", 100.0, False, 0)
+    pts = json.loads((tmp_path / "docs" / "mapcreator_probe" / "points.json").read_text())["points"]
+    s = [p["s_m"] for p in pts]
+    # A car centred at s = 0 has its rear wheels off the end of the road (Esperance coast road, M3).
+    assert s[0] >= ac_harness.PROBE_END_MARGIN_M and s[-1] <= 300 - ac_harness.PROBE_END_MARGIN_M
+    assert s == [5.0, 105.0, 205.0]
