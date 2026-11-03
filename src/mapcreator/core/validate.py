@@ -32,7 +32,8 @@ from mapcreator.core.package import SURFACE_KEYS
 REQUIRED_DUMMIES = {"AC_PIT_0", "AC_START_0", "AC_HOTLAP_START_0", "AC_AB_START_L", "AC_AB_START_R",
                     "AC_AB_FINISH_L", "AC_AB_FINISH_R"}
 KNOWN_DUMMY = re.compile(r"^AC_(PIT_\d+|START_\d+|HOTLAP_START_\d+|AB_(START|FINISH)_[LR]|TIME_\d+_[LR])$")
-SPAWNS = ("AC_PIT_0", "AC_START_0", "AC_HOTLAP_START_0")
+SPAWN = re.compile(r"^AC_(PIT|START|HOTLAP_START)_\d+$")
+GRID_CLEARANCE_M = 3.5  # grid spots closer than this would put two cars in one place (a pair stands 4 m apart)
 SPAWN_HEIGHT = (0.15, 0.5)
 AI_HEIGHT = (0.3, 0.5)
 # A gate must reach past both road edges; any span is fine as long as it does. This floor only catches
@@ -161,13 +162,17 @@ def _kn5_checks(rep: Report, path: Path) -> tuple[dict, dict] | None:
 def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: Path, *,
                    allow_tight_bends: bool = False) -> None:
     road = RoadSurface(data["nodes"])
-    for name in SPAWNS:
-        if name not in dummies:
-            continue
+    for name in sorted(n for n in dummies if SPAWN.match(n)):
         x, y, z = dummies[name]["matrix"][3, :3]
         h = road.height(x, z)
         ok = h is not None and SPAWN_HEIGHT[0] <= y - h <= SPAWN_HEIGHT[1]
         rep.check(ok, f"{label}: {name} sits {('%.2f m' % (y - h)) if h is not None else 'off the road'} above the road")
+    starts = np.array([d["matrix"][3, :3] for n, d in sorted(dummies.items()) if re.fullmatch(r"AC_START_\d+", n)])
+    if len(starts) > 1:
+        gaps = np.linalg.norm(starts[:, None, [0, 2]] - starts[None, :, [0, 2]], axis=2)
+        np.fill_diagonal(gaps, np.inf)
+        rep.check(bool(gaps.min() >= GRID_CLEARANCE_M),
+                  f"{label}: {len(starts)} grid spots, at least {GRID_CLEARANCE_M:.0f} m apart ({gaps.min():.1f} m)")
     for gate in ("AC_AB_START", "AC_AB_FINISH"):
         left, right = dummies.get(f"{gate}_L"), dummies.get(f"{gate}_R")
         if left is None or right is None:
@@ -191,16 +196,16 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
     rep.check(len(lift) > 0.9 * len(sample) and AI_HEIGHT[0] <= min(lift) and max(lift) <= AI_HEIGHT[1],
               f"{label}: AI line {min(lift):.2f}-{max(lift):.2f} m above the road" if lift else f"{label}: AI line off the road")
     bend_checks(rep, label, line, allow_tight_bends=allow_tight_bends)
-    if "AC_START_0" in dummies:
+    for name in sorted(n for n in dummies if re.fullmatch(r"AC_START_\d+", n)):
         # The AI line's own direction where the car stands: a chord from the line's start would cut across
         # a hairpin there and fail a spawn that faces exactly the right way.
-        fwd = dummies["AC_START_0"]["matrix"][2, :3]
-        spawn = dummies["AC_START_0"]["matrix"][3, :3]
+        fwd = dummies[name]["matrix"][2, :3]
+        spawn = dummies[name]["matrix"][3, :3]
         i = int(np.argmin(np.linalg.norm((line.pos - spawn)[:, [0, 2]], axis=1)))
         lo, hi = max(i - 2, 0), min(i + 2, len(line.pos) - 1)
         ai_dir = line.pos[hi] - line.pos[lo]
         ai_dir /= max(float(np.linalg.norm(ai_dir)), 1e-9)
-        rep.check(float(fwd @ ai_dir) > 0.8, f"{label}: spawn faces the AI line's direction")
+        rep.check(float(fwd @ ai_dir) > 0.8, f"{label}: {name} faces the AI line's direction")
 
 
 def track_folder(track_dir: Path, *, allow_tight_bends: bool = False) -> Report:

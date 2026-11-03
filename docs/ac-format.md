@@ -53,9 +53,13 @@ A job with `"layouts": "both"` produces:
 - **Logic dummies:**
   - `AC_AB_START_L/R` and `AC_AB_FINISH_L/R` sit 0.5 m outside each road edge. L is left of the driving direction.
   - The start gate is 50 m from the layout's start. The finish gate leaves a run-off of real road after it: 250 m, or 15% of a short route, never under 50 m. With only 50 m, AC's AI crossed the finish, reached the end of its line, turned round and left the road (M3).
-  - `AC_PIT_0` and `AC_START_0` sit 8 m before the start gate; `AC_HOTLAP_START_0` sits 30 m before it.
+  - **Grid:** `AC_PIT_k` and `AC_START_k` share each grid spot (`layout.grid`), up to 8 per layout.
+    - Spot 0 is on the centreline 8 m before the start gate.
+    - Behind it come pairs 8 m apart, 2 m either side of the centreline, where both half-widths are at least 3 m. Otherwise single file.
+    - Spots go no closer than 8 m to the road's start.
+  - `AC_HOTLAP_START_0` sits 30 m before the start gate.
   - Spawns are 0.3 m above the road and face the driving direction. Confirmed in game at M3: the car lands on all four wheels, facing along the road.
-- **Pits:** `pitboxes` in `ui_track.json` must equal the number of `AC_PIT_n` dummies (1).
+- **Pits:** `pitboxes` in `ui_track.json` must equal the number of `AC_PIT_n` dummies (up to 8). Content Manager offers that many cars less one as AI opponents, so with one pit box there were none (M3).
 
 ## Custom Shaders Patch (`extension/`)
 

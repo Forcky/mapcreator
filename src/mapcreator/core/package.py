@@ -206,7 +206,7 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
 
 def ui_track_json(*, name: str, description: str, tags: list[str], lat: float, lon: float, country: str,
                   city: str, length_m: float, width_m: tuple[float, float], run: str, version: str,
-                  year: int, priority: int | None = None) -> str:
+                  year: int, priority: int | None = None, pitboxes: int = 1) -> str:
     w0, w1 = width_m
     width = f"{w0:.1f}" if abs(w1 - w0) < 0.05 else f"{w0:.1f}-{w1:.1f}"
     data = {
@@ -219,7 +219,7 @@ def ui_track_json(*, name: str, description: str, tags: list[str], lat: float, l
         # CM parses length with a unit (km / mi / m); a bare number isn't read.
         "length": f"{length_m / 1000:.2f} km",
         "width": width,
-        "pitboxes": "1",
+        "pitboxes": str(pitboxes),  # one per AC_PIT_k; CM offers this many cars less one as AI opponents
         "run": run,
         "author": "mapcreator",
         "version": version,
