@@ -10,6 +10,10 @@
 # Without it, trees are placed from ESA WorldCover tree cover instead.
 # tas_chm_source = "D:/mirror/TAS_CHM_2m.tif"                             # MAPCREATOR_TAS_CHM
 
+# Without a canopy model, WorldCover's tree cells are kept only where Meta/WRI's canopy map also sees canopy.
+# On by default; false reads WorldCover alone (no Meta/WRI download).
+# meta_canopy = false                                                       # MAPCREATOR_META_CANOPY
+
 # Roads (and buildings outside Tasmania) from a local OSM index instead of Overpass. Build it once from
 # a Geofabrik extract: python -m mapcreator.providers.osm.index build australia-latest.osm.pbf <index>
 # osm_index = "D:/mirror/osm/australia.sqlite"                             # MAPCREATOR_OSM_INDEX

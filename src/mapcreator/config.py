@@ -32,6 +32,9 @@ class Settings:
     # Write 04_mesh/preview.obj, a debug view of the scene. Off by default: on a 63 km road it took about half
     # the mesh stage, and nothing ships it.
     preview_obj: bool = False
+    # Outside a canopy model, keep WorldCover's tree cells only where Meta/WRI's canopy map also sees canopy
+    # (providers/meta/canopy.py). On by default; MAPCREATOR_META_CANOPY=0 turns it off.
+    meta_canopy: bool = True
 
 
 DEFAULT_TAS_DEM = (
@@ -63,4 +66,6 @@ def load() -> Settings:
         osm_index=get("MAPCREATOR_OSM_INDEX", "osm_index", ""),
         preview_obj=str(os.environ.get("MAPCREATOR_PREVIEW_OBJ") or f.get("preview_obj") or "").lower()
         in ("1", "true", "yes"),
+        meta_canopy=str(os.environ.get("MAPCREATOR_META_CANOPY") or f.get("meta_canopy", "1")).lower()
+        not in ("0", "false", "no", "off"),
     )

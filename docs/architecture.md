@@ -11,7 +11,7 @@ route     01_route     snapped OSM centreline and its ways' tags (roads from the
 profile   02_profile   DEM sampling, smoothing with a grade-change limit and grade cap, bridge dips filled
 section   03_section   width (OSM width → lanes × lane width → class default; +15% / +30%), camber from the DEM, crown
 mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, adaptive terrain corridor, guard rails, AC dummies
-scenery   04b_scenery  trees (canopy model, else ESA WorldCover) and buildings from footprints
+scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy) and buildings from footprints
 track     05_track     numpy KN5 writer, DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,
                        centreline.geojson (ODbL), the zip
 validate  06_validate  static checks (report.json); the in-game harness is for development only
@@ -42,7 +42,7 @@ src/mapcreator/
   providers/   one package per source; each declares its licence and attribution
                base, raster (windowed reads and tile cache)
                tas_list/: 2 m DEM, canopy height model, building footprints (Tasmania)
-               ga/: DEM-S (national elevation); esa/: WorldCover (national tree cover)
+               ga/: DEM-S (national elevation); esa/: WorldCover (national tree cover); meta/: canopy extent mask
                osm/: graph (routing), index (local SQLite index), roads (index or Overpass), overpass (development)
   regions/     bounding box → providers and CRS; Tasmania, then the national fallback by MGA zone
   pipeline/    one module per stage, wiring providers to core; STAGE_NAMES

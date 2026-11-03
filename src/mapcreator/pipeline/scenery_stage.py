@@ -28,6 +28,7 @@ from mapcreator.job import Job
 from mapcreator.pipeline import mesh_stage, profile_stage, section_stage
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.providers.esa import worldcover
+from mapcreator.providers.meta import canopy as meta_canopy
 from mapcreator.regions import job_region
 
 log = logging.getLogger(__name__)
@@ -85,10 +86,22 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         cover.load_corridor(xy, scenery.TREE_REACH_M + 20)
         cand = scenery.candidates_from_cover(tree_region, rng)
         is_tree = cover.classes(cand[:, 0], cand[:, 1]) == worldcover.TREE
-        cand = cand[is_tree]
-        trees = scenery.Trees(cand, scenery.heights_for_cover(len(cand), rng))
         source = "ESA WorldCover"
         attributions.append(worldcover.ATTRIBUTION)
+        if settings.meta_canopy and is_tree.any():
+            # WorldCover's 10 m tree class over-calls forest by about half; Meta/WRI's canopy map trims it to
+            # within about 20% of LiDAR (mapcreator#8). Only a mask: it's too coarse to place or size a tree.
+            try:
+                meta = meta_canopy.MetaCanopy(settings.cache_dir, region.epsg)
+                meta.load_corridor(xy, scenery.TREE_REACH_M + 20)
+                is_tree &= meta.canopy_near(cand[:, 0], cand[:, 1])
+                source = "ESA WorldCover + Meta/WRI canopy"
+                attributions.append(meta_canopy.ATTRIBUTION)
+            except Exception as e:  # noqa: BLE001 - the mask only refines WorldCover; without it, WorldCover alone
+                log.warning("Meta/WRI canopy unavailable (%s: %s); trees from WorldCover alone", type(e).__name__, e)
+                source = "ESA WorldCover (Meta/WRI canopy unavailable)"
+        cand = cand[is_tree]
+        trees = scenery.Trees(cand, scenery.heights_for_cover(len(cand), rng))
 
     if built is not None and len(trees):
         shapely.prepare(built)

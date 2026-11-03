@@ -16,6 +16,9 @@ services.thelist.tas.gov.au
 # ESA WorldCover tree cover (trees anywhere without a canopy model).
 esa-worldcover.s3.eu-central-1.amazonaws.com
 
+# Meta/WRI canopy height maps: a mask on WorldCover's trees (MAPCREATOR_META_CANOPY=0 turns it off).
+dataforgood-fb-data.s3.amazonaws.com
+
 # Geoscience Australia 1-second DEM-S on Digital Earth Australia (elevation outside Tasmania).
 dea-public-data.s3.ap-southeast-2.amazonaws.com
 
