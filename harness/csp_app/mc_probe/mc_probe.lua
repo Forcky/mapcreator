@@ -16,9 +16,12 @@
 local dir = ac.getFolder(ac.FolderID.ACDocuments) .. '/mapcreator_probe'
 -- Wait this long in sim time after each teleport: the car drops ~0.5 m and must settle before it's read.
 local SETTLE_S = 1.2
+-- ac.makeScreenshot captures a later frame, not this one: before M3's fix (issue #14) each shot showed the
+-- next point and the last one was lost to the quit. So keep the car where it is this long after a shot.
+local SHOT_HOLD_S = 0.5
 
 local state = 'loading'
-local points, results, index, wait = nil, {}, 1, nil
+local points, results, index, wait, hold = nil, {}, 1, nil, nil
 local options = { quit = false, screenshots_every = 0 }
 
 local function save(name, value)
@@ -69,6 +72,16 @@ local function record(p)
   }
 end
 
+local function finish()
+  state = 'done'
+  save('results.json', { results = results, csp = ac.getPatchVersionCode() })
+  save('status.json', { state = state, points = #points })
+  -- os.remove is a stub inside CSP's sandbox; io.deleteFile is the real one. Without this the
+  -- probe would run again (and teleport the car) on every later launch.
+  io.deleteFile(dir .. '/points.json')
+  if options.quit then ac.shutdownAssettoCorsa() end
+end
+
 function script.update(dt)
   if state == 'loading' then
     if load_points() then
@@ -84,9 +97,18 @@ function script.update(dt)
       state = 'probing'
     end
   elseif state == 'probing' then
+    if hold ~= nil then
+      hold = hold - dt
+      if hold > 0 then return end
+      hold = nil
+      if index > #points then finish() end
+      return
+    end
     if wait == nil then
       local p = points[index]
-      physics.setCarPosition(0, vec(p.pos), vec(p.dir))
+      -- CSP 0.2.11 faces the car *against* the direction it's given (M3, issue #14), so pass the
+      -- reverse of the road's forward vector to face along the road.
+      physics.setCarPosition(0, vec(p.pos), vec({ -p.dir[1], -p.dir[2], -p.dir[3] }))
       wait = SETTLE_S
     else
       wait = wait - dt
@@ -95,17 +117,10 @@ function script.update(dt)
         record(points[index])
         if options.screenshots_every > 0 and (index - 1) % options.screenshots_every == 0 then
           ac.makeScreenshot(dir .. '/shot_' .. index .. '.png', ac.ScreenshotFormat.PNG)
+          hold = SHOT_HOLD_S
         end
         index = index + 1
-        if index > #points then
-          state = 'done'
-          save('results.json', { results = results, csp = ac.getPatchVersionCode() })
-          save('status.json', { state = state, points = #points })
-          -- os.remove is a stub inside CSP's sandbox; io.deleteFile is the real one. Without this the
-          -- probe would run again (and teleport the car) on every later launch.
-          io.deleteFile(dir .. '/points.json')
-          if options.quit then ac.shutdownAssettoCorsa() end
-        end
+        if index > #points and hold == nil then finish() end
       end
     end
   end
