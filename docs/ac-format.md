@@ -85,7 +85,10 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
   - normal[3], length to the next point
   - forward[3], tag (0), grade
 - **Grid:** `hasGrid = 0`; the game builds and caches the grid itself.
-- **Hints (`data/ai_hints.ini`):** one `[HINT_0]` from the finish gate (`START`, a fraction of the spline) to its end (`END=1.0`) with `VALUE=0.5`, so the AI slows over the run-off. AC's AI sets its own speed (M3), so a hint is the way to slow it. **To confirm in game (M4):** that AI cars stop in the run-off.
+- **End:** the AI line stops 40 m before the road's end (`AI_END_SHORT_M`), short of the invisible end wall.
+- **Hints (`data/ai_hints.ini`):** AC's AI sets its own speed (M3), so hints are the way to slow it. Three `[HINT_n]` sections run from the finish gate to the end of the line, as fractions of the spline: pace 0.5, then 0.2 from 150 m before the line's end, then 0.05 for its last 60 m.
+  - With a single hint of 0.5 and the line running to the road's end, the AI slowed to 40-75 km/h but still reached the end wall at about 45 km/h, and AC put it back at the start (in game, 3 Nov).
+  - **To confirm in game (M4):** that the ramp stops AI cars on the road before the wall.
 - **Placement:** points every 1 m along the centreline, 0.4 m above the road. Points on the surface have crashed the game in another generator.
 - **Speed:** grip-limited, `v = sqrt(μ g R)` with μ = 1.05, capped at 130 km/h. It then gets a forward pass for acceleration and a backward pass for braking, both adjusted for grade. AC's AI finished the forward layout at M3, but it ignores this speed and set its own, up to 214 km/h in an Abarth 500.
 

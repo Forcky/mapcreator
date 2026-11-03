@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 
-from mapcreator.core.layout import RoadModel
+from mapcreator.core.layout import AI_END_SHORT_M, AI_RUNOFF_RAMP, RoadModel
 from mapcreator.core.scene import LocalFrame
 
 LIFT_M = 0.4
@@ -57,8 +57,28 @@ def speed_profile(d: np.ndarray, curvature: np.ndarray, grade: np.ndarray) -> np
     return v
 
 
-def build(road: RoadModel, frame: LocalFrame, step: float = 1.0) -> AiLine:
-    d = np.arange(END_INSET_M, road.length - END_INSET_M, step)
+def runoff_hints(length: float, finish: float, *, end_short_m: float = AI_END_SHORT_M,
+                 ramp=AI_RUNOFF_RAMP) -> list[tuple[float, float, float]]:
+    """The AI's pace after the finish, as (start, end, pace) sections in fractions of its spline (0 at the start
+    of the line, 1 at its end) for a layout of `length` metres with the finish at `finish`. Contiguous, from the
+    finish to the end of the line, the pace falling section by section. A run-off too short for a section skips
+    it."""
+    first, last = END_INSET_M, length - end_short_m
+    span = max(last - first, 1.0)
+    out, start = [], finish
+    for before_end, pace in ramp:
+        end = max(start, last - before_end)
+        if end > start:
+            out.append(((start - first) / span, (end - first) / span, pace))
+            start = end
+    if out:
+        out[-1] = (out[-1][0], 1.0, out[-1][2])
+    return out
+
+
+def build(road: RoadModel, frame: LocalFrame, step: float = 1.0, *, end_short_m: float = END_INSET_M) -> AiLine:
+    """The AI line, from END_INSET_M after the layout's start to `end_short_m` before its end."""
+    d = np.arange(END_INSET_M, road.length - end_short_m, step)
 
     def f(a):
         return np.interp(d, road.d, a)

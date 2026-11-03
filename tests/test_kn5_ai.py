@@ -166,6 +166,29 @@ def test_the_finish_leaves_a_run_off_and_the_ai_slows_over_it():
     assert layout.finish_distance(12_800.0) == 12_800.0 - layout.RUNOFF_M
     assert layout.finish_distance(1_000.0) == 1_000.0 - 150.0  # a short route gives up a share, not 250 m
     assert layout.finish_distance(200.0) == 200.0 - layout.GATE_FROM_END_M  # never less than before
-    text = package.ai_hints_ini(0.98)
-    assert text.startswith("[HINT_0]\r\nSTART=0.9800\r\nEND=1.0000\r\nVALUE=0.5")
-    assert "START=1.0000" in package.ai_hints_ini(1.2)
+    # The AI eases off after the finish and is all but stopped where its line ends, short of the end wall.
+    length = 12_800.0
+    finish = layout.finish_distance(length)
+    sections = ai_line.runoff_hints(length, finish)
+    assert [pace for *_, pace in sections] == [0.5, 0.2, 0.05]
+    assert all(a[1] == b[0] for a, b in zip(sections, sections[1:])) and sections[-1][1] == 1.0
+    last = length - layout.AI_END_SHORT_M
+    assert sections[0][0] == pytest.approx((finish - ai_line.END_INSET_M) / (last - ai_line.END_INSET_M))
+    assert sections[1][0] == pytest.approx((last - 150 - ai_line.END_INSET_M) / (last - ai_line.END_INSET_M))
+    text = package.ai_hints_ini(sections)
+    assert text.count("[HINT_") == 3 and "[HINT_2]\r\nSTART=" in text and text.rstrip().endswith("VALUE=0.05")
+    # A short route's run-off keeps only the sections that fit, still ending at the end of the line.
+    short = ai_line.runoff_hints(300.0, layout.finish_distance(300.0))
+    assert short and short[-1][1] == 1.0 and all(a < b for a, b, _ in short)
+
+
+def test_the_ai_line_stops_short_of_the_end_wall():
+    s = np.arange(0.0, 1000.0)
+    flat = np.zeros(s.size)
+    road = RoadModel.from_arrays(s, np.column_stack([s, flat]), flat, flat, flat, flat, np.full(s.size, 3.0),
+                                 np.full(s.size, 3.0), flat, flat, False)
+    from mapcreator.core import layout
+
+    line = ai_line.build(road, LocalFrame(0.0, 0.0, 0.0), end_short_m=layout.AI_END_SHORT_M)
+    assert line.pos[0][0] == pytest.approx(ai_line.END_INSET_M)
+    assert line.pos[-1][0] <= 999.0 - layout.AI_END_SHORT_M + 1.0
