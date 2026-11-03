@@ -135,10 +135,11 @@ def test_models_suit_the_tree_height():
 
 def test_tree_list_lines():
     text = treefx.trees_txt(["euc_tall", "wattle"], np.array([1, 0]), np.array([[1.234, 5.0, -6.789], [10, 2, 3]]),
-                            np.array([12.4, 300.0]), np.array([0.5, 1.25]), np.array([1.0, 0.9]),
-                            "Test road: 2 trees.\nSecond line.")
-    lines = text.split("\r\n")
-    assert lines[0] == "; Test road: 2 trees." and lines[1] == "; Second line."
+                            np.array([12.4, 300.0]), np.array([0.5, 1.25]), np.array([1.0, 0.9]))
+    assert text.endswith("\r\n")
+    lines = text[:-2].split("\r\n")
+    # Only configuration and tree lines: CSP took a comment line for a model name and loaded no trees.
+    assert all(line.startswith(("configure: ", "tree: ")) for line in lines)
     assert "configure: size variance = 1, 1" in lines
     assert "tree: wattle.bin; pos=1.23, 5.00, -6.79; angle = 12; size = 0.500; width = 1.000" in lines
     assert "tree: euc_tall.bin; pos=10.00, 2.00, 3.00; angle = 300; size = 1.250; width = 0.900" in lines

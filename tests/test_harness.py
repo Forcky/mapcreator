@@ -64,3 +64,35 @@ def test_no_race_ini_is_a_clear_error_not_an_empty_session(tmp_path, monkeypatch
 def test_documents_comes_from_windows_not_a_guess():
     docs = ac_harness._documents()
     assert docs.is_dir() and docs.name.lower().endswith("documents")
+
+
+# Trimmed from the M3 logs (CSP 0.2.11): no "LOADING MODEL" line, and CSP marks failures with 💥.
+AC_LOG = """[SESSION_0] TYPE: 1
+Creating physics track: grasstree_hill [forward]
+DEBUG TIMER: TrackAvatar::init3D():285.438400
+STARTING PHYSICS ENGINE
+ERROR: NO STAT FOR grasstree_hill
+"""
+CSP_LOG = """   ef9     M ✅ Config for grasstree_hill found: E:/AC/content/tracks/grasstree_hill/extension/ext_config.ini
+  2557     M 💥 Failed to load trees: Tree manifest is missing: E:/AC/content/tracks/grasstree_hill/extension/trees/x
+   205     M 💬 Setting chunks for: grasstree_hill, nodes: 312
+"""
+
+
+def test_the_log_check_reads_a_csp_load_and_catches_a_tree_failure(tmp_path, monkeypatch, capsys):
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "log.txt").write_text(AC_LOG, encoding="utf-8")
+    (tmp_path / "logs" / "custom_shaders_patch.log").write_text(CSP_LOG, encoding="utf-8")
+    monkeypatch.setattr(ac_harness, "ac_docs", lambda: tmp_path)
+    assert ac_harness.check_log("grasstree_hill") == 1  # the trees didn't load
+    out = capsys.readouterr().out
+    assert "track model loaded: True" in out and "physics started: True" in out
+    assert "errors naming the track: 0" in out  # NO STAT is AC's lap-record cache, not a track error
+    assert "CSP log errors naming the track or its config: 1" in out and "Tree manifest is missing" in out
+    assert "CSP model nodes: grasstree_hill, nodes: 312" in out
+    (tmp_path / "logs" / "custom_shaders_patch.log").write_text(
+        "\n".join(ln for ln in CSP_LOG.splitlines() if "Failed" not in ln), encoding="utf-8")
+    assert ac_harness.check_log("grasstree_hill") == 0
+    capsys.readouterr()
+    ac_harness.check_log("grasstree")  # an id that's only a prefix of the loaded one
+    assert "track model loaded: False" in capsys.readouterr().out

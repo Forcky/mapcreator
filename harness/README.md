@@ -4,7 +4,7 @@ Assetto Corsa's licence covers personal use, so the game never runs as part of a
 
 It goes through **Content Manager (CM)**, which most players use to install and launch AC. Set `ac_root` and `cm_path` in `config.local.toml`.
 
-**Status:** written but **untested**. It gets its first run at milestone M3.
+**Status:** first run at milestone M3, with CSP 0.2.11 and Content Manager's default starter. The launch, the shared-memory probe, the log check and the automated probe all worked.
 
 ## First drive checklist (M3)
 
@@ -18,6 +18,8 @@ It goes through **Content Manager (CM)**, which most players use to install and 
 
    CM should list "Grasstree Hill Road (north-east)" and "(south-west)". The north-east layout should be the default, with preview and outline and no red warnings.
 4. **Drive:** `.venv\Scripts\python harness/ac_harness.py launch grasstree_hill --layout forward`, or pick it in CM's Quick Drive. Press Drive in the pits menu.
+   - AC opens a UDP telemetry port, so Windows Firewall may ask about `acs.exe` on the first launch. Answer it before scripting any input: the prompt keeps the keyboard and mouse focus, and synthetic clicks never reach AC.
+   - With no wheel to hand, press Ctrl+C in the session: AC's AI then drives your car along the AI line to the finish. Ctrl+G toggles the automatic gearbox. Content Manager rewrites `assists.ini` on every launch, so set assists in CM or in the session, not in the file.
 5. **While on track:** `.venv\Scripts\python harness/ac_harness.py probe` should show:
    - status 2 (live)
    - all four wheel loads above 100 N
@@ -28,7 +30,7 @@ It goes through **Content Manager (CM)**, which most players use to install and 
    - Do guard rails and houses stop the car?
    - Any gaps, bumps or seams? Is the camber believable?
    - With CSP: is there Grass FX grass on the verges and none on the road?
-7. **After the session:** `.venv\Scripts\python harness/ac_harness.py results` lists the times. It's still unconfirmed whether A→B runs appear as laps.
+7. **After the session:** `.venv\Scripts\python harness/ac_harness.py results` lists the times. An A→B run appears as one lap with its time. A lap AC's AI drove for you (Ctrl+C in a session) is recorded as time −1 with a cut.
 8. **After quitting AC:** `.venv\Scripts\python harness/ac_harness.py check-log grasstree_hill` checks `log.txt` and the CSP log.
 9. Repeat for `--layout reverse`, then add an AI opponent in Quick Drive and check it reaches the finish (M4).
 
@@ -47,7 +49,7 @@ Write these into the private deployment notes:
 - frame rate on the GTX 1660 Ti, with and without CSP
 - every log error
 
-## Automated probe (CSP Lua app, untested)
+## Automated probe (CSP Lua app)
 
 `csp_app/mc_probe/` is a Custom Shaders Patch Lua app. It presses Drive, teleports the car along the track and records, at each point:
 - wheel contact, and whether the surface is valid track

@@ -10,16 +10,19 @@ Found in a code review in November 2026 and not fixed yet, or only answerable in
 
 These need the in-game harness on a machine with Assetto Corsa (`docs/dev-handover.md`):
 
-- triangle winding and the front-face convention as AC renders them (the code is self-consistent and matches the KN5 references, but nothing has been drawn in game yet)
 - what `map.ini`'s `SCALE_FACTOR` means to the game's track map
 - what the AI line's `direction` field does
-- the Tree FX model files: written to the converter's layout and read back by our own parser, but not yet loaded by CSP. Still unknown:
-  - the meaning of the trailer's `4`;
-  - how CSP treats a list position's height when surface alignment is on;
-  - whether `size` scales exactly as assumed (model height × size).
-- whether the AI drives the generated `fast_lane.ai` sensibly through hairpins
-- in the harness (`harness/`), checked against Content Manager's source and the CSP SDK but never run:
-  - whether the probe app loads with its manifest (it now declares a small window, as every CSP app found does)
-  - whether `ac.worldCoordinateToTrack` exists (the probe copes if it doesn't, but then reports no lateral offset)
-  - whether `sim.isInMainMenu` is the right signal to press Drive
-  - the CSP log's file name (`custom_shaders_patch.log`) and what race.ini's `[AUTOSPAWN]` does
+- whether the AI drives the generated `fast_lane.ai` sensibly through hairpins (Grasstree Hill has none)
+- in the Tree FX model files: the meaning of the trailer's `4`, and whether `size` scales exactly as assumed (model height × size)
+- CSP rewrites each tree `.bin` the first time it loads it: the same entries, re-packed in another order and about 9 KB larger. Harmless so far, but it suggests our zip differs from the layout CSP's own writer uses.
+- what race.ini's `[AUTOSPAWN]` does
+
+Answered at milestone M3 (Grasstree Hill, both layouts; CSP 0.2.11, Content Manager's default starter):
+
+- **Rendering:** triangle winding and the front-face convention are right. The road, terrain, verges, guard rails, houses and water all draw correctly.
+- **Spawn:** the car spawns on the road with all four wheels loaded, facing along it.
+- **Tree FX:** the models load, and trees stand on the ground with surface alignment on. A comment line in `trees.txt` made CSP load none (fixed: the list has no comments now).
+- **Frame rate:** at about 2,500 trees per km, Tree FX costs about 60% of the frame rate on a GTX 1660 Ti at 1440p, mostly from the trees near the road. The density is still to be decided.
+- **AI:** AC's AI drove the forward layout from the spawn to the finish. It ignores the 130 km/h cap in the line's speed data. The line ends 50 m past the finish gate, and the AI turns round there and leaves the road.
+- **Timing:** the A→B timer starts and stops at the gates. `race_out.json` records the run as a lap with its time. Laps the AI drove for the player are recorded as time −1 with a cut.
+- **Harness:** the probe app loads with its manifest, `ac.worldCoordinateToTrack` and `sim.isInMainMenu` work, and the CSP log is `custom_shaders_patch.log`.

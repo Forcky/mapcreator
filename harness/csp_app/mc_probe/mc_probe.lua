@@ -1,4 +1,4 @@
--- mapcreator probe: development-only Custom Shaders Patch app. UNTESTED until M3.
+-- mapcreator probe: development-only Custom Shaders Patch app. First run at M3, on CSP 0.2.11.
 --
 -- Reads Documents/Assetto Corsa/mapcreator_probe/points.json, written by
 -- `ac_harness.py probe-points`. Then:
@@ -52,9 +52,12 @@ local function record(p)
   end
   local above = car.position + vec3(0, 20, 0)
   local hit = physics.raycastTrack(above, vec3(0, -1, 0), 60)
-  -- Lateral offset and progress along the AI spline; not every CSP version has this call. UNTESTED.
+  -- Lateral offset and progress along the AI spline; not every CSP version has this call (0.2.11 does).
   local track = ac.worldCoordinateToTrack and ac.worldCoordinateToTrack(car.position) or nil
+  -- Frame rate at this point, as CSP reports it; a missing field on the sim struct would throw, hence pcall.
+  local ok, fps = pcall(function() return ac.getSim().fps end)
   results[#results + 1] = {
+    fps = ok and fps or nil,
     i = index,
     requested = p.pos,
     position = { car.position.x, car.position.y, car.position.z },
@@ -73,7 +76,7 @@ function script.update(dt)
       save('status.json', { state = state, points = #points, csp = ac.getPatchVersionCode() })
     end
   elseif state == 'starting' then
-    -- CSP's own start button keys on isInMainMenu (the pits setup screen); confirm in M3.
+    -- CSP's own start button keys on isInMainMenu (the pits setup screen); this works on 0.2.11.
     local sim = ac.getSim()
     if sim.isInMainMenu then
       ac.tryToStart(true)
