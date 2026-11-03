@@ -56,6 +56,24 @@ def test_fail_requeue_and_delete(store, capsys):
     assert admin.main(["show", job.id], store=store) == 1
 
 
+def test_a_finished_job_is_rebuilt_in_place_only_when_asked(store, tmp_path, capsys):
+    from mapcreator.service.storage import LocalStorage
+
+    downloads = LocalStorage(tmp_path / "downloads", "/downloads")
+    job = make(store, 1)[0]
+    claimed = store.claim_next()
+    key = f"{job.id}/road_0.zip"
+    assert store.complete(job.id, claimed.worker_id, {"key": key, "summary": {}})
+    assert admin.main(["requeue", job.id], store=store, storage=downloads) == 1  # done: refused without --done
+    assert store.get(job.id).status == "done"
+    assert admin.main(["requeue", "--done", job.id], store=store, storage=downloads) == 0
+    again = store.get(job.id)
+    assert again.status == "queued" and again.attempts == 0 and again.finished_at is None
+    assert again.result == {"key": key, "summary": {}}  # kept until the rebuild replaces it
+    assert f"purge /downloads/{key}" in capsys.readouterr().out
+    assert store.claim_next().id == job.id  # the same id, so the same download address
+
+
 def test_delete_removes_the_download_too(store, tmp_path):
     from mapcreator.service.storage import LocalStorage
 
