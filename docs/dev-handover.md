@@ -81,6 +81,17 @@ If the track won't load:
 1. Load an open-source generator's demo track (road-to-assetto) as a control.
 2. Compare the two KN5 files with `mapcreator.core.kn5.read`.
 
+## Example roads and what each one tests in game
+
+| Job | Road | What to look at |
+|---|---|---|
+| `examples/grasstree_hill.json` | Grasstree Hill Road (C324), 12.8 km, both directions, all LiDAR | the reference: spawns, timing gates, AI, guard rails, houses |
+| `examples/brinktop_road.json` | Brinktop Road from Richmond, 10.4 km | the 108° turn from Bridge Street into Wellington Street, 0.4 km in, rounded to an 8 m corner: drivable, AI slows to about 31 km/h |
+| `examples/esperance_coast_road.json` | Esperance coast road, 20 km | water: the sea beside the road (CSP's water shader with CSP, a glossy flat surface without); 43,000 3D trees (Tree FX) |
+| `examples/lyell_highway_mt_arrowsmith.json` | Lyell Highway from Bradshaw Bridge, 63 km, both directions | the longest allowed road: load time, frame rate and memory with two 97 MB KN5s and 157,000 trees; grades stay at or under 15% on the non-LiDAR stretches |
+
+Trees are 3D models drawn by Custom Shaders Patch (Tree FX, CSP 0.1.79+); without CSP a track has none.
+
 ## What Content Manager and CSP expect, and what we already do
 
 Taken from reading CM's source and CSP's docs (Nov 2026). None of it has been tried in game yet.
