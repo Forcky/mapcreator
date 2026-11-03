@@ -310,6 +310,7 @@ def results() -> int:
 
 PROBE_APP = ROOT / "harness" / "csp_app" / "mc_probe"
 TELEPORT_TOLERANCE_M = 3.0
+PROBE_END_MARGIN_M = 5.0  # no probe point closer than this to either end of the AI line
 MAX_WHEEL_GAP_M = 1.0  # car centre to wheel contact, vertically
 
 
@@ -333,8 +334,14 @@ def probe_points(track_dir: Path, layout: str, every_m: float, quit_after: bool,
     base = track_dir / layout if layout else track_dir
     line = ai_line.read(base / "ai" / "fast_lane.ai")
     step = max(int(round(every_m / max(float(line.length[1] - line.length[0]), 1e-6))), 1)
+    # Keep a car length off each end of the line: a car centred on its first point has its rear wheels off
+    # the end of the road, which the probe then reports as off the track (Esperance coast road, M3).
+    ends = (line.length >= PROBE_END_MARGIN_M) & (line.length <= line.length[-1] - PROBE_END_MARGIN_M)
+    first = int(ends.argmax())
     pts = []
-    for i in range(0, len(line.pos), step):
+    for i in range(first, len(line.pos), step):
+        if not ends[i]:
+            continue
         fwd = line.extra[i, 13:16]
         pts.append({"pos": [round(float(v), 3) for v in line.pos[i] + [0.0, 0.6, 0.0]],
                     "dir": [round(float(v), 4) for v in fwd], "s_m": round(float(line.length[i]), 1)})
