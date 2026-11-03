@@ -23,6 +23,7 @@ Answered at milestone M3 (Grasstree Hill, both layouts; CSP 0.2.11, Content Mana
 
 - **Rendering:** triangle winding and the front-face convention are right. The road, terrain, verges, guard rails, houses and water all draw correctly.
 - **Spawn:** the car spawns on the road with all four wheels loaded, facing along it.
+- **Without CSP:** not supported, by the maintainer's decision (#28). Plain AC wouldn't load multi-layout tracks (it wants a `<track>.kn5`), built the AI grid on every load (4 minutes for 12.8 km), and its AI crashed on our open AI line. The website, the track description and ATTRIBUTION.txt say CSP is required.
 - **Tree FX:** the models load, and trees stand on the ground with surface alignment on. A comment line in `trees.txt` made CSP load none (fixed: the list has no comments now).
 - **Frame rate:** at about 2,500 trees per km, Tree FX costs about 60% of the frame rate on a GTX 1660 Ti at 1440p, mostly from the trees near the road. Canopy-model builds now keep every real crown (#9), with no distance bands or cap, so their frame rate is still to be measured. WorldCover builds keep the bands and the cap.
 - **AI:** AC's AI drove the forward layout from the spawn to the finish. It ignores the 130 km/h cap in the line's speed data. The line ends 50 m past the finish gate, and the AI turns round there and leaves the road.
