@@ -325,14 +325,20 @@ class JobStore:
             rows = con.execute("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status").fetchall()
         return {s: 0 for s in STATUSES} | {r["status"]: r["n"] for r in rows}
 
-    def requeue(self, job_id: str) -> bool:
+    def requeue(self, job_id: str, *, done_too: bool = False) -> bool:
         """Put a failed or running job back in the queue with its attempts reset. A running job's worker
-        loses it (its next heartbeat gets 409)."""
+        loses it (its next heartbeat gets 409).
+
+        With `done_too`, a finished job is built again in place, for a fix that changes what the build makes:
+        the same id and download address. Its result stays until the new build replaces it, so if the rebuild
+        fails, retention still knows which download to delete.
+        """
+        statuses = ("failed", "running", "done") if done_too else ("failed", "running")
         with self._connect() as con:
             cur = con.execute(
                 "UPDATE jobs SET status = 'queued', worker_id = NULL, attempts = 0, started_at = NULL, "
                 "heartbeat_at = NULL, finished_at = NULL, error = NULL, stage = NULL, failure_json = NULL "
-                "WHERE id = ? AND status IN ('failed', 'running')", (job_id,))
+                f"WHERE id = ? AND status IN ({', '.join('?' * len(statuses))})", (job_id, *statuses))
         return cur.rowcount == 1
 
     def cancel(self, job_id: str, reason: str) -> bool:

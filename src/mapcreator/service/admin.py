@@ -6,6 +6,7 @@ example inside its container:
     docker exec <web container> mapcreator-admin stats
     docker exec <web container> mapcreator-admin list --status failed
     docker exec <web container> mapcreator-admin requeue <job id>
+    docker exec <web container> mapcreator-admin requeue --done <job id>   # rebuild a finished track in place
 
 It works on the database directly, so it needs no token and no network. It
 never prints client-address hashes. New job ids never start with "-"; for an
@@ -55,6 +56,9 @@ def main(argv: list[str] | None = None, *, store: JobStore | None = None, storag
     show.add_argument("id")
     rq = sub.add_parser("requeue", help="put a failed or running job back in the queue, attempts reset")
     rq.add_argument("id")
+    rq.add_argument("--done", action="store_true",
+                    help="a finished job too: build it again in place (same id and download address), for a fix "
+                         "that changes what the build makes")
     cancel = sub.add_parser("fail", help="fail a queued or running job by hand")
     cancel.add_argument("id")
     cancel.add_argument("--reason", default=CANCELLED, help="shown on the job page (default: %(default)s)")
@@ -84,7 +88,11 @@ def main(argv: list[str] | None = None, *, store: JobStore | None = None, storag
         print(json.dumps(_public(record), indent=2))
         return 0
     if args.command == "requeue":
-        done = store.requeue(args.id)
+        done = store.requeue(args.id, done_too=args.done)
+        if done and record.status == "done" and record.result and record.result.get("key"):
+            # The new zip replaces the old one at the same address, and a CDN may hold the old one for hours.
+            print(f"rebuilding in place: if a CDN caches downloads, purge {storage.url(record.result['key'])} "
+                  "once the job is done")
     elif args.command == "fail":
         done = store.cancel(args.id, " ".join(args.reason.split())[:500])
     else:
