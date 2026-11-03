@@ -52,6 +52,17 @@ def groove_ini() -> str:
     return ini([("HEADER", {"GROOVES_NUMBER": "0"})])
 
 
+AI_RUNOFF_PACE = 0.5
+
+
+def ai_hints_ini(finish_fraction: float, pace: float = AI_RUNOFF_PACE) -> str:
+    """`data/ai_hints.ini`: AC's AI drives at `pace` of its own speed from the finish gate to the end of the AI
+    spline. START and END are fractions of the spline (0 at its start, 1 at its end), and VALUE scales the AI's
+    speed between them (the format other tracks use; checked against AC modding guides, Nov 2026)."""
+    start = min(max(finish_fraction, 0.0), 1.0)
+    return ini([("HINT_0", {"START": f"{start:.4f}", "END": "1.0000", "VALUE": f"{pace:g}"})])
+
+
 def crew_ini() -> str:
     return ini([("HEADER", {"SIDE": "1"})])
 

@@ -12,6 +12,10 @@ Each run gets two meshes:
 - `RAIL_*`: the visible beam and posts, visual only.
 - `1WALL_RAIL_*`: an invisible, taller collision wall at the same line. Any
   physics mesh named WALL is a solid barrier in AC.
+
+Both ends of the road are closed too (`end_walls`): an invisible wall across
+the road and well past its verges, so no car, and no AI that turns round at the
+end of its line, drives off the end of the generated world.
 """
 
 from __future__ import annotations
@@ -34,6 +38,9 @@ STEP_M = 2.0
 BEAM = (0.45, 0.75)  # metres above the verge
 POST_W = 0.12
 COLLIDER = (-0.3, 1.0)
+END_WALL_INSET_M = 1.0  # from each end of the road
+END_WALL_HALF_M = 30.0  # either side of the centreline: the road, its verges and some terrain
+END_WALL = (-1.0, 3.0)  # below the lower and above the higher of road and ground
 
 
 def rail_mask(s: np.ndarray, drop: np.ndarray) -> np.ndarray:
@@ -83,6 +90,25 @@ def guard_rails(s, xy, z, heading, half_l, half_r, slope_l, slope_r, dem_sample,
                 meshes.append(_rail_visual(f"RAIL_{name}", line, base, frame))
                 meshes.append(_collider(f"1WALL_RAIL_{name}", line, base, frame))
     return meshes, stats
+
+
+def end_walls(s, xy, z, heading, dem_sample, frame: LocalFrame) -> list[Mesh]:
+    """Invisible walls across the start and the end of the road (`1WALL_END_START`, `1WALL_END_FINISH`)."""
+    out = []
+    offs = np.linspace(-END_WALL_HALF_M, END_WALL_HALF_M, 31)
+    for name, at in (("1WALL_END_START", s[0] + END_WALL_INSET_M), ("1WALL_END_FINISH", s[-1] - END_WALL_INSET_M)):
+        k = int(np.clip(np.searchsorted(s, at), 0, len(s) - 1))
+        h = float(heading[k])
+        line = xy[k] + offs[:, None] * np.array([-np.sin(h), np.cos(h)])
+        ground = np.asarray(dem_sample(line[:, 0], line[:, 1]), dtype=float)
+        ground = np.where(np.isfinite(ground), ground, z[k])
+        lo = np.minimum(ground, z[k]) + END_WALL[0]
+        hi = np.maximum(ground, z[k]) + END_WALL[1]
+        pos, uv, tri = _strip(line, lo, hi, frame, 4.0)
+        along = np.tile([np.cos(h), 0.0, -np.sin(h)], (len(pos), 1))  # facing along the road, in AC axes
+        out.append(Mesh(name, "rail", pos.astype(np.float32), along.astype(np.float32), uv.astype(np.float32), tri,
+                        renderable=False))
+    return out
 
 
 def _strip(line: np.ndarray, lo: np.ndarray, hi: np.ndarray, frame: LocalFrame, uv_len: float):

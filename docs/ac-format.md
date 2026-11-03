@@ -46,12 +46,13 @@ A job with `"layouts": "both"` produces:
 | `1ROAD_###` | ROAD |
 | `1GRASS_V###L/R` (verge and skirt) | GRASS |
 | `1GRASS_T###` (terrain) | GRASS |
-| `1WALL_RAIL_L/R###` (invisible, `isRenderable` 0) and `1WALL_BUILDINGS` | solid barrier (no KEY: any physics mesh named WALL) |
+| `1WALL_RAIL_L/R###` and `1WALL_END_START/FINISH` (invisible, `isRenderable` 0), and `1WALL_BUILDINGS` | solid barrier (no KEY: any physics mesh named WALL) |
 | `RAIL_*`, `BUILDING_ROOF_*`, `WATER_*` | visual only (no leading digit) |
 
 - Each physics mesh name matches exactly one KEY. There is deliberately no `WALL` KEY, because defining one is reported to make walls driveable.
 - **Logic dummies:**
-  - `AC_AB_START_L/R` and `AC_AB_FINISH_L/R` sit 0.5 m outside each road edge, 50 m from each end. L is left of the driving direction.
+  - `AC_AB_START_L/R` and `AC_AB_FINISH_L/R` sit 0.5 m outside each road edge. L is left of the driving direction.
+  - The start gate is 50 m from the layout's start. The finish gate leaves a run-off of real road after it: 250 m, or 15% of a short route, never under 50 m. With only 50 m, AC's AI crossed the finish, reached the end of its line, turned round and left the road (M3).
   - `AC_PIT_0` and `AC_START_0` sit 8 m before the start gate; `AC_HOTLAP_START_0` sits 30 m before it.
   - Spawns are 0.3 m above the road and face the driving direction. Confirmed in game at M3: the car lands on all four wheels, facing along the road.
 - **Pits:** `pitboxes` in `ui_track.json` must equal the number of `AC_PIT_n` dummies (1).
@@ -84,6 +85,7 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
   - normal[3], length to the next point
   - forward[3], tag (0), grade
 - **Grid:** `hasGrid = 0`; the game builds and caches the grid itself.
+- **Hints (`data/ai_hints.ini`):** one `[HINT_0]` from the finish gate (`START`, a fraction of the spline) to its end (`END=1.0`) with `VALUE=0.5`, so the AI slows over the run-off. AC's AI sets its own speed (M3), so a hint is the way to slow it. **To confirm in game (M4):** that AI cars stop in the run-off.
 - **Placement:** points every 1 m along the centreline, 0.4 m above the road. Points on the surface have crashed the game in another generator.
 - **Speed:** grip-limited, `v = sqrt(μ g R)` with μ = 1.05, capped at 130 km/h. It then gets a forward pass for acceleration and a backward pass for braking, both adjusted for grade. AC's AI finished the forward layout at M3, but it ignores this speed and set its own, up to 214 km/h in an Abarth 500.
 

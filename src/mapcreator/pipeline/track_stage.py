@@ -13,7 +13,7 @@ import numpy as np
 from mapcreator import __version__
 from mapcreator.config import Settings
 from mapcreator.core import ai_line, kn5, package, textures, treefx, validate
-from mapcreator.core.layout import Layout, RoadModel, layouts_for, logic_dummies
+from mapcreator.core.layout import Layout, RoadModel, finish_distance, layouts_for, logic_dummies
 from mapcreator.core.scene import Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import mesh_stage, profile_stage, route_stage, scenery_stage, section_stage
@@ -195,6 +195,12 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         _write_text(data / "lighting.ini", package.lighting_ini(), encoding="ascii")
         _write_text(data / "groove.ini", package.groove_ini(), encoding="ascii")
         _write_text(data / "crew.ini", package.crew_ini(), encoding="ascii")
+        # Slow the AI over the run-off after the finish, as a fraction of its spline (which starts and ends
+        # END_INSET_M in from the road's ends).
+        spline = max(road.length - 2 * ai_line.END_INSET_M, 1.0)
+        _write_text(data / "ai_hints.ini",
+                    package.ai_hints_ini((finish_distance(road.length) - ai_line.END_INSET_M) / spline),
+                    encoding="ascii")
 
         direction = package.compass(float(np.arctan2(road.n[-1] - road.n[0], road.e[-1] - road.e[0])))
         name = f"{title} ({direction})" if multi else title

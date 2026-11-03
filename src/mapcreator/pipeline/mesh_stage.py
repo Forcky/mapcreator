@@ -67,6 +67,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
                                                  sec["half_right"], sec["slope_left"], sec["slope_right"],
                                                  dem.sample, frame, allowed=fine)
     meshes += rails
+    meshes += roadside.end_walls(c["s"], c["xy"], c["z"], c["heading"], dem.sample, frame)
 
     scene = Scene(
         frame=frame,

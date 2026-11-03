@@ -8,7 +8,14 @@ A point-to-point track needs:
 
 Spawn dummies point +Z along the driving direction with +Y up, and sit 0.3 m
 above the road. That's inside the 0.15-0.35 m window one open-source generator
-validated in game; others use 0.5 m. Settle it on the first drive (M3).
+validated in game; others use 0.5 m. Confirmed at M3: the car lands on all four
+wheels, facing along the road.
+
+The finish gate leaves a run-off of real road after it (`finish_distance`).
+With 50 m, AC's AI crossed the finish, reached the end of its line, turned
+round and left the road (M3). The track stage also slows the AI over the
+run-off (`package.ai_hints_ini`), and the mesh stage closes both ends of the
+road with invisible walls (`roadside.end_walls`).
 """
 
 from __future__ import annotations
@@ -19,7 +26,9 @@ import numpy as np
 
 from mapcreator.core.scene import Dummy, LocalFrame
 
-GATE_FROM_END_M = 50.0
+GATE_FROM_END_M = 50.0  # the start gate, from the layout's start; also the shortest run-off
+RUNOFF_M = 250.0  # road left after the finish gate, to brake and stop on
+RUNOFF_SHARE = 0.15  # at most this share of a short route
 SPAWN_BEFORE_GATE_M = 8.0
 HOTLAP_BEFORE_GATE_M = 30.0
 SPAWN_HEIGHT_M = 0.3
@@ -80,6 +89,11 @@ class RoadModel:
                 "slope_right": f(self.slope_right)}
 
 
+def finish_distance(length: float) -> float:
+    """Where the finish gate goes on a layout of `length` metres: before a run-off of real road."""
+    return length - max(GATE_FROM_END_M, min(RUNOFF_M, RUNOFF_SHARE * length))
+
+
 def _forward_ac(heading: float) -> list[float]:
     # Direction of travel (cos h, sin h) in E/N -> AC (x = east, z = -north).
     return [float(np.cos(heading)), 0.0, float(-np.sin(heading))]
@@ -106,7 +120,7 @@ def logic_dummies(road: RoadModel, frame: LocalFrame) -> list[Dummy]:
         out.append(Dummy(name, pos, _forward_ac(p["heading"])))
 
     start = GATE_FROM_END_M
-    finish = road.length - GATE_FROM_END_M
+    finish = finish_distance(road.length)
     gate("AC_AB_START", start)
     gate("AC_AB_FINISH", finish)
     spawn("AC_PIT_0", start - SPAWN_BEFORE_GATE_M)

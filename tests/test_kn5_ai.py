@@ -158,3 +158,14 @@ def test_map_ini_maps_world_to_pixels():
                                            (-np.pi / 4, "south-east"), (np.pi, "west")])
 def test_compass(heading, label):
     assert package.compass(heading) == label
+
+
+def test_the_finish_leaves_a_run_off_and_the_ai_slows_over_it():
+    from mapcreator.core import layout, package
+
+    assert layout.finish_distance(12_800.0) == 12_800.0 - layout.RUNOFF_M
+    assert layout.finish_distance(1_000.0) == 1_000.0 - 150.0  # a short route gives up a share, not 250 m
+    assert layout.finish_distance(200.0) == 200.0 - layout.GATE_FROM_END_M  # never less than before
+    text = package.ai_hints_ini(0.98)
+    assert text.startswith("[HINT_0]\r\nSTART=0.9800\r\nEND=1.0000\r\nVALUE=0.5")
+    assert "START=1.0000" in package.ai_hints_ini(1.2)
