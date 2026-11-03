@@ -25,7 +25,8 @@ from scipy.spatial import cKDTree
 from mapcreator.core.scene import MAX_VERTICES, LocalFrame, Mesh
 from mapcreator.core.sprites import ROOF_COLOURS
 
-# Distance bands from the centreline: (up to metres, share of trees kept).
+# Made-up trees only (tree cover with no crowns, e.g. WorldCover): distance bands from the centreline,
+# (up to metres, share of trees kept). Real crowns from a canopy model are all kept (`keep_trees`).
 TREE_BANDS = ((60.0, 1.0), (150.0, 0.55), (250.0, 0.25))
 TREE_REACH_M = TREE_BANDS[-1][0]
 COVER_SPACING_M = 7.0  # candidate spacing where only tree *cover* is known
@@ -33,7 +34,7 @@ CLEAR_OF_VERGE_M = 2.0
 BUILDING_REACH_M = 250.0
 STOREY_M = 3.0
 SINK_M = 0.4
-MAX_TREES_PER_KM = 2500  # keeps dense forest within a frame-rate budget
+MAX_TREES_PER_KM = 2500  # made-up trees only: keeps their dense forest within a frame-rate budget
 
 
 @dataclass
@@ -78,6 +79,19 @@ def candidates_from_cover(region: shapely.Geometry, rng: np.random.Generator,
 def heights_for_cover(n: int, rng: np.random.Generator) -> np.ndarray:
     """Plausible dry-eucalypt heights where no canopy model exists."""
     return np.clip(rng.normal(18.0, 4.5, n), 8.0, 32.0)
+
+
+def keep_trees(trees: Trees, centre_xy: np.ndarray, length_m: float, rng: np.random.Generator, *,
+               real_crowns: bool) -> Trees:
+    """The trees that go in the scene.
+
+    Real crowns (a canopy model: each a tree that's there, at its own height) are all kept, so the forest is
+    as close to real life as the data allows. Made-up positions (only tree cover is known) are thinned with
+    distance from the road and capped per km.
+    """
+    if real_crowns:
+        return trees
+    return cap_trees(thin_by_distance(trees, centre_xy, rng), centre_xy, length_m, rng)
 
 
 def thin_by_distance(trees: Trees, centre_xy: np.ndarray, rng: np.random.Generator) -> Trees:

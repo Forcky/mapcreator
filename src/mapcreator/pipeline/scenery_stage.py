@@ -1,9 +1,10 @@
 """Stage 4b: trees and buildings around the road, as a second scene the track stage merges.
 
 Trees come from the region's individual-crown canopy model when one is
-configured (Tasmania's 2 m CHM mirror), otherwise from ESA WorldCover tree
-cover. Buildings come from the region's footprint layer. Everything here is
-visual only.
+configured (Tasmania's 2 m CHM mirror), and then every crown in the corridor is
+kept, at its own height. Otherwise they're made-up positions in ESA WorldCover
+tree cover, thinned with distance and capped per km. Buildings come from the
+region's footprint layer. Everything here is visual only.
 
 Trees are 3D models in a Custom Shaders Patch Tree FX list (`treefx/`), which
 only CSP reads; the KN5 has no trees of its own. The track stage packs the list
@@ -92,8 +93,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     if built is not None and len(trees):
         shapely.prepare(built)
         trees = trees.subset(~shapely.contains_xy(built, trees.xy[:, 0], trees.xy[:, 1]))
-    trees = scenery.thin_by_distance(trees, xy, rng)
-    trees = scenery.cap_trees(trees, xy, float(c["s"][-1]), rng)
+    trees = scenery.keep_trees(trees, xy, float(c["s"][-1]), rng, real_crowns=canopy is not None)
     ground = dem.sample(trees.xy[:, 0], trees.xy[:, 1]) if len(trees) else np.zeros(0)
     ok = np.isfinite(ground)
     trees, ground = trees.subset(ok), ground[ok]
