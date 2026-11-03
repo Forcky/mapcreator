@@ -50,6 +50,41 @@ def test_gentle_bends_are_not_filleted():
     assert np.allclose(pts, line)
 
 
+def _grid_dem(cell: float, rough: float, seed: int = 0):
+    """A hillside rising 30% to the north, on a grid of `cell` metres, bilinear between cells, with
+    `rough` metres of noise per cell: LiDAR-like at 2 m with noise, coarse at 25 m without."""
+    rng = np.random.default_rng(seed)
+    n = int(1200 / cell) + 2
+    xs = np.arange(n) * cell - 100.0
+    zz = 0.3 * xs[:, None] + 0.0 * xs[None, :] + rng.normal(0, rough, (n, n))
+    from scipy.interpolate import RegularGridInterpolator
+
+    f = RegularGridInterpolator((xs, xs), zz, method="linear", bounds_error=False, fill_value=np.nan)
+    return lambda x, y: f(np.column_stack([np.ravel(y), np.ravel(x)]))
+
+
+def test_lidar_ground_is_fine_and_a_resampled_coarse_model_is_not():
+    s = np.arange(0.0, 1000.0)
+    xy = np.column_stack([s, np.full(s.size, 500.0)])
+    heading = np.zeros(s.size)
+    assert pf.fine_stations(s, xy, heading, _grid_dem(2.0, 0.08)).all()
+    assert not pf.fine_stations(s, xy, heading, _grid_dem(25.0, 0.0)).any()
+
+
+def test_a_coarse_stretch_is_capped_and_pinned_while_fine_stretches_keep_their_heights():
+    s = np.arange(0.0, 3000.0)
+    road = 100 + 0.04 * s  # a steady 4% climb
+    bump = np.where((s > 1450) & (s < 1580), 34.0 * np.sin(np.pi * (s - 1450) / 130), 0.0)  # a hillside read
+    z_raw = road + bump
+    fine = (s < 1200) | (s > 1800)
+    prof = pf.mixed_profile(s, z_raw, np.zeros(s.size, bool), fine)
+    assert np.abs(prof.grade).max() <= pf.COARSE_MAX_GRADE + 0.01
+    far = (s < 1000) | (s > 2000)
+    assert np.abs(prof.z[far] - pf.smooth_profile(s, z_raw, np.zeros(s.size, bool)).z[far]).max() < 0.05
+    every_fine = pf.mixed_profile(s, road, np.zeros(s.size, bool), np.ones(s.size, bool))
+    assert np.allclose(every_fine.z, pf.smooth_profile(s, road, np.zeros(s.size, bool)).z)
+
+
 def test_straight_line_has_no_curvature():
     line = cl.smooth(np.array([[0, 0], [300, 0], [600, 0.0]]))
     assert np.abs(line.curvature).max() < 1e-4

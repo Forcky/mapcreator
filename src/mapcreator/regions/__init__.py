@@ -60,7 +60,7 @@ class Region:
 def _tas_dem(settings: Settings):
     from mapcreator.providers.tas_list.dem import TasDem
 
-    return TasDem(settings.tas_dem_source, settings.cache_dir)
+    return TasDem(settings.tas_dem_source, settings.cache_dir, user_agent=settings.user_agent)
 
 
 def _tas_canopy(settings: Settings):

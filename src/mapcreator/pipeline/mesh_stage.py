@@ -61,10 +61,11 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, ground, frame)
     meshes += water_core.meshes(water, frame)
     rails, rail_stats = [], {"skipped": "DEM too coarse to place rails"}
-    if getattr(dem, "resolution_m", 2.0) <= FINE_DEM_M:
+    fine = c["fine"] if "fine" in c else np.full(len(c["s"]), getattr(dem, "resolution_m", 2.0) <= FINE_DEM_M)
+    if fine.any():  # only where the DEM shows real drops: a coarse one shows hillsides as cliffs
         rails, rail_stats = roadside.guard_rails(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"],
                                                  sec["half_right"], sec["slope_left"], sec["slope_right"],
-                                                 dem.sample, frame)
+                                                 dem.sample, frame, allowed=fine)
     meshes += rails
 
     scene = Scene(

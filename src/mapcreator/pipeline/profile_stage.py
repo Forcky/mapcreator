@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict
 
 import numpy as np
@@ -13,6 +14,8 @@ from mapcreator.job import Job
 from mapcreator.pipeline import route_stage
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.regions import FINE_DEM_M, job_region
+
+log = logging.getLogger(__name__)
 
 STAGE = "02_profile"
 # DEM tiles are fetched this far either side of the road, enough for the terrain corridor later.
@@ -47,7 +50,23 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     resolution = getattr(dem, "resolution_m", 2.0)
     coarse = resolution > FINE_DEM_M
     cutoff = max(pf.DEFAULT_CUTOFF_M, 8.0 * resolution) if coarse else pf.DEFAULT_CUTOFF_M
-    prof = pf.smooth_profile(line.s, z_raw, _fill_mask(run_idx, runs), cutoff_m=cutoff)
+    # Where the DEM really has the detail its grid suggests. A fine DEM made of mixed sources is checked
+    # along the road; the section and mesh stages read this too (camber, guard rails).
+    fine_source = "resolution"
+    if coarse:
+        fine = np.zeros(len(line.s), dtype=bool)
+    elif getattr(dem, "mixed_detail", False):
+        try:
+            fine, fine_source = dem.lidar_mask(line.xy), "LiDAR index"
+        except Exception as e:  # noqa: BLE001 - the index only sharpens the profile; fall back to the ground
+            log.warning("LiDAR index unavailable (%s: %s); judging the DEM by its texture", type(e).__name__, e)
+            fine, fine_source = pf.fine_stations(line.s, line.xy, line.heading, dem.sample), "texture"
+    else:
+        fine = np.ones(len(line.s), dtype=bool)
+    if coarse:
+        prof = pf.smooth_profile(line.s, z_raw, _fill_mask(run_idx, runs), cutoff_m=cutoff)
+    else:
+        prof = pf.mixed_profile(line.s, z_raw, _fill_mask(run_idx, runs), fine)
     if coarse:
         first = prof
         capped = pf.limit_grade(line.s, first.z)
@@ -58,14 +77,16 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     np.savez_compressed(
         work.stage(STAGE) / "centreline.npz",
         s=line.s, xy=line.xy, heading=line.heading, curvature=line.curvature, run=run_idx,
-        z_raw=z_raw, z=prof.z, grade=prof.grade, vc=prof.vertical_curvature, filled=prof.filled,
+        z_raw=z_raw, z=prof.z, grade=prof.grade, vc=prof.vertical_curvature, filled=prof.filled, fine=fine,
     )
     summary = st.as_dict() | {
         "dem_tiles": tiles,
         "dem_resolution_m": getattr(dem, "resolution_m", None),
         "dem_lidar_coverage": getattr(dem, "coverage", None),
         "profile_cutoff_m": cutoff,
-        "grade_capped": coarse,
+        "grade_capped": coarse or not fine.all(),
+        "dem_fine_share": round(float(fine.mean()), 3),
+        "dem_fine_source": fine_source,
         "centreline_max_deviation_m": round(line.max_deviation_m, 2),
         "min_radius_m": round(float(1 / max(np.abs(line.curvature).max(), 1e-9)), 1),
     }

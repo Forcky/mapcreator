@@ -8,6 +8,16 @@ dips and crests longer than the cutoff survive, and DEM speckle doesn't.
 Bridges and tunnels: the DEM is bare earth, so under a bridge it shows the
 gully floor. Those stretches are bridged with a straight grade between their
 ends before smoothing.
+
+Coarse stretches of a fine grid. Tasmania's statewide 2 m DEM is about 65%
+LiDAR; the rest is a coarser model resampled onto the same 2 m grid. There a
+road that contours round a steep hillside reads the hillside: 51% over 10 m on
+the Lyell Highway in the Franklin-Gordon (Nov 2026). The provider says which
+stretches are LiDAR (Tasmania: theLIST's LiDAR index); `fine_stations` is the
+fallback, judging by the ground's texture beside the road, which catches most
+coarse stretches but takes some steep coarse hillsides for LiDAR. Then
+`mixed_profile` treats the coarse stretches as a coarse DEM is treated (harder
+smoothing and a grade cap), pinned to the fine profile where they meet it.
 """
 
 from __future__ import annotations
@@ -115,6 +125,18 @@ def smooth_profile(s: np.ndarray, z_raw: np.ndarray, fill_mask: np.ndarray, *,
 
 COARSE_MAX_GRADE = 0.15
 
+# Ground texture: LiDAR ground is rough at 2 m (ditches, banks, a road's own cut and fill); a coarse model
+# resampled onto a 2 m grid is smooth between its own cells. Measured as the RMS Laplacian of 40 m patches
+# beside the road on a 2 m lattice (Nov 2026): every patch on Grasstree Hill and Brinktop Road (LiDAR) above
+# 0.011 /m, medians 0.021-0.046; three quarters of the Lyell Highway through the Franklin-Gordon under 0.009,
+# median 0.005.
+FINE_TEXTURE = 0.008
+TEXTURE_STEP_M = 100.0
+TEXTURE_PATCH_M = 40.0
+TEXTURE_GRID_M = 2.0
+TEXTURE_OFFSET_M = 15.0  # patch centres this far either side of the centreline: beside the road, not on it
+COARSE_LIKE_M = 25.0  # how the coarse parts behave: their smoothing cutoff is 8 cells of this
+
 
 def limit_grade(s: np.ndarray, z: np.ndarray, max_grade: float = COARSE_MAX_GRADE) -> np.ndarray:
     """Cap the grade while keeping both end heights.
@@ -135,6 +157,74 @@ def limit_grade(s: np.ndarray, z: np.ndarray, max_grade: float = COARSE_MAX_GRAD
         clipped[free] += missing / float(np.sum(ds[free]))
         clipped = np.clip(clipped, -max_grade, max_grade)
     return z[0] + np.concatenate([[0.0], np.cumsum(clipped * ds)])
+
+
+def ground_texture(sample, x: np.ndarray, y: np.ndarray, *, grid: float = TEXTURE_GRID_M,
+                   size: float = TEXTURE_PATCH_M) -> np.ndarray:
+    """RMS Laplacian (1/m) of a `size` square patch of the DEM centred on each (x, y), on a `grid` lattice.
+    NaN where the patch has no data."""
+    g = np.arange(-size / 2, size / 2 + 1e-9, grid)
+    gx, gy = np.meshgrid(g, g)
+    px, py = np.asarray(x, float)[:, None, None] + gx, np.asarray(y, float)[:, None, None] + gy
+    h = np.asarray(sample(px.ravel(), py.ravel()), dtype=float).reshape(px.shape)
+    lap = (h[:, 1:-1, :-2] + h[:, 1:-1, 2:] + h[:, :-2, 1:-1] + h[:, 2:, 1:-1] - 4 * h[:, 1:-1, 1:-1]) / grid ** 2
+    with np.errstate(invalid="ignore"):
+        ok = np.isfinite(lap).any(axis=(1, 2))
+        out = np.full(len(h), np.nan)
+        out[ok] = np.sqrt(np.nanmean(lap[ok] ** 2, axis=(1, 2)))
+    return out
+
+
+def fine_stations(s: np.ndarray, xy: np.ndarray, heading: np.ndarray, sample, *,
+                  step: float = TEXTURE_STEP_M) -> np.ndarray:
+    """For each station: does the DEM have real detail here (LiDAR), or is it a coarse model on a fine grid?
+
+    Judged every `step` metres from patches on both sides of the road (the rougher side counts, so a lake or
+    a paddock on one side doesn't decide it), then by the majority of each probe and its neighbours.
+    """
+    probes = np.arange(step / 2, max(float(s[-1]), step / 2) + 1e-9, step)
+    idx = np.clip(np.searchsorted(s, probes), 0, len(s) - 1)
+    nrm = np.column_stack([-np.sin(heading[idx]), np.cos(heading[idx])]) * TEXTURE_OFFSET_M
+    left = ground_texture(sample, *(xy[idx] + nrm).T)
+    right = ground_texture(sample, *(xy[idx] - nrm).T)
+    with np.errstate(invalid="ignore"):
+        fine = np.fmax(left, right) >= FINE_TEXTURE
+    if len(fine) >= 3:
+        f = np.r_[fine[0], fine, fine[-1]].astype(int)
+        fine = (f[:-2] + f[1:-1] + f[2:]) >= 2
+    return fine[np.clip((s // step).astype(int), 0, len(fine) - 1)]
+
+
+def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """[start, end) index ranges where `mask` is true."""
+    d = np.diff(np.r_[0, mask.astype(int), 0])
+    return list(zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1)))
+
+
+def mixed_profile(s: np.ndarray, z_raw: np.ndarray, fill_mask: np.ndarray, fine: np.ndarray, *,
+                  coarse_cutoff_m: float = 8.0 * COARSE_LIKE_M, max_grade: float = COARSE_MAX_GRADE) -> Profile:
+    """`smooth_profile` where the DEM is fine. Coarse stretches are smoothed harder and grade-capped, with
+    their ends pinned to the fine profile (or left where they are at an end of the road), then one light pass
+    smooths the joins."""
+    base = smooth_profile(s, z_raw, fill_mask)
+    if fine.all():
+        return base
+    heavy = smooth_profile(s, z_raw, fill_mask, cutoff_m=coarse_cutoff_m)
+    z = base.z.copy()
+    n = len(s)
+    for a, b in _runs(~fine):
+        lo, hi = max(a - 1, 0), min(b, n - 1)
+        if hi - lo < 2:
+            continue
+        seg = heavy.z[lo:hi + 1].copy()
+        t = (s[lo:hi + 1] - s[lo]) / max(s[hi] - s[lo], 1e-9)
+        start = base.z[lo] if a > 0 else seg[0]
+        end = base.z[hi] if b < n else seg[-1]
+        seg += (start - seg[0]) * (1 - t) + (end - seg[-1]) * t
+        z[lo:hi + 1] = limit_grade(s[lo:hi + 1], seg, max_grade)
+    out = smooth_profile(s, z, np.zeros(n, dtype=bool))
+    out.z_raw, out.filled = z_raw, base.filled
+    return out
 
 
 def _windowed_grade(s: np.ndarray, z: np.ndarray, window_m: float) -> float:

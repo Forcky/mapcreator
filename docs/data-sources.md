@@ -19,7 +19,8 @@ Attribution format: `"<dataset name>" from theLIST © State of Tasmania`, with t
 
 | Need | Dataset | Licence | Notes |
 |---|---|---|---|
-| Elevation | Tasmania statewide 2 m DEM (2021) | CC BY 3.0 AU | About 65% LiDAR-derived; GDA94 / MGA55, AHD. Mirror locally; it's one ~95 GB COG |
+| Elevation | Tasmania statewide 2 m DEM (2021) | CC BY 3.0 AU | About 65% LiDAR-derived; the rest is interpolated from photogrammetric contours, spot heights and the coastline at about 10 m, on the same 2 m grid. GDA94 / MGA55, AHD. Mirror locally; it's one ~95 GB COG |
+| Where that DEM is LiDAR | theLIST LiDAR Coverage Index - All Projects (`Public/Indexes/MapServer/97`) | CC BY 3.0 AU | Project footprints with completion dates, queried by box and cached (`providers/tas_list/lidar_index.py`). Projects finished before the DEM's release (14 Aug 2021) mark its fine stretches; elsewhere the profile is treated as coarse (harder smoothing, 15% grade cap), the camber is left flat and no guard rails are placed. Nothing from it ships in a track |
 | Road cross-checks | LIST Transport Segments | CC BY 3.0 AU | Surface, class, route number, one-way. No width or lanes |
 | Speed limits | State road speed limits | CC BY 3.0 AU | State roads only; not legally authoritative |
 | Corridor bound | State road reserve; cadastral road casements | CC BY 3.0 AU | Legal corridor, not the sealed width |
