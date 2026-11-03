@@ -147,14 +147,29 @@ def test_same_road_returns_the_same_job(client):
     first = submit(client, job(track_id="mine"))
     again = submit(client, job(track_id="someone_elses_name"))
     assert again.status_code == 200 and again.json() == first.json()
-    # Still the same job once it's built.
+    # Still the same job once it's built, by this code.
+    from mapcreator import buildinfo
+
     lease = claim(client)
     client.post(f"/api/worker/jobs/{lease['id']}/complete", headers=AUTH,
-                json={"worker_id": lease["worker_id"], "result": {"key": f"{lease['id']}/mine.zip"}})
+                json={"worker_id": lease["worker_id"], "result": {"key": f"{lease['id']}/mine.zip",
+                                                                  "summary": {"build": buildinfo.version()}}})
     done = submit(client, job(track_id="later"))
     assert done.status_code == 200 and done.json() == {"id": first.json()["id"], "status": "done"}
     # Different options are a different track.
     assert submit(client, job(width="plus_15")).status_code == 201
+
+
+def test_a_road_built_by_older_code_is_built_again(client):
+    first = submit(client, job(track_id="mine"))
+    lease = claim(client)
+    client.post(f"/api/worker/jobs/{lease['id']}/complete", headers=AUTH,
+                json={"worker_id": lease["worker_id"], "result": {"key": f"{lease['id']}/mine.zip",
+                                                                  "summary": {"build": "0123456789ab"}}})
+    again = submit(client, job(track_id="later"))
+    assert again.status_code == 201 and again.json()["id"] != first.json()["id"]
+    # The new build is under way, so asking once more joins it rather than starting a third.
+    assert submit(client, job(track_id="third")).json()["id"] == again.json()["id"]
 
 
 def test_a_failed_road_can_be_asked_for_again(client):
@@ -222,7 +237,8 @@ def test_claim_heartbeat_complete(client):
     assert r.status_code == 200
     status = client.get(f"/api/jobs/{job_id}").json()
     assert status["status"] == "done" and status["finished_at"].endswith("Z")
-    assert status["download_url"] == f"https://downloads.example.org/{job_id}/my_road.zip"
+    link, built = status["download_url"].split("?v=")
+    assert link == f"https://downloads.example.org/{job_id}/my_road.zip" and built.isdigit()
     assert status["summary"] == result["summary"]
     # A second report is refused: the job is no longer running.
     r = client.post(f"{url}/complete", headers=AUTH, json={"worker_id": lease["worker_id"], "result": result})
@@ -383,13 +399,15 @@ def finished_download(tmp_path, **overrides) -> tuple[TestClient, str, bytes]:
 
 def test_download_urls_are_absolute(tmp_path):
     c, job_id, _ = finished_download(tmp_path)
-    assert c.get(f"/api/jobs/{job_id}").json()["download_url"] == f"http://testserver/downloads/{job_id}/my_road.zip"
+    url = c.get(f"/api/jobs/{job_id}").json()["download_url"]
+    assert url.split("?v=")[0] == f"http://testserver/downloads/{job_id}/my_road.zip"
+    assert c.get(url).status_code == 200  # the version in the query doesn't get in the way
 
 
 def test_download_urls_use_the_public_url_when_set(tmp_path):
     c, job_id, _ = finished_download(tmp_path, public_url="https://mapcreator.example.org/")
     url = c.get(f"/api/jobs/{job_id}").json()["download_url"]
-    assert url == f"https://mapcreator.example.org/downloads/{job_id}/my_road.zip"
+    assert url.split("?v=")[0] == f"https://mapcreator.example.org/downloads/{job_id}/my_road.zip"
 
 
 def test_downloads_are_zip_attachments_content_manager_accepts(tmp_path):

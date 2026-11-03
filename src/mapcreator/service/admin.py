@@ -90,9 +90,10 @@ def main(argv: list[str] | None = None, *, store: JobStore | None = None, storag
     if args.command == "requeue":
         done = store.requeue(args.id, done_too=args.done)
         if done and record.status == "done" and record.result and record.result.get("key"):
-            # The new zip replaces the old one at the same address, and a CDN may hold the old one for hours.
-            print(f"rebuilding in place: if a CDN caches downloads, purge {storage.url(record.result['key'])} "
-                  "once the job is done")
+            # The job page's link carries the build time, so it's fresh after the rebuild. A link copied before
+            # it points at the same address, where a CDN may hold the old zip for hours.
+            print(f"rebuilding in place: links copied before now may get the old zip from a CDN for a few hours; "
+                  f"purge {storage.url(record.result['key'])} to stop that")
     elif args.command == "fail":
         done = store.cancel(args.id, " ".join(args.reason.split())[:500])
     else:

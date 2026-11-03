@@ -43,6 +43,7 @@ from pathlib import Path
 import httpx
 from pydantic import ValidationError
 
+from mapcreator import buildinfo
 from mapcreator.core.profile import NoElevation
 from mapcreator.job import Job
 from mapcreator.pipeline.validate_stage import TightBend
@@ -100,6 +101,7 @@ def run_pipeline(job: Job, work_root: Path,
     }
     if results.get("validate", {}).get("tight_bend"):
         summary["tight_bend"] = results["validate"]["tight_bend"]
+    summary["build"] = buildinfo.version()  # which code made it: the web app reuses only a current build
     return BuildOutput(work.root / track_stage.STAGE / f"{job.track_id}.zip", summary)
 
 

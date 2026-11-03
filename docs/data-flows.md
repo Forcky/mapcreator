@@ -52,7 +52,7 @@ Operator flows, outside any job: downloading the OSM extract and building the in
 2. **Submit.** `POST /api/jobs` with the job (waypoints, width option, layouts, track name) and a Turnstile token. The web app, in order:
    - verifies the Turnstile token (when configured);
    - checks every point is in one supported region;
-   - looks for the same road with the same options (the route hash): an existing job, done or in progress, is handed back instead of building it again;
+   - looks for the same road with the same options (the route hash): a job in progress, or one finished by the same version of the track-making code (`buildinfo.version()`, recorded in each build's summary), is handed back instead of building it again. A track built by older code is built again as a new job, so fixes reach the next person who asks;
    - refuses when the queue holds `MAPCREATOR_MAX_QUEUED_JOBS` (50) or this client has submitted `MAPCREATOR_JOBS_PER_IP_PER_DAY` (10) today;
    - names the track `mc_<slug>_<first 8 of the route hash>` and stores the job as `queued`. The hash covers the road and its options, not the length limit, so raising the limit kept every track's id.
    The page then polls `GET /api/jobs/<id>` every 5 seconds. The id is in the page's address (`#job=<id>`), so the link can be bookmarked.
@@ -62,7 +62,7 @@ Operator flows, outside any job: downloading the OSM extract and building the in
    - A too-tight bend also goes back as `code: tight_bend` with its radius, its distance along the road and its place. The job page marks it on the map.
    - Down to a 2.5 m radius, the job status also carries `can_override` and a `retry_job`: the same road with `allow_tight_bends`. **Generate anyway** submits it as a new job, with its own track id, a fresh Turnstile token and the usual limits.
    - A track built that way says so in its description and on the job page.
-6. **Download.** The job page shows a Content Manager install link and a plain download link, both to the public storage URL.
+6. **Download.** The job page shows a Content Manager install link and a plain download link, both to the public storage URL with the build time as `?v=` (storage ignores it). A track rebuilt in place gets a new link, so a CDN's cached copy of the old zip is never handed out for it.
 7. **Expire.** Hourly, on the next request, the web app deletes jobs finished more than `MAPCREATOR_KEEP_DAYS` (30) ago and blanks client-address hashes older than `MAPCREATOR_IP_HASH_DAYS` (2). The bucket's lifecycle rule deletes the zips a few days later. (With `MAPCREATOR_STORAGE=s3` on the web side, the web app deletes them itself.)
 
 ## Inside a build

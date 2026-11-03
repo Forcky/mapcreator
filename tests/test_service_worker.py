@@ -83,7 +83,7 @@ def test_worker_builds_uploads_and_reports(env):
     assert status["status"] == "done", status
     assert status["summary"] == {"title": "Test Road", "length_m": 1000.0}
     tid = public_track_id("test_road", route_hash(Job.model_validate(JOB)))  # hosted builds get a stable id
-    assert status["download_url"] == f"http://testserver/downloads/{job_id}/{tid}.zip"
+    assert status["download_url"].split("?v=")[0] == f"http://testserver/downloads/{job_id}/{tid}.zip"
     download = client.get(status["download_url"])
     assert download.status_code == 200
     assert zipfile.ZipFile(io.BytesIO(download.content)).namelist() == [f"{tid}/ATTRIBUTION.txt"]
@@ -324,8 +324,11 @@ def test_run_pipeline_runs_every_stage_in_order(monkeypatch, tmp_path):
     assert [r[0] for r in ran] == ["route", "profile", "section", "mesh", "scenery", "track", "validate"]
     assert all(r[1] == tmp_path and r[2] == tmp_path / "test_road" for r in ran)
     assert out.zip_path == tmp_path / "test_road" / "05_track" / "test_road.zip"
+    from mapcreator import buildinfo
+
     assert out.summary == {"title": "Test Road", "length_m": 1234.5, "region": "tas",
-                           "layouts": [{"name": "Test Road (N)", "length_m": 1234.5}], "zip_mb": 1.2}
+                           "layouts": [{"name": "Test Road (N)", "length_m": 1234.5}], "zip_mb": 1.2,
+                           "build": buildinfo.version()}
 
 
 def test_the_page_can_tell_whether_a_builder_is_online(env):
