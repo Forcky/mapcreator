@@ -2,7 +2,9 @@
 
 Generate drivable [Assetto Corsa](https://www.assettocorsa.it/) tracks from real roads, using only open data that may legally be redistributed.
 
-**Status:** the full pipeline builds installable tracks and passes its static checks, but **no track has been loaded in the game yet**. That's the next milestone.
+**Status:** the pipeline builds installable tracks, and they've been driven in game end to end (milestone M3: Grasstree Hill both ways, the Esperance coast road and the Lyell Highway).
+
+**Requirements:** the tracks need Assetto Corsa on PC with [Custom Shaders Patch](https://acstuff.club/patch/) (CSP), which draws their trees and water. They aren't built to work without it (#28). Tested with CSP 0.2.11.
 
 - **Coverage:** Tasmania has detailed data (2 m LiDAR elevation, canopy and building footprints). The rest of Australia uses a national fallback (30 m elevation, ESA WorldCover trees, and OSM building footprints when a local OSM index is set up).
 - **Hosted service:** a skeleton (map page, job queue, build worker) is in `src/mapcreator/service/`.
