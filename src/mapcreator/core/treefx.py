@@ -28,6 +28,7 @@ writer, MS-PL); no code copied:
   are greener than red, and bark isn't (see `sprites`).
 
 List (`trees.txt`) line: `tree: <model>.bin; pos=x, y, z; angle = <deg>; size = <mult>; width = <mult>`.
+- Only `configure:` and `tree:` lines, no comments (see `trees_txt`).
 - Position is in AC coordinates, at the tree's base.
 - `size` scales the model's own height (tree.ini HEIGHT); `width` scales it horizontally only.
 """
@@ -423,11 +424,12 @@ def assign(height: np.ndarray, names: list[str], rng: np.random.Generator) -> np
 
 
 def trees_txt(names: list[str], model: np.ndarray, pos: np.ndarray, angle: np.ndarray, size: np.ndarray,
-              width: np.ndarray, header: str) -> str:
-    lines = [f"; {line}" for line in header.splitlines()]
+              width: np.ndarray) -> str:
+    # No comment lines. CSP 0.2.11 read "; Positions are ..." as a tree model's name, then loaded no trees at
+    # all ("Tree manifest is missing"). Its docs name no comment character, and working lists have none.
     # Every tree gives its own size, width and angle; no extra randomness on top.
-    lines += ["configure: size variance = 1, 1", "configure: width variance = 1, 1",
-              "configure: angle variance = 0, 0"]
+    lines = ["configure: size variance = 1, 1", "configure: width variance = 1, 1",
+             "configure: angle variance = 0, 0"]
     for m, p, a, s, w in zip(model, pos, angle, size, width):
         lines.append(f"tree: {names[m]}.bin; pos={p[0]:.2f}, {p[1]:.2f}, {p[2]:.2f}; angle = {a:.0f}; "
                      f"size = {s:.3f}; width = {w:.3f}")

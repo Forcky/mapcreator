@@ -53,7 +53,7 @@ A job with `"layouts": "both"` produces:
 - **Logic dummies:**
   - `AC_AB_START_L/R` and `AC_AB_FINISH_L/R` sit 0.5 m outside each road edge, 50 m from each end. L is left of the driving direction.
   - `AC_PIT_0` and `AC_START_0` sit 8 m before the start gate; `AC_HOTLAP_START_0` sits 30 m before it.
-  - Spawns are 0.3 m above the road and face the driving direction. **To confirm in game:** height and facing.
+  - Spawns are 0.3 m above the road and face the driving direction. Confirmed in game at M3: the car lands on all four wheels, facing along the road.
 - **Pits:** `pitboxes` in `ui_track.json` must equal the number of `AC_PIT_n` dummies (1).
 
 ## Custom Shaders Patch (`extension/`)
@@ -70,6 +70,7 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
   - The position is the tree's base, in AC coordinates.
   - `size` scales the model's own height; `width` scales it horizontally only.
   - The `configure:` lines at the top switch off CSP's own random variation.
+  - No comment lines. CSP 0.2.11 read a `;` line without a colon as a model name, then loaded no trees at all (`Tree manifest is missing`).
 - **`<model>.bin`:** a zip of `tree.ini`, one `.mesh` per LOD and the DDS textures. The byte layout is in `core/treefx.py`. It was re-implemented from Content Manager's tree converter, which is the reference writer.
 
 ## AI line (`ai/fast_lane.ai`, version 7)
@@ -84,7 +85,7 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
   - forward[3], tag (0), grade
 - **Grid:** `hasGrid = 0`; the game builds and caches the grid itself.
 - **Placement:** points every 1 m along the centreline, 0.4 m above the road. Points on the surface have crashed the game in another generator.
-- **Speed:** grip-limited, `v = sqrt(μ g R)` with μ = 1.05, capped at 130 km/h. It then gets a forward pass for acceleration and a backward pass for braking, both adjusted for grade. **To confirm in game:** that AI cars finish.
+- **Speed:** grip-limited, `v = sqrt(μ g R)` with μ = 1.05, capped at 130 km/h. It then gets a forward pass for acceleration and a backward pass for braking, both adjusted for grade. AC's AI finished the forward layout at M3, but it ignores this speed and set its own, up to 214 km/h in an Abarth 500.
 
 ## Validation
 

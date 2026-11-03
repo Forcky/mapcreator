@@ -1,4 +1,4 @@
-"""In-game test harness for development (Windows, Assetto Corsa + Content Manager). UNTESTED until M3.
+"""In-game test harness for development (Windows, Assetto Corsa + Content Manager). First run at M3.
 
 Never part of a public build: AC's licence covers personal use only.
 
@@ -213,7 +213,12 @@ def launch(tid: str, layout: str, car: str) -> None:
 def check_log(tid: str) -> int:
     logs = ac_docs() / "logs"
     lines = (logs / "log.txt").read_text(encoding="utf-8", errors="ignore").splitlines()
-    loaded = any(f"LOADING MODEL content/tracks/{tid}" in ln for ln in lines)
+    # Vanilla AC logs "LOADING MODEL content/tracks/<id>"; with CSP 0.2.11 that line is gone (M3), and
+    # "Creating physics track: <id> [<layout>]" is what's left. The physics start below confirms the load.
+    physics_track = f"Creating physics track: {tid}"
+    loaded = any(f"LOADING MODEL content/tracks/{tid}" in ln
+                 or ln.strip() == physics_track or ln.strip().startswith(physics_track + " [")
+                 for ln in lines)
     physics = any(ln.strip() == "STARTING PHYSICS ENGINE" for ln in lines)
     errors = [ln for ln in lines if tid in ln and "ERROR:" in ln and f"NO STAT FOR {tid}" not in ln
               and not ln.startswith("Saving replay:")]
@@ -221,13 +226,21 @@ def check_log(tid: str) -> int:
     for ln in errors[:20]:
         print("  ", ln)
     csp = logs / "custom_shaders_patch.log"
+    csp_errors = []
     if csp.exists():
-        csp_errors = [ln for ln in csp.read_text(encoding="utf-8", errors="ignore").splitlines()
-                      if "ERROR" in ln.upper() and (tid in ln or "ext_config" in ln.lower())]
+        csp_lines = csp.read_text(encoding="utf-8", errors="ignore").splitlines()
+        # CSP marks failures with 💥 rather than the word ERROR ("💥 Failed to load trees: ..." in M3).
+        csp_errors = [ln for ln in csp_lines
+                      if ("ERROR" in ln.upper() or "💥" in ln or "FAILED" in ln.upper())
+                      and (tid in ln or "ext_config" in ln.lower())]
+        nodes = [ln.split("Setting chunks for:", 1)[1].strip() for ln in csp_lines if f"Setting chunks for: {tid}," in ln]
+        print(f"CSP model nodes: {nodes[-1] if nodes else 'not logged'}")
+        trees = [ln.split("🚀", 1)[1].strip() for ln in csp_lines if "Loading trees:" in ln]
+        print(f"CSP trees: {trees[-1] if trees else 'none listed'}")
         print(f"CSP log errors naming the track or its config: {len(csp_errors)}")
         for ln in csp_errors[:20]:
             print("  ", ln)
-    return 0 if loaded and physics and not errors else 1
+    return 0 if loaded and physics and not errors and not csp_errors else 1
 
 
 def _mapping_exists(name: str) -> bool:
@@ -277,7 +290,7 @@ def probe(samples: int = 3) -> int:
 
 
 def results() -> int:
-    """Times from AC's race_out.json. Whether point-to-point runs appear as laps is still to be confirmed."""
+    """Times from AC's race_out.json. A point-to-point run is one lap; one the AI drove has time -1 (M3)."""
     path = ac_docs() / "out" / "race_out.json"
     if not path.exists():
         print(f"{path} not found")
@@ -358,6 +371,9 @@ def probe_report() -> int:
         if abs(r.get("lateral", 0)) > 1.0:
             problems.append(f"point {r['i']}: {r['lateral']:.2f} outside the AI spline's width")
     print(f"probe points checked: {n}, CSP build {data.get('csp')}")
+    fps = sorted(r["fps"] for r in data.get("results", []) if isinstance(r.get("fps"), (int, float)))
+    if fps:
+        print(f"frame rate at the points: min {fps[0]:.0f}, median {fps[len(fps) // 2]:.0f}, max {fps[-1]:.0f} fps")
     for p in problems[:50]:
         print("  ", p)
     print("PASS" if n and not problems else "FAIL")
