@@ -35,6 +35,16 @@ def test_thinning_keeps_everything_near_the_road_and_less_far_away():
     assert far_kept == pytest.approx(0.25, abs=0.03)
 
 
+def test_real_crowns_are_all_kept_and_made_up_trees_are_thinned():
+    rng = np.random.default_rng(2)
+    pts = np.column_stack([rng.uniform(500_100, 500_900, 20000), 5_200_000 + rng.uniform(-250, 250, 20000)])
+    trees = scenery.Trees(pts, np.full(len(pts), 15.0))
+    real = scenery.keep_trees(trees, CENTRE, 1000.0, rng, real_crowns=True)
+    made_up = scenery.keep_trees(trees, CENTRE, 1000.0, rng, real_crowns=False)
+    assert len(real) == len(trees)  # a canopy model: no distance bands, no per-km cap
+    assert len(made_up) == scenery.MAX_TREES_PER_KM  # tree cover only: thinned, then capped for 1 km
+
+
 def test_buildings_get_walls_and_roofs_and_skip_the_road():
     house = shapely.box(500_300, 5_200_030, 500_312, 5_200_040)  # 12 x 10 m: gable roof
     shed = shapely.Polygon([(500_400, 5_200_050), (500_430, 5_200_050), (500_430, 5_200_060),
