@@ -39,7 +39,7 @@ Two machines, in production:
 | 6 | web app → router | route previews (`POST /route`) on a private network with no other route out | none (network isolation) | web app |
 | 7 | worker → web app `/api/worker/*` | claim a job, heartbeat with the current stage, report done or failed | worker bearer token, plus the per-claim `worker_id` | worker |
 | 8 | worker → object storage | upload the finished zip | storage key scoped to one bucket | worker |
-| 9 | worker → data hosts | DEM tiles outside Tasmania (GA DEM-S on DEA), ESA WorldCover tiles where there's no canopy model, theLIST building footprints, the Tasmanian DEM if it isn't mirrored | none | worker |
+| 9 | worker → data hosts | DEM tiles outside Tasmania (GA DEM-S on DEA), ESA WorldCover tiles and Meta/WRI canopy tiles where there's no canopy model, theLIST building footprints, the Tasmanian DEM if it isn't mirrored | none | worker |
 | 10 | browser or Content Manager → object storage | download the zip (`acmanager://install?url=…` or a plain link) | none; the URL is public | user |
 
 The web app never connects to the worker, and holds no storage key. Its own outbound traffic is flow 5 only (and flow 6 inside its private network). The worker's job never contains a URL or a path, so flows 8 and 9 go only where the worker's own configuration says.
@@ -75,7 +75,7 @@ Each stage reads the folders before it and writes its own, so any stage can be r
 | profile | `02_profile` | the route; the region's DEM; in Tasmania, theLIST's LiDAR index | `centreline.npz` (smoothed 3D centreline, grades, and which stations have fine elevation; corners at junctions rounded to 8 m first), profile plot when matplotlib is installed |
 | section | `03_section` | the centreline; OSM width and lanes; the DEM across the road | `section.npz` (half-widths, camber, crown) |
 | mesh | `04_mesh` | centreline, section, DEM; WorldCover's permanent water | road, verge, terrain and wall meshes, water surfaces (`water.json`: bodies, levels, LAKE or SEA), AC dummies |
-| scenery | `04b_scenery` | centreline, section; canopy model or WorldCover; building footprints | extruded buildings; 3D tree models and every tree's placement for Tree FX (`treefx/`) |
+| scenery | `04b_scenery` | centreline, section; canopy model, or WorldCover masked by Meta/WRI canopy; building footprints | extruded buildings; 3D tree models and every tree's placement for Tree FX (`treefx/`) |
 | track | `05_track` | everything above | the KN5 model, `fast_lane.ai` per layout, ini files, `ui_track.json`, preview images, `ATTRIBUTION.txt`, `centreline.geojson` (ODbL), `extension/` (CSP config, `trees/` with the Tree FX list and models), the zip |
 | validate | `06_validate` | the track folder | `report.json`: static checks. A build failure fails the job with the generic message. A bend under 5 m radius is a route failure: the page is told where it is and may offer to build it anyway |
 
@@ -132,5 +132,6 @@ Pipeline settings (`config.py`), from the environment or `config.local.toml`:
 | `MAPCREATOR_OSM_INDEX` | the local OSM index; without it, roads come from Overpass (development only) and the national fallback has no buildings |
 | `MAPCREATOR_TAS_DEM` | the Tasmanian 2 m DEM: a local mirror path, or the cloud-optimised GeoTIFF's URL |
 | `MAPCREATOR_TAS_CHM` | the Tasmanian canopy height model; without it, trees come from WorldCover |
+| `MAPCREATOR_META_CANOPY` | `0` turns off the Meta/WRI canopy mask on WorldCover trees (on by default) |
 | `MAPCREATOR_CACHE_DIR`, `MAPCREATOR_WORK_DIR` | tile cache, and where the CLI writes work folders (the worker uses a temporary folder per job) |
 | `MAPCREATOR_OVERPASS_URL`, `MAPCREATOR_USER_AGENT` | development only |
