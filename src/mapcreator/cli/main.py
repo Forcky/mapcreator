@@ -12,6 +12,7 @@ from mapcreator import config
 from mapcreator.job import load_job
 from mapcreator.pipeline import (mesh_stage, profile_stage, route_stage, scenery_stage, section_stage, track_stage,
                                  validate_stage)
+from mapcreator.pipeline.runner import run_stages
 from mapcreator.pipeline.workdir import WorkDir
 
 STAGES = {
@@ -35,10 +36,11 @@ def main(argv: list[str] | None = None) -> int:
     job = load_job(args.job)
     work = WorkDir.for_job(settings.work_dir, job)
     names = list(STAGES) if args.stage == "build" else [args.stage]
-    for name in names:
-        t0 = time.perf_counter()
-        result = STAGES[name](job, settings, work)
-        print(f"[{name}] {time.perf_counter() - t0:.1f}s {json.dumps(result)}")
+    t0 = time.perf_counter()
+    run_stages(STAGES, names, job, settings, work,
+               on_result=lambda name, result, seconds: print(f"[{name}] {seconds:.1f}s {json.dumps(result)}"))
+    if len(names) > 1:
+        print(f"[build] {time.perf_counter() - t0:.1f}s")
     print(f"output: {work.root}")
     return 0
 

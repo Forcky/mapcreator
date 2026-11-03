@@ -65,21 +65,24 @@ def mask_polygons(is_water: Callable[[np.ndarray, np.ndarray], np.ndarray], regi
     cols, rows = max(1, math.ceil((maxx - minx) / GRID_M)), max(1, math.ceil((maxy - miny) / GRID_M))
     mask = np.zeros((rows, cols), dtype=np.uint8)
     shapely.prepare(region)
-    for r0 in range(0, rows, BLOCK_CELLS):
-        for c0 in range(0, cols, BLOCK_CELLS):
-            r1, c1 = min(rows, r0 + BLOCK_CELLS), min(cols, c0 + BLOCK_CELLS)
-            block = shapely.box(minx + c0 * GRID_M, maxy - r1 * GRID_M, minx + c1 * GRID_M, maxy - r0 * GRID_M)
-            if not region.intersects(block):
-                continue
-            cc, rr = np.meshgrid(np.arange(c0, c1), np.arange(r0, r1))
-            x = minx + (cc + 0.5) * GRID_M
-            y = maxy - (rr + 0.5) * GRID_M
-            inside = shapely.contains_xy(region, x, y)
-            if not inside.any():
-                continue
-            wet = np.zeros(x.shape, dtype=bool)
-            wet[inside] = is_water(x[inside], y[inside])
-            mask[rr[wet], cc[wet]] = 1
+    starts = [(r0, c0) for r0 in range(0, rows, BLOCK_CELLS) for c0 in range(0, cols, BLOCK_CELLS)]
+    boxes = shapely.box(*np.array([(minx + c0 * GRID_M, maxy - min(rows, r0 + BLOCK_CELLS) * GRID_M,
+                                    minx + min(cols, c0 + BLOCK_CELLS) * GRID_M, maxy - r0 * GRID_M)
+                                   for r0, c0 in starts]).T)
+    touched = shapely.intersects(region, boxes)  # one vectorised test, not one call per block
+    for (r0, c0), hit in zip(starts, touched):
+        if not hit:
+            continue
+        r1, c1 = min(rows, r0 + BLOCK_CELLS), min(cols, c0 + BLOCK_CELLS)
+        cc, rr = np.meshgrid(np.arange(c0, c1), np.arange(r0, r1))
+        x = minx + (cc + 0.5) * GRID_M
+        y = maxy - (rr + 0.5) * GRID_M
+        inside = shapely.contains_xy(region, x, y)
+        if not inside.any():
+            continue
+        wet = np.zeros(x.shape, dtype=bool)
+        wet[inside] = is_water(x[inside], y[inside])
+        mask[rr[wet], cc[wet]] = 1
     if not mask.any():
         return []
     transform = from_origin(minx, maxy, GRID_M, GRID_M)

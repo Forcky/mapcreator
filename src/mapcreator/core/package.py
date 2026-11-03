@@ -63,6 +63,16 @@ def compass(heading_rad: float) -> str:
         int((bearing + 22.5) // 45) % 8]
 
 
+def _drawable(px: np.ndarray, tolerance: float = 0.5) -> list[tuple[float, float]]:
+    """A polyline in pixels, simplified to `tolerance` px. Drawing all 63,000 points of a 63 km road with
+    rounded joints took 28 s for images at most 1,600 px across; the simplified line looks the same."""
+    import shapely
+
+    # Plain Douglas-Peucker: a drawn line may cross itself, and keeping its topology would keep every point.
+    line = shapely.LineString(px).simplify(tolerance, preserve_topology=False) if len(px) > 2 else None
+    return [tuple(p) for p in (np.asarray(line.coords) if line is not None and not line.is_empty else px)]
+
+
 def map_files(xz: np.ndarray) -> tuple[Image.Image, str]:
     """map.png and map.ini from the centreline in AC X/Z (north up, as the game draws it)."""
     lo, hi = xz.min(axis=0), xz.max(axis=0)
@@ -75,7 +85,7 @@ def map_files(xz: np.ndarray) -> tuple[Image.Image, str]:
     px = (xz + [x_off, z_off]) / scale
     im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(im)
-    pts = [tuple(p) for p in px]
+    pts = _drawable(px)
     draw.line(pts, fill=(0, 0, 0, 255), width=9, joint="curve")
     draw.line(pts, fill=(255, 255, 255, 255), width=5, joint="curve")
     text = ini([("PARAMETERS", {
@@ -93,7 +103,7 @@ def _fit(xz: np.ndarray, size: tuple[int, int], pad: int) -> np.ndarray:
 
 def outline_png(xz: np.ndarray, size=(365, 192)) -> Image.Image:
     im = Image.new("RGBA", size, (0, 0, 0, 0))
-    pts = [tuple(p) for p in _fit(xz, size, 12)]
+    pts = _drawable(_fit(xz, size, 12))
     ImageDraw.Draw(im).line(pts, fill=(255, 255, 255, 255), width=4, joint="curve")
     return im
 
@@ -129,7 +139,7 @@ def preview_png(shade_rgb: np.ndarray, alpha: np.ndarray, frame: tuple[float, fl
     x0, x1, z0, z1 = frame
     px = (xz - [x0, z0]) * [big_size[0] / (x1 - x0), big_size[1] / (z1 - z0)]
     d = ImageDraw.Draw(img)
-    pts = [tuple(p) for p in px]
+    pts = _drawable(px)
     d.line(pts, fill=(20, 20, 20), width=5 * supersample, joint="curve")
     d.line(pts, fill=(250, 210, 60), width=3 * supersample, joint="curve")
     sx, sz = px[0]

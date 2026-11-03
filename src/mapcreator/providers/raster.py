@@ -22,7 +22,7 @@ import rasterio
 import shapely
 from pyproj import Transformer
 from rasterio.windows import Window
-from shapely.geometry import LineString, box
+from shapely.geometry import LineString
 
 from mapcreator.providers import cache
 from mapcreator.providers.base import LONLAT_CRS
@@ -93,15 +93,18 @@ class BlockRaster:
         size_x, size_y = self.block * self.res_x, self.block * -self.res_y
         bx0, bx1 = int((minx - self.x0) // size_x), int((maxx - self.x0) // size_x)
         by0, by1 = int((self.y0 - maxy) // size_y), int((self.y0 - miny) // size_y)
-        keys = []
         last_bx = (self.width - 1) // self.block
         last_by = (self.height - 1) // self.block
-        for by in range(max(by0, 0), min(by1, last_by) + 1):
-            for bx in range(max(bx0, 0), min(bx1, last_bx) + 1):
-                x, y = self.x0 + bx * size_x, self.y0 - by * size_y
-                if geom.intersects(box(x, y - size_y, x + size_x, y)):
-                    keys.append((bx, by))
-        return keys
+        bys, bxs = np.meshgrid(np.arange(max(by0, 0), min(by1, last_by) + 1),
+                               np.arange(max(bx0, 0), min(bx1, last_bx) + 1), indexing="ij")
+        bxs, bys = bxs.ravel(), bys.ravel()
+        if not len(bxs):
+            return []
+        x, y = self.x0 + bxs * size_x, self.y0 - bys * size_y
+        # One vectorised test against the prepared corridor: one call per tile took seconds on a 63 km road.
+        shapely.prepare(geom)
+        hit = shapely.intersects(geom, shapely.box(x, y - size_y, x + size_x, y))
+        return [(int(bx), int(by)) for bx, by in zip(bxs[hit], bys[hit])]
 
     def _to_raster_geom(self, geom):
         if self.to_raster is None:

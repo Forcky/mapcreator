@@ -42,7 +42,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     region = job_region(job.waypoints)
     c = np.load(work.root / profile_stage.STAGE / "centreline.npz")
     sec = np.load(work.root / section_stage.STAGE / "section.npz")
-    frame = Scene.load(work.root / mesh_stage.STAGE).frame
+    # The mesh stage's frame, worked out the same way, so the two stages can run side by side (runner.py).
+    frame = mesh_stage.frame_for(c["xy"], c["z"])
     rng = np.random.default_rng(_seed(job))
     xy = c["xy"]
     centre = shapely.LineString(xy)

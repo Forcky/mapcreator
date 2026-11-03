@@ -83,7 +83,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     scene.save(out)
     water_summary = water_core.summary(water)
     work.write_json(STAGE, "water.json", water_summary)
-    scene.write_obj(out / "preview.obj")
+    if settings.preview_obj:
+        scene.write_obj(out / "preview.obj")
 
     by_kind: dict[str, list[int]] = {}
     for m in meshes:

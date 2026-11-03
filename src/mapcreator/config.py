@@ -29,6 +29,9 @@ class Settings:
     # buildings outside Tasmania, are read from. Empty means roads come from `overpass_url`, which
     # is for light development use only, and the national fallback has no buildings.
     osm_index: str
+    # Write 04_mesh/preview.obj, a debug view of the scene. Off by default: on a 63 km road it took about half
+    # the mesh stage, and nothing ships it.
+    preview_obj: bool = False
 
 
 DEFAULT_TAS_DEM = (
@@ -58,4 +61,6 @@ def load() -> Settings:
         overpass_url=get("MAPCREATOR_OVERPASS_URL", "overpass_url", "https://overpass-api.de/api/interpreter"),
         user_agent=get("MAPCREATOR_USER_AGENT", "user_agent", "mapcreator (development)"),
         osm_index=get("MAPCREATOR_OSM_INDEX", "osm_index", ""),
+        preview_obj=str(os.environ.get("MAPCREATOR_PREVIEW_OBJ") or f.get("preview_obj") or "").lower()
+        in ("1", "true", "yes"),
     )
