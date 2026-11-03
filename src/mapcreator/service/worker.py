@@ -82,15 +82,16 @@ def run_pipeline(job: Job, work_root: Path,
     from mapcreator import config
     from mapcreator.cli.main import STAGES
     from mapcreator.pipeline import track_stage
+    from mapcreator.pipeline.runner import run_stages
     from mapcreator.pipeline.workdir import WorkDir
 
     settings = replace(config.load(), work_dir=work_root)
     work = WorkDir.for_job(work_root, job)
-    results = {}
-    for name, stage in STAGES.items():
+    def started(name: str) -> None:
         log.info("stage %s", name)
         on_stage(name)
-        results[name] = stage(job, settings, work)
+
+    results = run_stages(STAGES, list(STAGES), job, settings, work, on_stage=started)
     track = results["track"]
     summary = {
         "title": track["title"],

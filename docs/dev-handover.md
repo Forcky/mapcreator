@@ -11,7 +11,7 @@ Everything that can be built and checked without the game is done. The next mile
 | route | `mapcreator route job.json` | Snaps waypoints to OSM; writes `01_route/` | Done |
 | profile | `mapcreator profile job.json` | Smooth centreline + DEM profile, bridges filled; `02_profile/profile.png` | Done |
 | section | `mapcreator section job.json` | Width from OSM tags, camber from the DEM | Done |
-| mesh | `mapcreator mesh job.json` | Road, verges, skirts, terrain; `04_mesh/preview.obj` | Done |
+| mesh | `mapcreator mesh job.json` | Road, verges, skirts, terrain; `04_mesh/preview.obj` with `MAPCREATOR_PREVIEW_OBJ=1` (or `preview_obj = true` in `config.local.toml`) | Done |
 | scenery | `mapcreator scenery job.json` | Trees (canopy model or WorldCover) and buildings (LIST in Tasmania; OSM elsewhere, with an OSM index), visual only | Done |
 | track | `mapcreator track job.json` | KN5s, AI lines, layouts, data and UI files, zip | Done, **never loaded in game** |
 | validate | `mapcreator validate job.json` | 73 static checks | Done |

@@ -141,7 +141,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     if (work.root / scenery_stage.STAGE / "scene.json").exists():
         scenes.append(Scene.load(work.root / scenery_stage.STAGE))
     tex, mats, mat_index = _materials_and_textures(work, scenes)
+    # Tangents once, shared by every layout's KN5 (the meshes are the same; only the dummies differ).
     meshes = [kn5.Kn5Mesh(m.name, mat_index[m.material], m.positions, m.normals, m.uvs, m.triangles,
+                          tangents=kn5.tangents(m.positions.astype(float), m.normals.astype(float),
+                                                m.uvs.astype(float), np.asarray(m.triangles, dtype=np.int64)),
                           cast_shadows=m.renderable, renderable=m.renderable)
               for s in scenes for m in s.meshes]
     attributions = _attributions(region, work)
@@ -240,7 +243,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     _write_centreline(track_dir, job, c, sec, region, lonlat, attributions)
 
     zip_path = out_root / f"{job.track_id}.zip"
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+    # Level 3: the same size as the default 6 on a KN5 (83%), in a quarter of the time (1.9 s against 7.2 s
+    # for a 90 MB KN5).
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=3) as z:
         for p in sorted(track_dir.rglob("*")):
             if p.is_file():
                 z.write(p, p.relative_to(out_root).as_posix())
