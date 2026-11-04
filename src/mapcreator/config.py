@@ -35,6 +35,9 @@ class Settings:
     # Outside a canopy model, keep WorldCover's tree cells only where Meta/WRI's canopy map also sees canopy
     # (providers/meta/canopy.py). On by default; MAPCREATOR_META_CANOPY=0 turns it off.
     meta_canopy: bool = True
+    # Local COG mirror of NVIS 7.0's Major Vegetation Subgroups (providers/dcceew/nvis.py); outside Tasmania it
+    # types the made-up trees. Empty means they're typed by height alone.
+    nvis_source: str = ""
 
 
 DEFAULT_TAS_DEM = (
@@ -68,4 +71,5 @@ def load() -> Settings:
         in ("1", "true", "yes"),
         meta_canopy=str(os.environ.get("MAPCREATOR_META_CANOPY") or f.get("meta_canopy", "1")).lower()
         not in ("0", "false", "no", "off"),
+        nvis_source=get("MAPCREATOR_NVIS", "nvis_source", ""),
     )

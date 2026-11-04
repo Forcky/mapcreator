@@ -6,7 +6,8 @@ Regions are checked in order, best data first:
   communities, which say what kind of tree each one is.
 - Anywhere else in Australia falls back to national data: GA's 5 m LiDAR DEM where it covers
   the whole road (the populated coast, the Murray-Darling and towns), else GA's ~30 m DEM-S,
-  ESA WorldCover trees, and OSM building footprints and power lines when a local
+  ESA WorldCover trees typed by NVIS 7.0's vegetation subgroups when its mirror is
+  configured, and OSM building footprints and power lines when a local
   OSM index is configured (none without one). That region works in the MGA zone of the
   route's mean longitude, so a route may cross a zone boundary (the Great
   Ocean Road crosses 144°E); over a route of tens of kilometres the extra
@@ -47,8 +48,9 @@ class Region:
     # Overhead power lines (`core.power.Line`s) by bbox in the region's CRS, or None; one source per region.
     power: Callable[[tuple, Settings], list] | None = None
     power_attribution: Attribution | None = None
-    # Vegetation communities (`core.species.Community`s) within a distance of the centreline, or None.
-    vegetation: Callable[..., list] | None = None
+    # A vegetation map for the corridor (`core.species.VegetationMap` or `NvisMap`), by centreline and reach; the
+    # callable may return None (no mirror configured).
+    vegetation: Callable[..., object] | None = None
     vegetation_attribution: Attribution | None = None
     country: str = "Australia"
     state: str = ""
@@ -92,9 +94,10 @@ def _tas_power(bbox, settings: Settings):
 
 
 def _tas_vegetation(centre_xy, reach_m: float, settings: Settings):
+    from mapcreator.core.species import VegetationMap
     from mapcreator.providers.tas_list.tasveg import communities
 
-    return communities(centre_xy, reach_m, settings)
+    return VegetationMap(communities(centre_xy, reach_m, settings))
 
 
 def _tas_vegetation_attribution() -> Attribution:
@@ -156,6 +159,28 @@ def _osm_buildings(epsg: int) -> Callable[[tuple, Settings], list]:
     return buildings
 
 
+def _nvis(epsg: int) -> Callable:
+    """Tree families from NVIS's subgroups, read from the local mirror; none without one (`nvis_source`)."""
+
+    def vegetation(centre_xy, reach_m: float, settings: Settings):
+        if not settings.nvis_source:
+            return None
+        from mapcreator.core.species import NvisMap
+        from mapcreator.providers.dcceew.nvis import Nvis
+
+        nvis = Nvis(settings.nvis_source, epsg)
+        nvis.load_corridor(centre_xy, reach_m)
+        return NvisMap(nvis)
+
+    return vegetation
+
+
+def _nvis_attribution() -> Attribution:
+    from mapcreator.providers.dcceew.nvis import ATTRIBUTION
+
+    return ATTRIBUTION
+
+
 def _osm_power(epsg: int) -> Callable[[tuple, Settings], list]:
     """Overhead power lines from the local OSM index, in the region's CRS; none without an index."""
 
@@ -188,6 +213,7 @@ def australia(zone: int) -> Region:
     return Region(key=f"au{zone}", name="Australia", epsg=epsg, bbox=AUSTRALIA_BBOX, elevation=elevation,
                   attributions=(OSM, DEM_S), buildings=_osm_buildings(epsg), buildings_attribution=OSM_BUILDINGS,
                   power=_osm_power(epsg), power_attribution=OSM_POWER,
+                  vegetation=_nvis(epsg), vegetation_attribution=_nvis_attribution(),
                   height_datum="AHD (approximately; SRTM-derived)")
 
 

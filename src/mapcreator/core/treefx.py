@@ -254,6 +254,7 @@ FAMILY_BANDS = {
     "pine": _PINE,
     "plantation_euc": ((25.0, {"euc_young": 1.0}), (np.inf, {"euc_tall": 1.0})),
     "willow": ((np.inf, {"euc_spread": 1.0}),),
+    "mallee": ((np.inf, {"euc_young": 1.0}),),  # a low eucalypt until mallee has its own multi-stemmed model
 }
 
 

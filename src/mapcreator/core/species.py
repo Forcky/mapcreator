@@ -1,6 +1,7 @@
-"""Which kind of tree stands where: a model family for every tree, from a vegetation map (TASVEG in Tasmania).
+"""Which kind of tree stands where: a model family for every tree, from a vegetation map: TASVEG in Tasmania
+(`VegetationMap`), NVIS elsewhere (`NvisMap`).
 
-A tree's family comes from the vegetation community it stands in (`Community.code`, TASVEG's VEGCODE):
+In Tasmania a tree's family comes from the vegetation community it stands in (`Community.code`, TASVEG's VEGCODE):
 - **Woody communities** name their family directly: dry eucalypt (smooth or rough bark), wet eucalypt,
   rainforest, tea-tree and paperbark, wattle, plantations. Mixed wet forest names two layers ("eucalypts
   over rainforest", "over Leptospermum", "with broad-leaf shrubs"). There a crown at least `MIXED_SPLIT` of
@@ -17,6 +18,14 @@ Real crowns from a canopy model are measured, so the map only retypes them: it n
 trees (WorldCover positions) are another matter: `keep_made_up` drops them where the map says there are no
 trees, and thins them in paddocks and towns to the map's own scattered-tree cover.
 
+On the mainland, NVIS 7.0's Major Vegetation Subgroups give each 100 m cell one dominant subgroup, and the
+subgroup gives the family (`NVIS_SUBGROUPS`). The cells are too coarse to delete trees by, and the publisher
+warns against analysing its non-native classes, so NVIS only types trees (`NvisMap.keep_made_up` keeps all).
+
+A made-up tree's height is invented too, so once typed it's drawn again from its family's range (`HEIGHT_M`):
+a tea-tree a few metres tall, a wet-forest eucalypt tens of metres. Before, every made-up tree had a dry
+eucalypt's height, which the height bands then turned into a eucalypt whatever its family.
+
 Families are names, not models: `treefx.FAMILY_BANDS` says which models draw each family, and a family
 whose own models aren't built yet borrows the nearest ones that are.
 """
@@ -27,14 +36,24 @@ from dataclasses import dataclass
 
 import numpy as np
 import shapely
-from scipy.ndimage import maximum_filter
+from scipy.ndimage import distance_transform_edt, maximum_filter
 
 DRY_SMOOTH, DRY_ROUGH, SNOW_GUM = "dry_smooth", "dry_rough", "snow_gum"
 WET, RAINFOREST, CONIFER = "wet", "rainforest", "conifer"
 TEA_TREE, WATTLE, BLACKWOOD, SHE_OAK, BANKSIA = "tea_tree", "wattle", "blackwood", "she_oak", "banksia"
-REGROWTH, PINE, PLANTATION, WILLOW = "regrowth", "pine", "plantation_euc", "willow"
+REGROWTH, PINE, PLANTATION, WILLOW, MALLEE = "regrowth", "pine", "plantation_euc", "willow", "mallee"
 FAMILIES = (DRY_SMOOTH, DRY_ROUGH, SNOW_GUM, WET, RAINFOREST, CONIFER, TEA_TREE, WATTLE, BLACKWOOD, SHE_OAK,
-            BANKSIA, REGROWTH, PINE, PLANTATION, WILLOW)
+            BANKSIA, REGROWTH, PINE, PLANTATION, WILLOW, MALLEE)
+# A made-up tree's height by family: (mean, spread, lowest, highest) in metres. Canopy-model crowns keep their
+# measured heights.
+HEIGHT_M = {
+    DRY_SMOOTH: (18.0, 4.5, 8.0, 32.0), DRY_ROUGH: (18.0, 4.5, 8.0, 32.0), SNOW_GUM: (10.0, 3.0, 4.0, 18.0),
+    WET: (35.0, 9.0, 15.0, 70.0), RAINFOREST: (22.0, 6.0, 8.0, 40.0), CONIFER: (18.0, 5.0, 8.0, 30.0),
+    TEA_TREE: (6.0, 2.0, 3.0, 12.0), WATTLE: (8.0, 2.5, 4.0, 14.0), BLACKWOOD: (14.0, 5.0, 5.0, 30.0),
+    SHE_OAK: (9.0, 3.0, 4.0, 16.0), BANKSIA: (6.0, 2.0, 3.0, 12.0), REGROWTH: (10.0, 4.0, 4.0, 22.0),
+    PINE: (22.0, 6.0, 8.0, 40.0), PLANTATION: (25.0, 7.0, 10.0, 45.0), WILLOW: (12.0, 3.0, 6.0, 20.0),
+    MALLEE: (6.0, 2.0, 3.0, 10.0),
+}
 
 MIXED_SPLIT = 0.6  # share of the local tallest crown above which a crown in mixed wet forest is the eucalypt
 MIXED_REACH_M = 50.0
@@ -78,6 +97,32 @@ TREELESS_MODIFIED = frozenset("FMG FSM FPE".split())
 TREELESS_GROUPS = frozenset("GMHAO")
 # Scattered trees in paddocks, by NOTABLE_TR code; anything else named is taken as a eucalypt.
 NOTABLE = {"PR": PINE, "HM": PINE, "AV": SHE_OAK, "MY": RAINFOREST, "AX": BLACKWOOD, "BM": BANKSIA}
+
+# NVIS 7.0 Major Vegetation Subgroups (the raster's MVS numbers) by family; research/TREE_SPECIES.md section 6a.
+# Dry open forests with a shrubby understorey are mostly stringybark and peppermint (rough bark); grassy and open
+# woodlands mostly gums and boxes (drawn smooth). Grassland, water, bare ground and the cleared class keep any
+# made-up tree there as a paddock gum: NVIS only types.
+_SUBGROUPS = {
+    RAINFOREST: (1, 2, 6, 11, 62),
+    WET: (3, 54, 60),
+    DRY_ROUGH: (4,),
+    DRY_SMOOTH: (5, 7, 8, 9, 10, 16, 18, 19, 47, 48, 53, 56, 59, 65, 79),
+    CONIFER: (12, 70),
+    WATTLE: (13, 20, 21, 22, 23, 24, 25, 45, 51, 52),
+    BLACKWOOD: (14,),
+    TEA_TREE: (15, 28, 30, 32, 40, 49, 57, 58, 75, 80),
+    SHE_OAK: (26, 71, 72, 73, 74),
+    MALLEE: (27, 29, 55, 61, 66, 67, 68, 69),
+    BANKSIA: (50,),
+    REGROWTH: (90, 91),
+}
+NVIS_SUBGROUPS = {mvs: family for family, numbers in _SUBGROUPS.items() for mvs in numbers}
+# Subgroups that say nothing about the trees standing in them: grassland, sedgeland, chenopod shrubland, water
+# and bare ground, unclassified, unknown, and "Cleared, non-native vegetation, buildings" (towns and gardens:
+# 80% of Dandenong Tourist Rd's trees). A tree there takes the family of the nearest cell with trees within
+# NVIS_NEAREST_M, as a Tasmanian paddock tree takes its nearest woody community's; else a paddock gum.
+NVIS_UNTYPED = frozenset({0, 17, 31, 33, 34, 35, 36, 37, 38, 39, 41, 42, 43, 44, 46, 63, 64, 92, 93, 97, 98, 99})
+NVIS_NEAREST_M = 200.0
 ROUGH_EUCALYPTS = ("obliqua", "amygdalina", "ovata", "delegatensis", "sieberi", "nitida", "radiata", "dalrympleana")
 WEEDS = {"PI": PINE, "CY": PINE, "WW": WILLOW}
 
@@ -179,6 +224,68 @@ class VegetationMap:
 
     def codes(self, idx: np.ndarray) -> np.ndarray:
         return np.array([self.communities[i].code if i >= 0 else "" for i in idx], dtype=object)
+
+    # What the scenery stage asks of any vegetation map (this and `NvisMap`).
+    def families(self, xy: np.ndarray, height: np.ndarray, where: np.ndarray | None = None) -> np.ndarray:
+        return families(xy, height, self, where)
+
+    def keep_made_up(self, xy: np.ndarray, corridor: shapely.Geometry, rng: np.random.Generator, *,
+                     mask_agreed: bool) -> np.ndarray:
+        return keep_made_up(xy, self, corridor, rng, mask_agreed=mask_agreed)
+
+    def height_caps(self, where: np.ndarray) -> np.ndarray:
+        return height_caps(self.codes(where))
+
+
+class NvisMap:
+    """NVIS subgroups around one corridor (`providers.dcceew.nvis.Nvis`, loaded): each tree's family from the
+    subgroup of its 100 m cell. It never removes a tree, and caps no heights: on the mainland every tree is
+    made up, with a height drawn from its family."""
+
+    def __init__(self, nvis):
+        self._nvis = nvis
+        cells = nvis.cells
+        # Each untyped cell takes the subgroup of the nearest cell with trees, if one is within NVIS_NEAREST_M.
+        woody = np.isin(cells, list(NVIS_SUBGROUPS))
+        self._typed = cells.astype(np.int64)
+        if woody.any() and not woody.all():
+            dist, (ir, ic) = distance_transform_edt(~woody, return_indices=True)
+            near = ~woody & (dist * nvis.cell_m <= NVIS_NEAREST_M)
+            self._typed[near] = cells[ir[near], ic[near]]
+
+    def __len__(self) -> int:
+        """How many subgroups the corridor's cells hold (not counting no data, 0 and 99)."""
+        return len(np.setdiff1d(np.unique(self._nvis.cells), [0, 99]))
+
+    def at(self, xy: np.ndarray) -> np.ndarray:
+        xy = np.asarray(xy, dtype=float).reshape(-1, 2)
+        return self._nvis.subgroups(xy[:, 0], xy[:, 1]) if len(xy) else np.zeros(0, dtype=np.int64)
+
+    def codes(self, where: np.ndarray) -> np.ndarray:
+        return np.array([f"MVS{int(n):02d}" for n in where], dtype=object)
+
+    def families(self, xy: np.ndarray, height: np.ndarray, where: np.ndarray | None = None) -> np.ndarray:
+        """By the subgroup of each tree's cell, or for an untyped cell its nearest typed neighbour's."""
+        xy = np.asarray(xy, dtype=float).reshape(-1, 2)
+        typed = self._nvis.sample(self._typed, xy[:, 0], xy[:, 1]) if len(xy) else np.zeros(0, dtype=np.int64)
+        return np.array([NVIS_SUBGROUPS.get(int(n), DRY_SMOOTH) for n in typed], dtype=object)
+
+    def keep_made_up(self, xy: np.ndarray, corridor, rng, *, mask_agreed: bool) -> np.ndarray:
+        return np.ones(len(xy), dtype=bool)
+
+    def height_caps(self, where: np.ndarray) -> np.ndarray:
+        return np.full(len(where), FOREST_HEIGHT_M)
+
+
+def made_up_heights(families: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """A height for each made-up tree from its family's range (`HEIGHT_M`)."""
+    families = np.asarray(families, dtype=object)
+    out = np.empty(len(families))
+    for family in sorted(set(families.tolist())):
+        mine = families == family
+        mean, spread, lo, hi = HEIGHT_M[family]
+        out[mine] = np.clip(rng.normal(mean, spread, int(mine.sum())), lo, hi)
+    return out
 
 
 def _local_tallest(xy: np.ndarray, height: np.ndarray, reach_m: float, cell_m: float = 10.0) -> np.ndarray:

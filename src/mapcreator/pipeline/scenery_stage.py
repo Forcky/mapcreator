@@ -82,7 +82,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     vmap, vegetation_note = None, None
     if region.vegetation is not None:
         try:
-            vmap = species.VegetationMap(region.vegetation(xy, scenery.TREE_REACH_M + 10, settings))
+            vmap = region.vegetation(xy, scenery.TREE_REACH_M + 10, settings)  # None without a mirror
         except Exception as e:  # noqa: BLE001 - any source failure costs the tree kinds, not the trees
             log.warning("vegetation map unavailable (%s: %s); trees typed by height alone", type(e).__name__, e)
             vegetation_note = "unavailable"
@@ -128,7 +128,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         # Made-up trees go where the vegetation map says there are none, and thin out in paddocks and towns. After
         # the per-km cap, so treeless country stays open and the total falls, rather than the cap refilling its
         # budget with trees from elsewhere.
-        keep = species.keep_made_up(trees.xy, vmap, tree_region, rng, mask_agreed=source.endswith("Meta/WRI canopy"))
+        keep = vmap.keep_made_up(trees.xy, tree_region, rng, mask_agreed=source.endswith("Meta/WRI canopy"))
         dropped, trees = int((~keep).sum()), trees.subset(keep)
     ground = dem.sample(trees.xy[:, 0], trees.xy[:, 1]) if len(trees) else np.zeros(0)
     ok = np.isfinite(ground)
@@ -144,15 +144,19 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     capped = 0
     if vmap is not None:
         # 90 m in forest, 45 m elsewhere: a paddock or town crown taller than that is an artefact.
-        cap = species.height_caps(vmap.codes(where))
+        cap = vmap.height_caps(where)
         capped = int((trees.height > cap).sum())
         trees = scenery.Trees(trees.xy, np.minimum(trees.height, cap))
-    families = species.families(trees.xy, trees.height, vmap, where) if vmap is not None else None
-    if region.vegetation is None:
-        vegetation = {"source": "none"}
+    families = vmap.families(trees.xy, trees.height, where) if vmap is not None else None
+    if families is not None and canopy is None:
+        # A made-up tree's height was invented for a dry eucalypt; now its family is known, it gets one of its own.
+        trees = scenery.Trees(trees.xy, species.made_up_heights(families, rng))
+    if vmap is not None:
+        vegetation = {"source": region.vegetation_attribution.dataset}
+    elif vegetation_note:
+        vegetation = {"source": f"{region.vegetation_attribution.dataset} ({vegetation_note})"}
     else:
-        name = region.vegetation_attribution.dataset
-        vegetation = {"source": f"{name} ({vegetation_note})" if vegetation_note else name}
+        vegetation = {"source": "none"}
     if vmap is not None:
         attributions.append(region.vegetation_attribution)
         codes = vmap.codes(where)
