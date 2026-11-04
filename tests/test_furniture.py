@@ -205,3 +205,71 @@ def test_an_unknown_limit_is_judged_at_the_default():
     _, unknown, _ = build(road(k), limits=np.full(800, np.nan))
     _, at_80, _ = build(road(k), limits=np.full(800, 80.0))
     assert unknown["cam_curves"] == at_80["cam_curves"]
+
+
+def _quads(meshes, material):
+    """Each quad of the given material: its four corners (region e, n, h)."""
+    pos = [m.positions for m in meshes if m.material == material]
+    if not pos:
+        return np.zeros((0, 4, 3))
+    e, n, h = FRAME.from_ac(np.vstack(pos).astype(float))
+    return np.column_stack([e, n, h]).reshape(-1, 4, 3)
+
+
+def test_retroreflective_faces_have_their_own_material():
+    k = np.zeros(1001)
+    k[400:450] = 1 / 30.0  # a bend with CAMs (advisory about 37 km/h, against 60)
+    r = road(k)
+    limits = np.where(r["s"] < 700, 60.0, 80.0)
+    meshes, info, tex = build(r, limits=limits)
+    assert {m.material for m in meshes} == {furniture.MATERIAL, furniture.REFLECTOR_MATERIAL, furniture.RETRO_MATERIAL}
+    posts = sum(info["guide_posts"].values())
+    cams, signs = info["cams"], info["speed_signs"]
+    assert posts and cams and signs
+    # Retroreflective: a reflector on each face of a post; both faces of a CAM board and a speed sign's face.
+    assert len(_quads(meshes, furniture.REFLECTOR_MATERIAL)) == 2 * posts
+    assert len(_quads(meshes, furniture.RETRO_MATERIAL)) == 2 * cams + signs
+    # The rest: each post's four sides; each pole's four and a board's two edges, and a speed sign's back.
+    assert len(_quads(meshes, furniture.MATERIAL)) == 4 * posts + 6 * cams + 7 * signs
+    assert {"post", "reflector_red", "reflector_white"} <= set(tex.cells) and "post_red" not in tex.cells
+
+
+def test_a_guide_post_reflector_sits_on_its_face_in_the_black_band():
+    r = road(np.zeros(400))
+    meshes, info, _ = build(r, limits=np.full(400, np.nan))  # no speed signs
+    quads = _quads(meshes, furniture.REFLECTOR_MATERIAL)
+    assert len(quads) == 2 * sum(info["guide_posts"].values())
+    assert not len(_quads(meshes, furniture.RETRO_MATERIAL))  # no CAMs or signs on this road
+    tops = quads[:, :, 2].max(axis=1) - quads[:, :, 2].min(axis=1)
+    assert np.allclose(tops, furniture.REFLECTOR_H)
+    widths = np.hypot(*(quads[:, 1, :2] - quads[:, 0, :2]).T)
+    assert np.allclose(widths, furniture.REFLECTOR_W)
+    # Each stands just in front of a post's face: half the post's depth and the gap from its centre, along the road.
+    post_quads = _quads(meshes, furniture.MATERIAL)
+    centres = post_quads[:, :, :2].mean(axis=1)
+    for q in quads:
+        c = q[:, :2].mean(axis=0)
+        assert np.min(np.hypot(*(centres - c).T)) < furniture.GUIDE_POST_D
+
+
+def test_ext_config_brightens_the_retroreflective_materials_only_at_night():
+    from mapcreator.core import package
+
+    retro = {name: (night, 0.6) for name, night in furniture.NIGHT_DIFFUSE.items()}
+    text = package.ext_config_ini(grass_materials=["grass"], road_materials=["road"], version="t",
+                                  retro_materials=retro)
+    lines = text.split("\r\n")
+    assert "[INCLUDE: common/conditions.ini]" in lines  # where CSP defines NIGHT_SMOOTH
+    found = {}
+    for at, line in enumerate(lines):
+        if line.startswith("[MATERIAL_ADJUSTMENT_"):
+            adj = dict(x.split("=", 1) for x in lines[at + 1:lines.index("", at)])
+            assert adj["CONDITION"] == "NIGHT_SMOOTH" and adj["KEY_0"] == "ksDiffuse" and "KEY_1" not in adj
+            found[adj["MATERIALS"]] = (float(adj["VALUE_0"]), float(adj["VALUE_0_OFF"]))
+    assert found == retro  # brighter at night, the KN5's own value by day
+    # Brighter in the headlights (diffuse), not glowing (no emissive); the reflectors more than the boards' faces,
+    # whose legends wash out when pushed.
+    assert all(night > 0.6 for night in furniture.NIGHT_DIFFUSE.values()) and "Emissive" not in text
+    assert furniture.NIGHT_DIFFUSE[furniture.REFLECTOR_MATERIAL] > furniture.NIGHT_DIFFUSE[furniture.RETRO_MATERIAL]
+    plain = package.ext_config_ini(grass_materials=["grass"], road_materials=["road"], version="t")
+    assert "MATERIAL_ADJUSTMENT" not in plain and "conditions.ini" not in plain

@@ -14,6 +14,11 @@ cite it), the way the road markings are:
   layout's start, on the left for each direction of travel.
 
 The textures are drawn here into one atlas: the numerals use Pillow's built-in Aileron font (CC0).
+
+The faces that are retroreflective on the real thing have materials of their own on the same atlas, with the same
+values by day: `REFLECTOR_MATERIAL` for the guide post reflectors and `RETRO_MATERIAL` for CAM boards and speed sign
+faces. CSP brightens them at night (`NIGHT_DIFFUSE`, through `package.ext_config_ini`), so they catch the headlights the
+way real reflectors do; posts, poles and the backs of speed signs stay on `MATERIAL`.
 """
 
 from __future__ import annotations
@@ -53,8 +58,22 @@ SIGN_BOTTOM_M = 1.5
 SIGN_OFFSET_M = 2.0
 SIGN_FROM_START_M = 70.0  # the repeater near each layout's start: past the start gate (50 m)
 POST_R = 0.04
+# A guide post's reflector, on each of its two faces (a separate quad for the reflective material): its width, its
+# height and how far its top is below the post's top. The black band behind it runs 0.1-0.41 m below the top.
+REFLECTOR_W, REFLECTOR_H, REFLECTOR_TOP_M = 0.04, 0.18, 0.16
+REFLECTOR_GAP_M = 0.002  # in front of the face, so it never fights it for depth
 
 MATERIAL = "furniture"
+REFLECTOR_MATERIAL = "furniture_reflector"
+RETRO_MATERIAL = "furniture_retro"
+# ksDiffuse at night (by day both keep the KN5's value, 0.6), tuned in game at 22:00 with CSP 0.2.11 (5 Nov 2026):
+# - a guide post reflector is small and one solid colour: at 12 it stands out in the beam at 25-80 m with a slight
+#   halo, as a real one does; at 24 it blooms like a lamp; at 6 or less it reads as paint;
+# - a CAM or sign face is a large board with a legend, and in the beam it already reaches the top of CSP's tone curve
+#   unboosted (a CAM at 45 m renders (217, 217, 164) at 0.6): more only bleaches it, the yellow to white (nearly
+#   white from 2.5) and the sign's ring and numerals away (from about 6; at 12 a sign 90 m away reads as a light).
+#   2 keeps them coloured and readable and lifts them where the beam is weaker, further off.
+NIGHT_DIFFUSE = {REFLECTOR_MATERIAL: 12.0, RETRO_MATERIAL: 2.0}
 CELL = 128
 COLS = 8
 
@@ -78,11 +97,12 @@ def atlas(limits: list[int]) -> Atlas:
         cells[name] = (x0 / img.width, y0 / img.height, x1 / img.width, y1 / img.height)
         return x0, y0, x1, y1
 
-    for col, (name, reflector) in enumerate((("post_red", (200, 24, 24)), ("post_white", (250, 250, 250)))):
+    x0, y0, x1, y1 = cell("post", 0, 0)
+    d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=(244, 244, 240))
+    d.rectangle([x0, y0 + 10, x1 - 1, y0 + 40], fill=(20, 20, 20))  # the black band near the top
+    for name, col, colour in (("reflector_red", 1, (200, 24, 24)), ("reflector_white", 6, (250, 250, 250))):
         x0, y0, x1, y1 = cell(name, col, 0)
-        d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=(244, 244, 240))
-        d.rectangle([x0, y0 + 10, x1 - 1, y0 + 40], fill=(20, 20, 20))  # the black band near the top
-        d.rectangle([x0 + 40, y0 + 16, x1 - 41, y0 + 34], fill=reflector)
+        d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=colour)
     x0, y0, x1, y1 = cell("white", 2, 0)
     d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=(244, 244, 240))
     x0, y0, x1, y1 = cell("metal", 3, 0)
@@ -203,8 +223,8 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
                 continue
             e, nn, h = point(i, side, GUIDE_POST_OFFSET_M)
             # The forward traffic has a left-side post on its left (red) and a right-side one on its right (white).
-            builder.guide_post(e, nn, h, tangent[i], front="post_red" if side == "L" else "post_white",
-                               back="post_white" if side == "L" else "post_red")
+            builder.guide_post(e, nn, h, tangent[i], front="reflector_red" if side == "L" else "reflector_white",
+                               back="reflector_white" if side == "L" else "reflector_red")
             posts[side] += 1
 
     signs = 0
@@ -221,7 +241,7 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
     for i, side, value, facing in placements:
         e, nn, h = point(i, side, SIGN_OFFSET_M)
         builder.sign(e, nn, h, tangent[i] * facing, SIGN_BOARD, SIGN_BOTTOM_M, front=f"speed_{int(value)}",
-                     back="metal")
+                     back="metal", back_reflects=False)
         signs += 1
     meshes = builder.meshes(frame)
     return meshes, {"guide_posts": posts, "cam_curves": curves, "cams": cams, "speed_signs": signs,
@@ -234,28 +254,27 @@ def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
 
 
 class _Builder:
-    """Boxes and boards in region coordinates (e, n, h), packed into meshes under the vertex limit."""
+    """Boxes and boards in region coordinates (e, n, h), packed into meshes under the vertex limit, one set of
+    meshes per material."""
 
     def __init__(self, tex: Atlas):
         self.tex = tex
-        self.pos, self.nrm, self.uv, self.tri = [], [], [], []
-        self.count = 0
+        # positions, normals, uvs, triangles
+        self.parts = {m: ([], [], [], []) for m in (MATERIAL, REFLECTOR_MATERIAL, RETRO_MATERIAL)}
 
-    def _quad(self, corners, normal, cell, flip_u=False):
+    def _quad(self, corners, normal, cell, material=MATERIAL):
         u0, v0, u1, v1 = self.tex.cells[cell]
-        if flip_u:
-            u0, u1 = u1, u0
-        self.pos.extend(corners)
-        self.nrm.extend([normal] * 4)
-        self.uv.extend([(u0, v1), (u1, v1), (u1, v0), (u0, v0)])  # bottom left, bottom right, top right, top left
-        i = self.count
-        self.tri.extend([(i, i + 1, i + 2), (i, i + 2, i + 3)])
-        self.count += 4
+        pos, nrm, uv, tri = self.parts[material]
+        i = len(pos)
+        pos.extend(corners)
+        nrm.extend([normal] * 4)
+        uv.extend([(u0, v1), (u1, v1), (u1, v0), (u0, v0)])  # bottom left, bottom right, top right, top left
+        tri.extend([(i, i + 1, i + 2), (i, i + 2, i + 3)])
 
-    def _box(self, e, n, h0, h1, along, w, d, faces):
+    def _box(self, e, n, h0, h1, along, w, d, faces, materials=(MATERIAL, MATERIAL)):
         """A box standing on (e, n) from h0 to h1, `w` across the road and `d` along it. `faces` are atlas cells:
         (the side seen by traffic travelling along `along`, the side seen by traffic travelling against it, the
-        other two sides)."""
+        other two sides); `materials` are the first two faces' materials (the other two sides are `MATERIAL`)."""
         a = np.array([along[0], along[1], 0.0])
         x = np.array([-along[1], along[0], 0.0])  # across
         c = np.array([e, n, 0.0])
@@ -263,38 +282,52 @@ class _Builder:
         hw, hd = x * w / 2, a * d / 2
         seen_along, seen_against, side_cell = faces
         # Traffic travelling along `along` sees the face that points back at it (-along), and vice versa.
-        self._quad([c - hd + hw + lo, c - hd - hw + lo, c - hd - hw + hi, c - hd + hw + hi], -a, seen_along)
-        self._quad([c + hd - hw + lo, c + hd + hw + lo, c + hd + hw + hi, c + hd - hw + hi], a, seen_against)
+        self._quad([c - hd + hw + lo, c - hd - hw + lo, c - hd - hw + hi, c - hd + hw + hi], -a, seen_along,
+                   materials[0])
+        self._quad([c + hd - hw + lo, c + hd + hw + lo, c + hd + hw + hi, c + hd - hw + hi], a, seen_against,
+                   materials[1])
         self._quad([c - hd - hw + lo, c + hd - hw + lo, c + hd - hw + hi, c - hd - hw + hi], -x, side_cell)
         self._quad([c + hd + hw + lo, c - hd + hw + lo, c - hd + hw + hi, c + hd + hw + hi], x, side_cell)
 
     def guide_post(self, e, n, h, along, front, back):
-        self._box(e, n, h - 0.3, h + GUIDE_POST_HEIGHT_M, along, GUIDE_POST_W, GUIDE_POST_D, (front, back, "white"))
+        """A post with a reflector on each face: `front` (an atlas cell) seen by the traffic coming along `along`,
+        `back` by the other way."""
+        self._box(e, n, h - 0.3, h + GUIDE_POST_HEIGHT_M, along, GUIDE_POST_W, GUIDE_POST_D, ("post", "post", "white"))
+        a = np.array([along[0], along[1], 0.0])
+        x = np.array([-along[1], along[0], 0.0]) * REFLECTOR_W / 2
+        top = h + GUIDE_POST_HEIGHT_M - REFLECTOR_TOP_M
+        lo, hi = np.array([0, 0, top - REFLECTOR_H]), np.array([0, 0, top])
+        for facing, cell in ((-1.0, front), (1.0, back)):
+            c = np.array([e, n, 0.0]) + a * facing * (GUIDE_POST_D / 2 + REFLECTOR_GAP_M)
+            sx = x * -facing  # bottom left first, seen from the side the face points to (as _box's faces)
+            self._quad([c + sx + lo, c - sx + lo, c - sx + hi, c + sx + hi], a * facing, cell, REFLECTOR_MATERIAL)
 
-    def sign(self, e, n, h, along, board, bottom, front, back):
-        """A board on a post, its face towards the traffic coming along `along`, and the other face behind it."""
+    def sign(self, e, n, h, along, board, bottom, front, back, back_reflects=True):
+        """A board on a post, its face towards the traffic coming along `along`, and the other face behind it.
+        The face is retroreflective, and so is the back when it's a board too (a CAM's)."""
         w, hgt = board
         self._box(e, n, h - 0.4, h + bottom + hgt * 0.5, along, POST_R * 2, POST_R * 2, ("metal", "metal", "metal"))
         self._box(e - along[0] * 0.05, n - along[1] * 0.05, h + bottom, h + bottom + hgt, along, w, 0.02,
-                  (front, back, "metal"))
+                  (front, back, "metal"), (RETRO_MATERIAL, RETRO_MATERIAL if back_reflects else MATERIAL))
 
     def meshes(self, frame: LocalFrame) -> list[Mesh]:
-        if not self.count:
-            return []
-        pos = np.array(self.pos, dtype=float)
-        nrm = np.array(self.nrm, dtype=float)
-        uv = np.array(self.uv, dtype=float)
-        tri = np.array(self.tri, dtype=np.int64)
-        ac = frame.to_ac(pos[:, 0], pos[:, 1], pos[:, 2])
-        ac_n = np.column_stack([nrm[:, 0], nrm[:, 2], Z_SIGN * nrm[:, 1]])
-        p0, p1, p2 = ac[tri[:, 0]], ac[tri[:, 1]], ac[tri[:, 2]]
-        outward = (np.cross(p1 - p0, p2 - p0) * ac_n[tri].mean(axis=1)).sum(axis=1) >= 0
-        tri = np.where(outward[:, None], tri, tri[:, [0, 2, 1]])
         out = []
-        per = (MAX_VERTICES // 4) * 4  # quads never straddle two meshes
-        for start in range(0, len(ac), per):
-            sel = slice(start, start + per)
-            t = tri[(tri[:, 0] >= start) & (tri[:, 0] < start + per)] - start
-            out.append(Mesh(f"FURNITURE_{len(out)}", MATERIAL, ac[sel].astype(np.float32), ac_n[sel].astype(np.float32),
-                            uv[sel].astype(np.float32), t))
+        for material, (pos, nrm, uv, tri) in self.parts.items():
+            if not pos:
+                continue
+            pos = np.array(pos, dtype=float)
+            nrm = np.array(nrm, dtype=float)
+            uv = np.array(uv, dtype=float)
+            tri = np.array(tri, dtype=np.int64)
+            ac = frame.to_ac(pos[:, 0], pos[:, 1], pos[:, 2])
+            ac_n = np.column_stack([nrm[:, 0], nrm[:, 2], Z_SIGN * nrm[:, 1]])
+            p0, p1, p2 = ac[tri[:, 0]], ac[tri[:, 1]], ac[tri[:, 2]]
+            outward = (np.cross(p1 - p0, p2 - p0) * ac_n[tri].mean(axis=1)).sum(axis=1) >= 0
+            tri = np.where(outward[:, None], tri, tri[:, [0, 2, 1]])
+            per = (MAX_VERTICES // 4) * 4  # quads never straddle two meshes
+            for start in range(0, len(ac), per):
+                sel = slice(start, start + per)
+                t = tri[(tri[:, 0] >= start) & (tri[:, 0] < start + per)] - start
+                out.append(Mesh(f"FURNITURE_{len(out)}", material, ac[sel].astype(np.float32),
+                                ac_n[sel].astype(np.float32), uv[sel].astype(np.float32), t))
         return out

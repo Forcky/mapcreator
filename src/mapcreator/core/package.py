@@ -214,7 +214,8 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
                    gravel_materials: list[str] = (), grassy_gravel: list[str] = (),
                    dirt_colours: dict[str, str] | None = None,
                    water_materials: list[str] | None = None, water_type: str = "LAKE",
-                   tree_list: str | None = None, tree_surfaces: list[str] | None = None) -> str:
+                   tree_list: str | None = None, tree_surfaces: list[str] | None = None,
+                   retro_materials: dict[str, tuple[float, float]] | None = None) -> str:
     """Custom Shaders Patch track config (`extension/ext_config.ini`). Vanilla AC ignores it.
 
     - Grass FX grows procedural grass on our grass materials. CSP's default colour mask means it follows the
@@ -236,6 +237,15 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
       `tree_surfaces`. They are the track's only trees.
     - No `[WIND] DYNAMIC_CABLES` for the power line wires: CSP 0.2.11 redraws them as tubes about 8 times thicker
       than the mesh (in game, 4 Nov), and they look right without it.
+    - `retro_materials` (name -> its ksDiffuse at night, and the KN5's own by day) are the furniture's
+      retroreflective faces. At night a `[MATERIAL_ADJUSTMENT_n]` raises their diffuse (CONDITION = NIGHT_SMOOTH),
+      and VALUE_0_OFF puts the KN5's value back by day. It's the way CSP's own Imola config makes "curbs + start
+      markers reflective at night" (`extension/config/tracks/loaded/imola.ini`, MATERIAL_ADJUSTMENT_15: ksDiffuse
+      0.3666 -> 0.666, ksAmbient 0.2, CONDITION=NIGHT_SMOOTH), rather than ksEmissive, which would make them glow by
+      themselves wherever they are (as Bathurst's street lights do). The diffuse term is lit by the headlights; the
+      ambient term, the night sky, is left as it is, so a reflector out of the beam stays dark. NIGHT_SMOOTH is
+      defined in CSP's `common/conditions.ini` (CONDITION_80: sun above 88 degrees, LAG 0.97), which the file then
+      includes, as every shipped config that uses it does.
     """
     water = [("INCLUDE: common/materials_track.ini", {}),
              ("Material_Water", {"Materials": ", ".join(water_materials), "Type": water_type})] if water_materials else []
@@ -243,7 +253,12 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
              ] if tree_list else []
     tyres = [("TYRES_FX", {**{k: f"'{v}'" for k, v in dirt_colours.items()}, **TYRES_FX_GAINS})] if dirt_colours else []
     occluding = list(road_materials) + [m for m in gravel_materials if m not in grassy_gravel]
-    text = ini(water + [
+    retro = [("INCLUDE: common/conditions.ini", {})] + [
+        (f"MATERIAL_ADJUSTMENT_{i}", {
+            "ACTIVE": "1", "DESCRIPTION": "retroreflective furniture: brighter in the headlights at night",
+            "MATERIALS": name, "CONDITION": "NIGHT_SMOOTH", "KEY_0": "ksDiffuse", "VALUE_0": night, "VALUE_0_OFF": day})
+        for i, (name, (night, day)) in enumerate(sorted(retro_materials.items()))] if retro_materials else []
+    text = ini(retro + water + [
         ("ABOUT", {"AUTHOR": "mapcreator", "VERSION": version}),
         ("GRASS_FX", {"GRASS_MATERIALS": ", ".join(list(grass_materials) + list(grassy_gravel)),
                       "OCCLUDING_MATERIALS": ", ".join(occluding)}),

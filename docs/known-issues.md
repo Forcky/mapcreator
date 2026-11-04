@@ -121,7 +121,7 @@ Trees and buildings now stand within 600 m of the road (`core.reach`); they stop
 ## Roadside furniture
 
 - **To check in game:**
-  - guide posts and their reflectors at night;
+  - the reflectors, CAMs and speed signs at night, at other times of night and in other weather (the night adjustment was tuned at 22:00, clear);
   - CAMs read as chevrons pointing the right way, in both directions;
   - speed signs readable;
   - frame rate (Grasstree Hill: about 450 guide posts and 300 CAMs, about 25,000 vertices; each KN5 grows 2 MB).
