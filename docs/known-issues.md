@@ -12,7 +12,7 @@ These need the in-game harness on a machine with Assetto Corsa (`docs/dev-handov
 
 - what `map.ini`'s `SCALE_FACTOR` means to the game's track map
 - what the AI line's `direction` field does
-- whether the AI drives the generated `fast_lane.ai` sensibly through hairpins (Grasstree Hill has none)
+- whether the AI drives the racing line sensibly through hairpins: it drove Lyell Highway's 15.8 m and 13.9 m hairpins on a centreline line with points 5 m apart, but not yet on the racing line
 - in the Tree FX model files: the meaning of the trailer's `4`, and whether `size` scales exactly as assumed (model height × size)
 - CSP rewrites each tree `.bin` the first time it loads it: the same entries, re-packed in another order and about 9 KB larger. Harmless so far, but it suggests our zip differs from the layout CSP's own writer uses.
 - what race.ini's `[AUTOSPAWN]` does
@@ -59,7 +59,7 @@ Nothing about gravel has been loaded in game yet. The `GRAVEL` surface's numbers
   - **Lower Swamp Road** (`examples/lower_swamp_road.json`, both layouts): one lane at 4.0 m, sealed for 1.6 km and then unsealed for 5.2 km.
     - All 5 single-file spots spawn on the road with every wheel loaded, and `pitboxes` is 5. The forward grid stands on the seal and the reverse grid on the gravel.
     - 4 AI opponents start and drive in file.
-    - Guide posts on the seal only (94); none on the gravel. CAMs on its 21 tight bends (125), as on a seal: whether that many reads right on a single-lane gravel road.
+    - Guide posts and CAMs on the seal only; none on the gravel.
     - The change from seal to gravel at 1.6 km is felt, with no bump.
     - Dust behind the cars, gravel skidmarks, and dirt carried onto the seal. Dust and tyre dirt should match the road (`[TYRES_FX]` colours from our textures).
     - The grass strip down the middle grows Grass FX blades, and only there.
@@ -78,6 +78,16 @@ Nothing about gravel has been loaded in game yet. The `GRAVEL` surface's numbers
 - **Widths are guesses.** About 98% of unsealed ways in OSM carry neither `lanes` nor `width`, so the class default (5.0-6.0 m) decides. The defaults follow NATSPEC AUS-SPEC 0052's minimum formations, not measurements. Measuring about 20 unsealed roads in theLIST's CC BY aerial photos (AerialPhoto2020-2024; never the NC-ND imagery) would calibrate them.
 - **Not routable:** `highway=track`, so most forestry roads (and Rally Tasmania's stages) can't be built yet. Lower Swamp Road carries on as a track past where its example ends.
 - **One surface for all unsealed values.** `dirt`, `earth`, `ground`, `mud` and `sand` drive like `gravel`. A looser `DIRT` surface can follow if testing shows it's worth it.
+
+## Racing line
+
+The AI line runs out-in-out over the whole road (`core/racing_line.py`, 4 Nov). Static checks pass on Grasstree Hill (both layouts) and Brinktop Road. To check in game, against the same track built from main:
+- **AI lap time:** the AI's time from gate to gate, both layouts. Its planned run is about 3% quicker on Grasstree Hill (375 s against 386 s), but AC sets its own speed.
+- **On the road:** the AI stays on the road through the tight bends in both layouts, and doesn't run wide on the exit where the line runs 1.2 m from the edge. The probe (`harness/ac_harness.py probe-points`) teleports a car onto the line every 200 m and checks all four wheels.
+- **8-car races:** the cars now share one line that crosses the whole road. Whether they still race clean, side by side and passing, and get away from the grid in pairs as before.
+- **Run-off:** as before (#30), every car should come to rest on the road about 60 m before the end of the line.
+- **Spawns:** the grid and the hot-lap spawn are unchanged; the line stays on the centreline over them, and the AI should leave the grid as before.
+- **Track length:** `log.txt`'s `TRACK LENGTH` on Grasstree Hill and Lyell Highway against the line's real length (the last cumulative length in `fast_lane.ai`; Grasstree Hill forward: 12,737 m). With points 5 m apart, Lyell should read about 1.3% long, against 32.8% with 1 m points.
 
 ## Scenery reach (600 m)
 
