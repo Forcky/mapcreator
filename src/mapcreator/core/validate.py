@@ -24,10 +24,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
-from scipy.ndimage import uniform_filter1d
+from scipy.interpolate import CubicSpline
+from scipy.ndimage import minimum_filter1d, uniform_filter1d
 from scipy.spatial import cKDTree
 
-from mapcreator.core import ai_line, kn5
+from mapcreator.core import ai_line, kn5, racing_line
 from mapcreator.core.package import ROAD_KEYS, SURFACE_KEYS, surface_keys
 from mapcreator.core.power import POWER_COLLIDER
 from mapcreator.core.scenery import TRUNK_MESH
@@ -80,9 +81,11 @@ class Report:
         return not self.failed and not self.route_failed
 
 
-def bend_checks(rep: Report, label: str, line: ai_line.AiLine, *, allow_tight_bends: bool = False) -> None:
-    """The AI line's speeds and tightest bend. A slow AI line is put down to the bend when there's one."""
-    radius = line.extra[:, 4]
+def bend_checks(rep: Report, label: str, line: ai_line.AiLine, *, allow_tight_bends: bool = False,
+                radius: np.ndarray | None = None) -> None:
+    """The AI line's speeds and the road's tightest bend (`radius`, by default the AI line's own). A slow AI line
+    is put down to the bend when there's one."""
+    radius = line.extra[:, 4] if radius is None else radius
     i = int(np.argmin(radius))
     r = float(radius[i])
     v = line.extra[:, 0]
@@ -97,6 +100,78 @@ def bend_checks(rep: Report, label: str, line: ai_line.AiLine, *, allow_tight_be
         rep.warnings.append(f"{what}; built anyway, as asked")
     else:
         rep.route_failed.append(what)
+
+
+# The racing line (core/racing_line.py) keeps EDGE_MARGIN_M from each road edge; between its stations, at the
+# apex of a hairpin, it can come a few centimetres closer. This much closer fails.
+AI_EDGE_MIN_M = racing_line.EDGE_MARGIN_M - 0.2
+LINE_RADIUS_TOL = 0.05  # the line may be this much (a share) tighter than the road nearby before it fails
+LINE_RADIUS_NEAR_M = 30.0  # either side of a point, the road's tightest radius in this reach is "nearby"
+# Above this radius the planned speed is capped anyway, so the line's radius there doesn't matter.
+LINE_RADIUS_CARE_M = ai_line.V_MAX ** 2 / (ai_line.MU * ai_line.G)
+
+
+def _spacing(line: ai_line.AiLine) -> float:
+    return float(np.median(np.diff(line.length))) if len(line.length) > 1 else 1.0
+
+
+def _radius(xz: np.ndarray) -> np.ndarray:
+    """Radius at each point of a line of AC x/z points (1 m apart, or 5 m as written now): traced through a spline
+    every metre, smoothed as the AI file's own, the tightest within half a spacing of each point."""
+    xz = np.asarray(xz, dtype=float)
+    s = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(xz, axis=0).T))])
+    if len(s) < 4 or s[-1] <= 0:
+        return np.full(len(s), 1000.0)
+    keep = np.concatenate([[True], np.diff(s) > 1e-9])
+    spline = CubicSpline(s[keep], xz[keep])
+    fine = np.append(np.arange(0.0, s[-1], 1.0), s[-1])
+    d1, d2 = spline(fine, 1), spline(fine, 2)
+    k = (d1[:, 0] * d2[:, 1] - d1[:, 1] * d2[:, 0]) / np.maximum(np.hypot(d1[:, 0], d1[:, 1]) ** 3, 1e-12)
+    r = ai_line.radius_of(k, 1.0)
+    owner = np.searchsorted((s[1:] + s[:-1]) / 2, fine)  # the nearest point to each metre
+    out = np.full(len(s), np.inf)
+    np.minimum.at(out, owner, r)
+    empty = ~np.isfinite(out)  # points under a metre apart
+    out[empty] = np.interp(s[empty], fine, r)
+    return out
+
+
+def road_middle(line: ai_line.AiLine) -> tuple[np.ndarray, np.ndarray]:
+    """The middle of the road beside each AI point, from the point and its distances to the two edges (fields 5
+    and 6), as AC x/z; and its radius. On a line along the middle of the road, the line itself."""
+    fwd = line.extra[:, [13, 15]]
+    left = np.column_stack([fwd[:, 1], -fwd[:, 0]]) / np.maximum(np.hypot(*fwd.T), 1e-9)[:, None]
+    xz = np.asarray(line.pos, dtype=float)[:, [0, 2]] + left * ((line.extra[:, 5] - line.extra[:, 6]) / 2)[:, None]
+    return xz, _radius(xz)
+
+
+def racing_line_checks(rep: Report, label: str, line: ai_line.AiLine, road: RoadSurface, middle_radius) -> None:
+    """The AI line stays on the road, AI_EDGE_MIN_M or more from each edge (by its own edge distances, and on the
+    road's triangles), and nowhere bends tighter than the road does nearby."""
+    side = np.minimum(line.extra[:, 5], line.extra[:, 6])
+    i = int(np.argmin(side))
+    rep.check(bool(side[i] >= AI_EDGE_MIN_M),
+              f"{label}: AI line at least {AI_EDGE_MIN_M:.1f} m inside both road edges "
+              f"({side[i]:.2f} m at the closest, {line.length[i]:.0f} m along it)")
+    spacing = _spacing(line)
+    pick = np.arange(0, len(line.pos), max(int(round(5.0 / spacing)), 1))  # every point, or every 5 m
+    fwd = line.extra[pick][:, [13, 15]]
+    left = np.column_stack([fwd[:, 1], -fwd[:, 0]]) / np.maximum(np.hypot(*fwd.T), 1e-9)[:, None]
+    xz = np.asarray(line.pos, dtype=float)[pick][:, [0, 2]]
+    off = ~(road.covers(xz + left * AI_EDGE_MIN_M) & road.covers(xz - left * AI_EDGE_MIN_M))
+    short = (f" ({int(off.sum())} of {len(pick)} points short, the first {line.length[pick][off][0]:.0f} m along it)"
+             if off.any() else "")
+    rep.check(not bool(off.any()),
+              f"{label}: the road's triangles reach {AI_EDGE_MIN_M:.1f} m either side of the AI line{short}")
+    r_line = _radius(np.asarray(line.pos, dtype=float)[:, [0, 2]])
+    w = 2 * max(int(round(LINE_RADIUS_NEAR_M / spacing)), 1) + 1
+    nearby = minimum_filter1d(np.asarray(middle_radius, dtype=float), w, mode="nearest")
+    ratio = np.where(r_line < LINE_RADIUS_CARE_M, r_line / np.minimum(nearby, LINE_RADIUS_CARE_M), np.inf)
+    j = int(np.argmin(ratio))
+    rep.check(bool(ratio[j] >= 1 - LINE_RADIUS_TOL),
+              f"{label}: AI line's tightest radius {r_line.min():.1f} m, nowhere tighter than the road nearby "
+              f"(the road's {float(np.min(middle_radius)):.1f} m; worst {r_line[j]:.1f} m against {nearby[j]:.1f} m, "
+              f"{line.length[j]:.0f} m along it)")
 
 
 VERTICAL_G_LIMIT = 0.5  # a crest or sag pulling more than this, at the AI's planned speed, gets a warning
@@ -276,7 +351,9 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
     lift = [p[1] - h for p in sample if (h := road.height(p[0], p[2])) is not None]
     rep.check(len(lift) > 0.9 * len(sample) and AI_HEIGHT[0] <= min(lift) and max(lift) <= AI_HEIGHT[1],
               f"{label}: AI line {min(lift):.2f}-{max(lift):.2f} m above the road" if lift else f"{label}: AI line off the road")
-    bend_checks(rep, label, line, allow_tight_bends=allow_tight_bends)
+    _middle, middle_radius = road_middle(line)
+    bend_checks(rep, label, line, allow_tight_bends=allow_tight_bends, radius=middle_radius)
+    racing_line_checks(rep, label, line, road, middle_radius)
     vertical_checks(rep, label, line)
     for name in sorted(n for n in dummies if re.fullmatch(r"AC_START_\d+", n)):
         # The AI line's own direction where the car stands: a chord from the line's start would cut across
@@ -284,7 +361,8 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
         fwd = dummies[name]["matrix"][2, :3]
         spawn = dummies[name]["matrix"][3, :3]
         i = int(np.argmin(np.linalg.norm((line.pos - spawn)[:, [0, 2]], axis=1)))
-        lo, hi = max(i - 2, 0), min(i + 2, len(line.pos) - 1)
+        k = max(int(round(2.0 / _spacing(line))), 1)  # about 2 m either side: 2 points 1 m apart, 1 point 5 m apart
+        lo, hi = max(i - k, 0), min(i + k, len(line.pos) - 1)
         ai_dir = line.pos[hi] - line.pos[lo]
         ai_dir /= max(float(np.linalg.norm(ai_dir)), 1e-9)
         rep.check(float(fwd @ ai_dir) > 0.8, f"{label}: {name} faces the AI line's direction")

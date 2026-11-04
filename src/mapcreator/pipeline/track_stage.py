@@ -194,10 +194,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         line = ai_line.build(road, scene.frame, end_short_m=AI_END_SHORT_M)
         ai_line.write(layout_dir / "ai" / "fast_lane.ai", line)
         tight = ""
-        if job.allow_tight_bends and line.extra[:, 4].min() < validate.MIN_RADIUS_M:
-            i = int(np.argmin(line.extra[:, 4]))
-            tight = (f" Built as asked with a {line.extra[i, 4]:.1f} m bend about {line.length[i] / 1000:.1f} km in: "
-                     "some cars can't turn that tightly, and AI cars may stop there.")
+        if job.allow_tight_bends and line.centre_radius.min() < validate.MIN_RADIUS_M:
+            i = int(np.argmin(line.centre_radius))  # the road's bend, as the validator judges it
+            tight = (f" Built as asked with a {line.centre_radius[i]:.1f} m bend about {line.station[i] / 1000:.1f} km "
+                     "in: some cars can't turn that tightly, and AI cars may stop there.")
 
         xz = scene.frame.to_ac(road.e, road.n, road.z)[:, [0, 2]]
         map_png, map_ini = package.map_files(xz)
@@ -208,9 +208,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         _write_text(data / "lighting.ini", package.lighting_ini(), encoding="ascii")
         _write_text(data / "groove.ini", package.groove_ini(), encoding="ascii")
         _write_text(data / "crew.ini", package.crew_ini(), encoding="ascii")
-        # Ramp the AI down over the run-off after the finish, to all but stopped where its line ends.
+        # Ramp the AI down over the run-off after the finish, to all but stopped where its line ends. The hints are
+        # fractions of the racing line's own length, which is shorter than the road's.
         _write_text(data / "ai_hints.ini",
-                    package.ai_hints_ini(ai_line.runoff_hints(road.length, finish_distance(road.length))),
+                    package.ai_hints_ini(ai_line.runoff_hints(road.length, finish_distance(road.length), line=line)),
                     encoding="ascii")
 
         direction = package.compass(float(np.arctan2(road.n[-1] - road.n[0], road.e[-1] - road.e[0])))
@@ -239,6 +240,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             "grid": pits,
             "top_speed_kmh": round(float(line.extra[:, 0].max() * 3.6), 1),
             "slowest_kmh": round(float(line.extra[:, 0].min() * 3.6), 1),
+            "ai_tightest_radius_m": round(float(line.extra[:, 4].min()), 1),
+            "road_tightest_radius_m": round(float(line.centre_radius.min()), 1),
         }
 
     power_geo = work.root / scenery_stage.STAGE / "power.geojson"

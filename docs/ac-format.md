@@ -157,9 +157,12 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
   - side left, side right, camber (0), direction (±1)
   - normal[3], length to the next point
   - forward[3], tag (0), grade
+  - Side left and side right are the distances from the line to each road edge, not the road's half-widths: Content Manager draws the road's outline as each point plus and minus its side vector times them (AcTools.Render, `Kn5SpecificSpecial/AiLaneObject.cs`). So they sum to the road's width, and on the racing line they differ.
+  - Radius, direction, speed, gas, brake, grade and forward are all the racing line's own, not the centreline's.
 - **Grid:** `hasGrid = 0`; the game builds and caches the grid itself.
 - **End:** the AI line stops 40 m before the road's end (`AI_END_SHORT_M`), short of the invisible end wall.
 - **Hints (`data/ai_hints.ini`):** AC's AI sets its own speed (M3), so hints are the way to slow it. Three `[HINT_n]` sections run from the finish gate to the end of the line, as fractions of the spline: pace 0.5, then 0.2 from 150 m before the line's end, then **0** for its last 60 m.
+  - The fractions are of the line's own length, measured from the points written. The racing line is shorter than the road (Grasstree Hill: 12,737 m against 12,772 m), so a place on the road falls at a later fraction of it than of the centreline.
   - A hint's VALUE scales the speed AC works out from the line's curvature, not the car's speed. Measured in game (4 Nov): AC's own normalised position matches our line exactly in both layouts, and the hints fall where we put them. Yet down Grasstree Hill's straight reverse run-off (radius 287-1,000 m) 0.2 and 0.05 left the AI at about 100 km/h, while forward, where the run-off bends (radius 19-210 m), the same hints slowed it to 12-15 km/h.
   - Kunos's shipped hints fit that reading: they're all short ranges around corners, 0.6 to 0.92 (`ks_laguna_seca`'s Corkscrew, `ks_black_cat_county`, `ks_nurburgring`), and none sits on a straight or near 0. There's no Kunos or CSP documentation of the file.
   - So only 0 stops a car on a straight. With 0.05 the AI crawled past the end of its line at about 6 km/h and off the road; with 0 it stops on the road about 60 m before the end of its line, about 100 m short of the end wall, in both layouts. On the straight reverse run-off the 0.2 stretch still does nothing, and the AI brakes from about 100 km/h in the 45 m before the 0 hint: hard, but straight and on the road.
@@ -167,12 +170,30 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
   - Earlier: with a single hint of 0.5 and the line running to the road's end, the AI reached the end wall at about 45 km/h, and AC put it back at the start (3 Nov).
   - Kunos's own point-to-point track, `ks_drag`, sidesteps the problem: one straight AI line runs 2,469 m, past every layout's finish (`AC_OPEN_FINISH_L/R`, 204 m to 2,004 m along it), so even the 2,000 m layout leaves 465 m of line after its finish.
 - **No hints on gravel** yet: AC's AI sets its own pace from the surface it's on. If it overdrives the gravel in testing, a hint of about 0.8 over the unsealed stretches is the next step.
-- **Placement:** points every 1 m along the centreline, 0.4 m above the road. Points on the surface have crashed the game in another generator.
-- **Speed:** grip-limited, `v = sqrt(μ g R)` with μ = 1.05, capped at 130 km/h. It then gets a forward pass for acceleration and a backward pass for braking, both adjusted for grade. AC's AI finished the forward layout at M3, but it ignores this speed and set its own, up to 214 km/h in an Abarth 500.
+- **The line is a racing line** across the road's full width (`core/racing_line.py`), by the maintainer's decision of 4 Nov 2026: out-in-out through the bends, as on a closed road, not kept to the left lane.
+  - It's a minimum-curvature line after Heilmeier et al., "Minimum curvature trajectory planning and control for an autonomous race car" (Vehicle System Dynamics 58(10), 2020, doi:10.1080/00423114.2019.1631455), re-implemented from the paper. TUM's implementation is LGPL-3.0 and wasn't used.
+  - Offsets from the centreline at stations 2 m apart, chosen to minimise the line's summed squared curvature, linearised around the line found and solved again, three times.
+  - It stays 1.2 m from each road edge (`EDGE_MARGIN_M`, to the line: a car 1.7 m wide has 0.35 m to spare), and on the inside of a tight bend within half the bend's radius.
+  - Its curvature is limited to the centreline's tightest within 20 m, so it never takes a bend tighter than the road does. Without that limit it hugged the inside of long bends, 48 m on a 50 m bend.
+  - It keeps to the centreline for the first 60 m of each layout (the grid spots, the start gate and the hot-lap spawn) and from 30 m before the finish gate to its end (the run-off, where the AI is stopped). It leaves and rejoins the centreline over 50 m.
+  - Each layout gets its own line: the reverse isn't the forward one backwards.
+  - Built on Grasstree Hill (6.4 m wide), the tightest radius outside the held stretches went from 26.2 m to 30.3 m and the planned run from 386 s to 375 s. On Brinktop Road, 7.1 m to 16.1 m, its slowest planned speed from 31 to 46 km/h. On Lyell Highway (63 km), 13.9 m to 17.3 m.
+- **Placement:** points about 5 m apart along the line itself (`AI_POINT_SPACING_M`), evenly from its start to its end, each 0.4 m above the road surface where it stands, crown and banking included. Points on the surface have crashed the game in another generator.
+  - Why 5 m: AC measures the spline from the points in float32, and the rounding inflates the length it reports (`TRACK LENGTH` in `log.txt`) by about 1/spacing². On Lyell Highway (63.06 km, reaching ±21.7 km east-west from the local origin), measured in game on 4 Nov by swapping only `fast_lane.ai`: 1 m points made it 83,747 m (+32.8%), 2 m +8.8%, 5 m +1.3% (positions within 203 m everywhere, 26 m at the end), 10 m +0.3%. Grasstree Hill's 1 m line read 1.1% long.
+  - The inflation grows with distance from the origin, so every spline fraction (the run-off hints, AC's progress) moved with it on a long track.
+  - 10 m points cut the chord 0.8 m inside a 15 m hairpin. At 5 m the AI drove Lyell's 15.8 m and 13.9 m hairpins at 40 and 36 km/h, within 1.0 m of the line: as good as the 1 m line or better.
+  - Speeds, gas, brake, radius and grade are worked out every metre along the line, then read at each point.
+- **Speed:** grip-limited on the line's own curvature, `v = sqrt(μ g R)` with μ = 1.05, capped at 130 km/h. It then gets a forward pass for acceleration and a backward pass for braking, both adjusted for grade. AC's AI finished the forward layout at M3, but it ignores this speed and set its own, up to 214 km/h in an Abarth 500.
 
 ## Validation
 
 `mapcreator validate` reads every file back and checks the rules above, including measured heights of spawns and AI points against the actual road triangles. The road is every `1ROAD` and `1GRAVEL` mesh: spawns, the AI line, and the tree and power colliders' clearance are all measured against both. The in-game checks (does it load, are the wheels on the ground, can the AI drive it) live in `harness/`.
+
+For the AI line it also checks:
+- distances strictly increase, and each spawn faces along the line;
+- every point is at least 1.0 m (the 1.2 m margin less 0.2 m) inside both edges: by its side distances, and on the road's triangles either side of it;
+- the line is nowhere more than 5% tighter than the road within 30 m of it. The road's middle is found from each point and its two side distances, and both radii come from a spline through the points.
+- The route check (a bend under 5 m) is on the road's radius found that way, not the racing line's. From points 5 m apart it reads a little tight: Brinktop Road's tightest bend reads 6.9 m against 7.1 m from the centreline itself.
 
 ## Power lines (`core/power.py`)
 
