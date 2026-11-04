@@ -31,12 +31,13 @@ def hairpin_first() -> np.ndarray:
 
 
 def build_and_check(tmp_path, tags: dict, *, reverse: bool = False, shape=gentle, trunks=(),
-                    gravel: tuple[float, float] | None = None, collider: str = scenery.TRUNK_MESH) -> validate.Report:
+                    gravel: tuple[float, float] | None = None, collider: str = scenery.TRUNK_MESH,
+                    ground=flat) -> validate.Report:
     """`trunks`: (metres along the road, metres left of the centreline) for 0.4 m trunk colliders, named
     `collider` (a power line's are checked the same way). `gravel`: (from, to) metres along the road that are
-    unsealed, as 1GRAVEL meshes with the steeper crown."""
+    unsealed, as 1GRAVEL meshes with the steeper crown. `ground`: the road's height at each point (the DEM)."""
     line = cl.smooth(shape())
-    prof = pf.smooth_profile(line.s, flat(line.xy[:, 0], line.xy[:, 1]), np.zeros(len(line.s), bool))
+    prof = pf.smooth_profile(line.s, ground(line.xy[:, 0], line.xy[:, 1]), np.zeros(len(line.s), bool))
     unsealed = np.zeros(len(line.s), bool) if gravel is None else (line.s >= gravel[0]) & (line.s <= gravel[1])
     w, _ = sec.width_from_tags(tags)
     half = sec.eased(line.s, np.full(len(line.s), w)) / 2
@@ -44,13 +45,13 @@ def build_and_check(tmp_path, tags: dict, *, reverse: bool = False, shape=gentle
     sl, sr = sec.half_slopes(np.zeros(len(line.s)), crown)
     style = np.where(unsealed, sec.style_code(True, w < sec.SINGLE_LANE_BELOW_M), sec.style_code(False, False))
     frame = frame_for(line.xy, prof.z)
-    rb = mesh.build_ribbon(line.xy, prof.z, line.heading, line.curvature, half, half, sl, sr, flat)
+    rb = mesh.build_ribbon(line.xy, prof.z, line.heading, line.curvature, half, half, sl, sr, ground)
     meshes = mesh.ribbon_meshes(rb, line.s, frame, style=style)
     if trunks:
         i = np.searchsorted(line.s, [s for s, _ in trunks])
         nrm = np.column_stack([-np.sin(line.heading[i]), np.cos(line.heading[i])])
         xy = line.xy[i] + nrm * np.array([off for _, off in trunks])[:, None]
-        cols = scenery.trunk_colliders(xy, flat(*xy.T), np.full(len(xy), 0.4), np.zeros(len(xy)), line.s[i], frame)
+        cols = scenery.trunk_colliders(xy, ground(*xy.T), np.full(len(xy), 0.4), np.zeros(len(xy)), line.s[i], frame)
         for m in cols:
             m.name = m.name.replace(scenery.TRUNK_MESH, collider)
         meshes += cols
@@ -137,6 +138,20 @@ def test_scenery_colliders_are_checked_against_gravel_too(tmp_path, what, collid
     rep = build_and_check(tmp_path, road, trunks=beside + [(26.0, half + 0.6)], gravel=all_gravel, collider=collider)
     assert [f for f in rep.failed if "from every spawn" in f]
     assert not [f for f in rep.failed if "clear of the road" in f]
+
+
+def test_a_tight_sag_on_gravel_is_measured_and_warned_about(tmp_path):
+    # A V-shaped dip 500 m along an all-gravel road: 12% down, then 12% up. The AI line's heights are measured
+    # against the 1GRAVEL meshes, and the vertical check reads the AI line, whatever the surface under it.
+    def dip(e, n):
+        return 100.0 + 0.12 * np.abs(np.asarray(e, float) - 500500.0)
+
+    rep = build_and_check(tmp_path, {"highway": "unclassified", "lanes": "1"}, gravel=(0.0, 1e9), ground=dip)
+    assert rep.failed == []
+    assert any("AI line 0.40-0.40 m above the road" in p for p in rep.passed)
+    assert [w for w in rep.warnings if "sag at" in w and "vertical radius" in w]
+    rep = build_and_check(tmp_path, {"highway": "unclassified", "lanes": "1"}, gravel=(0.0, 1e9))
+    assert not [w for w in rep.warnings if "vertical radius" in w]  # flat: nothing to warn about
 
 
 def test_a_gravel_mesh_needs_gravel_in_surfaces_ini():

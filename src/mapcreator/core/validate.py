@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+from scipy.ndimage import uniform_filter1d
 from scipy.spatial import cKDTree
 
 from mapcreator.core import ai_line, kn5
@@ -43,8 +44,9 @@ AI_HEIGHT = (0.3, 0.5)
 # A gate must reach past both road edges; any span is fine as long as it does. This floor only catches
 # a degenerate gate (both ends in one place).
 MIN_GATE_M = 3.0
-# Content Manager's own length pattern (TrackObjectBase): a number followed by a unit.
-CM_LENGTH = re.compile(r"^\W*(\d+(?:[\.,]\d+)?)\W*(?:(km|kilometers)|(mi|miles?)|m)\b")
+# The length as `package.ui_track_json` writes it: kilometres to two places, then the unit. Content Manager ignores
+# a bare number, so the unit has to be there.
+UI_LENGTH = re.compile(r"^\d+\.\d{2} km$")
 MIN_RADIUS_M = 5.0  # tighter than any real hairpin: usually a routing artefact
 # Not even on request below this: the route turns on the spot. It also keeps the AI line's slowest speed,
 # sqrt(MU * G * r), above the 5 m/s the speed check wants.
@@ -95,6 +97,30 @@ def bend_checks(rep: Report, label: str, line: ai_line.AiLine, *, allow_tight_be
         rep.warnings.append(f"{what}; built anyway, as asked")
     else:
         rep.route_failed.append(what)
+
+
+VERTICAL_G_LIMIT = 0.5  # a crest or sag pulling more than this, at the AI's planned speed, gets a warning
+VERTICAL_EDGE_M = 20  # metres at each end of the AI line left out of that check
+
+
+def vertical_checks(rep: Report, label: str, line: ai_line.AiLine) -> None:
+    """A warning, never a failure, where a crest or sag is tighter than the AI's planned speed suits: more than
+    VERTICAL_G_LIMIT of extra vertical acceleration. Real narrow hill roads have such crests, so the profile
+    isn't smoothed to suit; but a tight one can also mean the line reads a cutting beside the road."""
+    s = np.asarray(line.length, dtype=float)
+    if len(s) < 50:
+        return
+    grid = np.arange(s[0], s[-1], 1.0)
+    h = uniform_filter1d(np.interp(grid, s, np.asarray(line.pos, dtype=float)[:, 1]), 10, mode="nearest")
+    k = uniform_filter1d(np.gradient(np.gradient(h)), 10, mode="nearest")  # 1/m: + is a sag, - a crest
+    v = np.interp(grid, s, line.extra[:, 0])
+    extra = v ** 2 * np.abs(k) / 9.81
+    extra[:VERTICAL_EDGE_M] = extra[-VERTICAL_EDGE_M:] = 0.0  # the derivatives aren't reliable at the line's ends
+    i = int(np.argmax(extra))
+    if extra[i] > VERTICAL_G_LIMIT:
+        rep.warnings.append(
+            f"{label}: a {'sag' if k[i] > 0 else 'crest'} at {grid[i]:.0f} m along the AI line has a "
+            f"{1 / abs(k[i]):.0f} m vertical radius: {extra[i]:.2f} g extra at the AI's planned {v[i] * 3.6:.0f} km/h")
 
 
 def is_road_mesh(name: str) -> bool:
@@ -251,6 +277,7 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
     rep.check(len(lift) > 0.9 * len(sample) and AI_HEIGHT[0] <= min(lift) and max(lift) <= AI_HEIGHT[1],
               f"{label}: AI line {min(lift):.2f}-{max(lift):.2f} m above the road" if lift else f"{label}: AI line off the road")
     bend_checks(rep, label, line, allow_tight_bends=allow_tight_bends)
+    vertical_checks(rep, label, line)
     for name in sorted(n for n in dummies if re.fullmatch(r"AC_START_\d+", n)):
         # The AI line's own direction where the car stands: a chord from the line's start would cut across
         # a hairpin there and fail a spawn that faces exactly the right way.
@@ -300,10 +327,9 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False) -> Report:
             rep.check(meta.get("pitboxes") == str(pits), f"{label}: pitboxes matches {pits} AC_PIT dummies")
             rep.check(isinstance(meta.get("geotags"), list) and all(isinstance(g, str) for g in meta["geotags"]),
                       f"{label}: geotags are strings")
-            length_ok = isinstance(meta.get("length"), str) and re.match(
-                CM_LENGTH, meta["length"])
+            length_ok = isinstance(meta.get("length"), str) and UI_LENGTH.match(meta["length"])
             rep.check(bool(length_ok) and isinstance(meta.get("year"), int),
-                      f"{label}: length parses with a unit (as CM reads it) and year is an integer")
+                      f"{label}: length in km with its unit, and year an integer")
         if datas and (base / "data" / "surfaces.ini").exists():
             names = [n["name"] for d in datas for n in d["nodes"] if n["class"] == 2]
             bad = undefined_surfaces(names, (base / "data" / "surfaces.ini").read_text(encoding="ascii"))
