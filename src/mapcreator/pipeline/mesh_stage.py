@@ -17,7 +17,9 @@ from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.regions import FINE_DEM_M, job_region
 
 STAGE = "04_mesh"
-TERRAIN_CORRIDOR_M = 300.0
+# Terrain reaches this far either side of the road: the world's edge, and the ground under far power towers.
+# Beyond 300 m its lattice is coarse (mesh.OUTER_LATTICE_M). The DEM corridor must cover it (profile_stage).
+TERRAIN_CORRIDOR_M = 700.0
 
 log = logging.getLogger(__name__)
 

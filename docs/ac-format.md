@@ -50,6 +50,7 @@ A job with `"layouts": "both"` produces:
 | `RAIL_*`, `BUILDING_ROOF_*`, `WATER_*` | visual only (no leading digit) |
 
 - Each physics mesh name matches exactly one KEY. There is deliberately no `WALL` KEY, because defining one is reported to make walls driveable.
+- **Terrain:** `1GRASS_T###` reaches 700 m either side of the road (`mesh_stage.TERRAIN_CORRIDOR_M`), and the world ends there. It's one Delaunay surface over lattices of 4 m to 60 m out, 8 m to 140 m, 16 m to 300 m, then 32 m. The DEM is read 100 m further (`profile_stage.CORRIDOR_M`). Trees and buildings stop at 250 m, so the ground beyond is bare. Until #34 it ended at 300 m, and power towers further out stood on nothing.
 - **Logic dummies:**
   - `AC_AB_START_L/R` and `AC_AB_FINISH_L/R` sit 0.5 m outside each road edge. L is left of the driving direction.
   - The start gate is 50 m from the layout's start. The finish gate leaves a run-off of real road after it: 250 m, or 15% of a short route, never under 50 m. With only 50 m, AC's AI crossed the finish, reached the end of its line, turned round and left the road (M3).
@@ -122,7 +123,7 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
 - **Collision:** supports within 15 m of the road's edge get an invisible `1WALL_POWER_n` mesh: the pole, or the tower's four legs, up to 3-4.5 m.
   - No collider where it would come within 0.3 m of the road, or within 2.5 m of it in the 60 m at either end of the road, where the grid spots stand side by side.
   - The validator checks them as it does the trunk colliders: invisible, clear of the road, and at least 3 m from every spawn.
-- **Reach:** supports stand only on the terrain mesh, with their whole base within 295 m of the centreline (the terrain reaches 300 m).
+- **Reach:** supports stand only on the terrain mesh, with their whole base within 5 m of its edge: 695 m of the centreline, since the terrain reaches 700 m (#34; it was 300 m).
   - Towers further out stood in the sky, their bases floating past the ground's edge (in game, 4 Nov), so a span with a support beyond it isn't built.
   - On Grasstree Hill that leaves out both TasNetworks lines; widening the terrain (#34) would bring them back.
 - **No wind:** CSP's `[WIND] DYNAMIC_CABLES` (undocumented; CSP's own Laguna Seca config uses it) does act on the wires: its log shows "Preparing cables". But it redraws them as tubes about 8 times thicker than the 3.5 cm mesh. Without it they draw as thin lines and look right (in game, 4 Nov), so `ext_config.ini` leaves it out.

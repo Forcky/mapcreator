@@ -18,8 +18,8 @@ from mapcreator.regions import FINE_DEM_M, job_region
 log = logging.getLogger(__name__)
 
 STAGE = "02_profile"
-# DEM tiles are fetched this far either side of the road, enough for the terrain corridor later.
-CORRIDOR_M = 400.0
+# DEM tiles are fetched this far either side of the road: the terrain corridor (mesh_stage, 700 m) and a margin.
+CORRIDOR_M = 800.0
 FILL_TAGS = {"bridge", "tunnel"}
 
 
