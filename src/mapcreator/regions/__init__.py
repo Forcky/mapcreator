@@ -1,11 +1,12 @@
 """Which providers serve which part of the map.
 
 Regions are checked in order, best data first:
-- Tasmania has 2 m LiDAR elevation, a canopy model and building footprints.
+- Tasmania has 2 m LiDAR elevation, a canopy model, building footprints and
+  TasNetworks' transmission lines and towers.
 - Anywhere else in Australia falls back to national data: GA's 5 m LiDAR DEM where it covers
   the whole road (the populated coast, the Murray-Darling and towns), else GA's ~30 m DEM-S,
-  ESA WorldCover trees, and OSM building footprints when a local OSM index is
-  configured (none without one). That region works in the MGA zone of the
+  ESA WorldCover trees, and OSM building footprints and power lines when a local
+  OSM index is configured (none without one). That region works in the MGA zone of the
   route's mean longitude, so a route may cross a zone boundary (the Great
   Ocean Road crosses 144°E); over a route of tens of kilometres the extra
   scale error is a few parts in 10,000.
@@ -23,7 +24,7 @@ from typing import Callable
 from pyproj import Transformer
 
 from mapcreator.config import Settings
-from mapcreator.providers.base import LONLAT_CRS, OSM, OSM_BUILDINGS, Attribution
+from mapcreator.providers.base import LONLAT_CRS, OSM, OSM_BUILDINGS, OSM_POWER, Attribution
 
 # A DEM coarser than this can't resolve a road's camber or the drop beside it.
 FINE_DEM_M = 5.0
@@ -42,6 +43,9 @@ class Region:
     canopy: Callable[[Settings], object] | None = None
     buildings: Callable[[tuple, Settings], list] | None = None
     buildings_attribution: Attribution | None = None
+    # Overhead power lines (`core.power.Line`s) by bbox in the region's CRS, or None; one source per region.
+    power: Callable[[tuple, Settings], list] | None = None
+    power_attribution: Attribution | None = None
     country: str = "Australia"
     state: str = ""
     height_datum: str = "AHD"
@@ -77,6 +81,18 @@ def _tas_buildings(bbox, settings: Settings):
     return footprints(bbox, settings)
 
 
+def _tas_power(bbox, settings: Settings):
+    from mapcreator.providers.tas_list.power import lines
+
+    return lines(bbox, settings)
+
+
+def _tas_power_attribution() -> Attribution:
+    from mapcreator.providers.tas_list.power import ATTRIBUTION
+
+    return ATTRIBUTION
+
+
 def _tas_attributions() -> tuple[Attribution, ...]:
     from mapcreator.providers.tas_list.dem import ATTRIBUTION as DEM
 
@@ -99,6 +115,8 @@ TASMANIA = Region(
     canopy=_tas_canopy,
     buildings=_tas_buildings,
     buildings_attribution=_tas_buildings_attribution(),
+    power=_tas_power,
+    power_attribution=_tas_power_attribution(),
     state="Tasmania",
 )
 
@@ -120,6 +138,19 @@ def _osm_buildings(epsg: int) -> Callable[[tuple, Settings], list]:
     return buildings
 
 
+def _osm_power(epsg: int) -> Callable[[tuple, Settings], list]:
+    """Overhead power lines from the local OSM index, in the region's CRS; none without an index."""
+
+    def lines(bbox: tuple, settings: Settings) -> list:
+        if not settings.osm_index:
+            return []
+        from mapcreator.providers.osm import index
+
+        return index.power_lines(settings.osm_index, bbox, epsg)
+
+    return lines
+
+
 def mga_zone(lon: float) -> int:
     """UTM/MGA zone number for a longitude (Australia spans zones 49 to 56)."""
     return int(math.floor((lon + 180) / 6)) + 1
@@ -138,6 +169,7 @@ def australia(zone: int) -> Region:
 
     return Region(key=f"au{zone}", name="Australia", epsg=epsg, bbox=AUSTRALIA_BBOX, elevation=elevation,
                   attributions=(OSM, DEM_S), buildings=_osm_buildings(epsg), buildings_attribution=OSM_BUILDINGS,
+                  power=_osm_power(epsg), power_attribution=OSM_POWER,
                   height_datum="AHD (approximately; SRTM-derived)")
 
 

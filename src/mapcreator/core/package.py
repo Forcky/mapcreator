@@ -188,6 +188,8 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
       comes from CSP's own common/materials_track.ini.
     - Tree FX draws the 3D trees in `tree_list` (relative to the extension folder), standing them on
       `tree_surfaces`. They are the track's only trees.
+    - No `[WIND] DYNAMIC_CABLES` for the power line wires: CSP 0.2.11 redraws them as tubes about 8 times thicker
+      than the mesh (in game, 4 Nov), and they look right without it.
     """
     water = [("INCLUDE: common/materials_track.ini", {}),
              ("Material_Water", {"Materials": ", ".join(water_materials), "Type": water_type})] if water_materials else []

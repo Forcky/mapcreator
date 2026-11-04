@@ -28,6 +28,7 @@ from scipy.spatial import cKDTree
 
 from mapcreator.core import ai_line, kn5
 from mapcreator.core.package import SURFACE_KEYS
+from mapcreator.core.power import POWER_COLLIDER
 from mapcreator.core.scenery import TRUNK_MESH
 
 REQUIRED_DUMMIES = {"AC_PIT_0", "AC_START_0", "AC_HOTLAP_START_0", "AC_AB_START_L", "AC_AB_START_R",
@@ -35,7 +36,8 @@ REQUIRED_DUMMIES = {"AC_PIT_0", "AC_START_0", "AC_HOTLAP_START_0", "AC_AB_START_
 KNOWN_DUMMY = re.compile(r"^AC_(PIT_\d+|START_\d+|HOTLAP_START_\d+|AB_(START|FINISH)_[LR]|TIME_\d+_[LR])$")
 SPAWN = re.compile(r"^AC_(PIT|START|HOTLAP_START)_\d+$")
 GRID_CLEARANCE_M = 3.5  # grid spots closer than this would put two cars in one place (a pair stands 4 m apart)
-TRUNK_SPAWN_CLEARANCE_M = 3.0  # a tree collider nearer a spawn than this could be inside or touching the car
+TRUNK_SPAWN_CLEARANCE_M = 3.0  # a tree or pole collider nearer a spawn than this could be inside or touching the car
+SCENERY_COLLIDERS = (("tree", TRUNK_MESH), ("power", POWER_COLLIDER))  # invisible walls the scenery stage adds
 SPAWN_HEIGHT = (0.15, 0.5)
 AI_HEIGHT = (0.3, 0.5)
 # A gate must reach past both road edges; any span is fine as long as it does. This floor only catches
@@ -169,10 +171,11 @@ def _kn5_checks(rep: Report, path: Path) -> tuple[dict, dict] | None:
                 and sum(k in m["name"] for k in SURFACE_KEYS + ("WALL",)) != 1]
     rep.check(not bad_keys, f"{path.name}: each physics mesh matches exactly one surface key"
               + (f" (bad: {bad_keys[:5]})" if bad_keys else ""))
-    trunks = [m for m in meshes if m["name"].startswith(TRUNK_MESH)]
-    if trunks:
-        rep.check(all(m["renderable"] == 0 for m in trunks),
-                  f"{path.name}: {len(trunks)} tree collider meshes, all invisible")
+    for what, prefix in SCENERY_COLLIDERS:
+        found = [m for m in meshes if m["name"].startswith(prefix)]
+        if found:
+            rep.check(all(m["renderable"] == 0 for m in found),
+                      f"{path.name}: {len(found)} {what} collider meshes, all invisible")
     nrm = np.concatenate([m["vertices"]["normal"] for m in meshes]).astype(float)
     rep.check(np.allclose(np.linalg.norm(nrm, axis=1), 1, atol=1e-3), f"{path.name}: unit normals")
     missing = REQUIRED_DUMMIES - set(dummies)
@@ -200,17 +203,19 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
         np.fill_diagonal(gaps, np.inf)
         rep.check(bool(gaps.min() >= GRID_CLEARANCE_M),
                   f"{label}: {len(starts)} grid spots, at least {GRID_CLEARANCE_M:.0f} m apart ({gaps.min():.1f} m)")
-    trunk_meshes = [n for n in data["nodes"] if n["class"] == 2 and n["name"].startswith(TRUNK_MESH)]
-    if trunk_meshes:
-        # Every corner, not just the trunk's centre: a prism standing on the road edge is caught too.
-        xz = np.unique(np.concatenate([m["vertices"]["pos"][:, [0, 2]] for m in trunk_meshes]).round(2), axis=0)
+    for what, prefix in SCENERY_COLLIDERS:
+        found = [n for n in data["nodes"] if n["class"] == 2 and n["name"].startswith(prefix)]
+        if not found:
+            continue
+        # Every corner, not just the trunk's or pole's centre: a prism standing on the road edge is caught too.
+        xz = np.unique(np.concatenate([m["vertices"]["pos"][:, [0, 2]] for m in found]).round(2), axis=0)
         on_road = int(road.covers(xz).sum())
-        rep.check(on_road == 0, f"{label}: tree colliders clear of the road ({on_road} corners over it)")
+        rep.check(on_road == 0, f"{label}: {what} colliders clear of the road ({on_road} corners over it)")
         spawns = np.array([d["matrix"][3, [0, 2]] for n, d in dummies.items() if SPAWN.match(n)])
         if len(spawns):
             gap = float(cKDTree(xz).query(spawns, workers=-1)[0].min())
             rep.check(gap >= TRUNK_SPAWN_CLEARANCE_M,
-                      f"{label}: tree colliders at least {TRUNK_SPAWN_CLEARANCE_M:.0f} m from every spawn ({gap:.1f} m)")
+                      f"{label}: {what} colliders at least {TRUNK_SPAWN_CLEARANCE_M:.0f} m from every spawn ({gap:.1f} m)")
     for gate in ("AC_AB_START", "AC_AB_FINISH"):
         left, right = dummies.get(f"{gate}_L"), dummies.get(f"{gate}_R")
         if left is None or right is None:

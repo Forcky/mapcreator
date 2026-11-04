@@ -106,3 +106,23 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
 ## Validation
 
 `mapcreator validate` reads every file back and checks the rules above, including measured heights of spawns and AI points against the actual road triangles. The in-game checks (does it load, are the wheels on the ground, can the AI drive it) live in `harness/`.
+
+## Power lines (`core/power.py`)
+
+- **Meshes:** `POWER_TOWERS_n` (lattice towers, material `power_metal`), `POWER_POLES_n` (timber poles, `power_timber`) and `POWER_WIRES_n` (`power_cable`). They're visual only; they're split to stay under the 65,535-vertex limit.
+- **Supports:** a lattice tower or a timber pole, whichever the data maps at that support (OSM's `power=tower` or `power=pole` on the node).
+  - Where the data doesn't say, the support takes the majority design of the line's mapped supports.
+  - With nothing mapped, it's a pole on distribution lines, under 66 kV, or where the line's vertices are under 200 m apart; otherwise a tower.
+  - A lattice tower is 26-50 m tall by voltage, with three levels of cross-arms carrying one circuit on each side and an earth wire at the peak.
+  - A pole is 11 m of timber (14 m on lines tagged `power=line`) with a cross-arm and three insulators, carrying one circuit.
+  - Each support is turned to the bisector of the spans on either side of it. Wires attach to whatever stands at each end.
+- **Wires:**
+  - A parabolic sag of span² / (8 C), with C 1,600 m for transmission and 700 m for distribution.
+  - Where the DEM rises under a span, the sag is cut back so the wire stays 8 m (transmission) or 5.5 m (distribution) above the ground. Spans that still can't clear it are counted as `low_spans`.
+- **Collision:** supports within 15 m of the road's edge get an invisible `1WALL_POWER_n` mesh: the pole, or the tower's four legs, up to 3-4.5 m.
+  - No collider where it would come within 0.3 m of the road, or within 2.5 m of it in the 60 m at either end of the road, where the grid spots stand side by side.
+  - The validator checks them as it does the trunk colliders: invisible, clear of the road, and at least 3 m from every spawn.
+- **Reach:** supports stand only on the terrain mesh, with their whole base within 295 m of the centreline (the terrain reaches 300 m).
+  - Towers further out stood in the sky, their bases floating past the ground's edge (in game, 4 Nov), so a span with a support beyond it isn't built.
+  - On Grasstree Hill that leaves out both TasNetworks lines; widening the terrain (#34) would bring them back.
+- **No wind:** CSP's `[WIND] DYNAMIC_CABLES` (undocumented; CSP's own Laguna Seca config uses it) does act on the wires: its log shows "Preparing cables". But it redraws them as tubes about 8 times thicker than the 3.5 cm mesh. Without it they draw as thin lines and look right (in game, 4 Nov), so `ext_config.ini` leaves it out.

@@ -48,3 +48,17 @@ Answered at M4 (AI opponents; Grasstree Hill, both layouts, and Brinktop Road; 8
   - A race ends when the last car still running finishes, and AC puts everyone back on the grid. With a close field, as on Grasstree Hill (all within 6 s), that comes before the leaders have stopped. Practice always shows the run-off. There, AC sends a stopped AI car back to its pit box after about 20–25 s.
   - In practice the AI leave their pit boxes at random times. The pit boxes are our grid spots on the road, so in one of the two practice runs (forward) cars bumped the ones still standing ahead. The damage was light, but two of the bumped cars went back to their boxes and stayed there for the rest of the session.
 - **Frame rate:** 7 AI opponents cost about 1% on the GTX 1660 Ti at 1440p. On the reverse layout, the median was 63 fps with 8 cars against 64 alone (slowest 10%: 48 against 49), and each kilometre's median stayed within 7%. The worst single samples dipped further: 26 fps against 41.
+
+## Power lines
+
+- **Answered in game (4 Nov, Grasstree Hill, with towers then allowed 700 m out):**
+  - The wires sag sensibly and cross the road 22-57 m above it.
+  - Towers beyond the 300 m terrain stood in the sky. Supports are now built only on the terrain, which leaves Grasstree Hill's two lines out until the terrain is widened (#34).
+  - CSP's `[WIND] DYNAMIC_CABLES` redrew the wires about 8 times thicker, so it isn't used.
+- **Still to check in game:**
+  - towers turned along their line, seen from near;
+  - roadside poles on a mainland road with mapped poles (e.g. Stratford-Maffra Road, Victoria);
+  - a car stopping at a pole;
+  - frame rate on a road with many poles.
+- **Tasmania has transmission lines only:** TasNetworks' distribution poles are restricted to emergency services, and OpenStreetMap maps none along Grasstree Hill Road, so roadside poles there are missing.
+- **Inferred supports:** an OSM line drawn with vertices further apart than a span can be (250 m distribution, 650 m transmission) gets evenly spaced supports along it, at a typical span, except between two mapped supports (a long real span). The line is real; those supports' exact positions aren't.
