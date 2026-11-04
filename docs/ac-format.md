@@ -123,7 +123,7 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
 - **Collision:** supports within 15 m of the road's edge get an invisible `1WALL_POWER_n` mesh: the pole, or the tower's four legs, up to 3-4.5 m.
   - No collider where it would come within 0.3 m of the road, or within 2.5 m of it in the 60 m at either end of the road, where the grid spots stand side by side.
   - The validator checks them as it does the trunk colliders: invisible, clear of the road, and at least 3 m from every spawn.
-- **Reach:** supports stand only on the terrain mesh, with their whole base within 295 m of the centreline (the terrain reaches 300 m).
+- **Reach:** supports stand only on the terrain mesh, with their whole base within 5 m of its edge: 695 m of the centreline, since the terrain reaches 700 m (#34; it was 300 m).
   - Towers further out stood in the sky, their bases floating past the ground's edge (in game, 4 Nov), so a span with a support beyond it isn't built.
   - On Grasstree Hill that leaves out both TasNetworks lines; widening the terrain (#34) would bring them back.
 - **No wind:** CSP's `[WIND] DYNAMIC_CABLES` (undocumented; CSP's own Laguna Seca config uses it) does act on the wires: its log shows "Preparing cables". But it redraws them as tubes about 8 times thicker than the 3.5 cm mesh. Without it they draw as thin lines and look right (in game, 4 Nov), so `ext_config.ini` leaves it out.

@@ -53,7 +53,7 @@ Answered at M4 (AI opponents; Grasstree Hill, both layouts, and Brinktop Road; 8
 
 - **Answered in game (4 Nov, Grasstree Hill, with towers then allowed 700 m out):**
   - The wires sag sensibly and cross the road 22-57 m above it.
-  - Towers beyond the 300 m terrain stood in the sky. Supports are now built only on the terrain, which leaves Grasstree Hill's two lines out until the terrain is widened (#34).
+  - Towers beyond the 300 m terrain stood in the sky. Supports are now built only on the terrain, and since #34 that reaches 700 m, so Grasstree Hill's two lines are back: 8 towers, the farthest 650 m out.
   - CSP's `[WIND] DYNAMIC_CABLES` redrew the wires about 8 times thicker, so it isn't used.
 - **Still to check in game:**
   - towers turned along their line, seen from near;
