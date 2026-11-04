@@ -63,10 +63,13 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             fine, fine_source = pf.fine_stations(line.s, line.xy, line.heading, dem.sample), "texture"
     else:
         fine = np.ones(len(line.s), dtype=bool)
+    # Where the mapped line runs up a cutting beside the road, profile the road's own strip instead.
+    strip = pf.road_strip_heights(line.s, line.xy, line.heading, dem.sample, z_raw, fine) if not coarse else None
     if coarse:
         prof = pf.smooth_profile(line.s, z_raw, _fill_mask(run_idx, runs), cutoff_m=cutoff)
     else:
-        prof = pf.mixed_profile(line.s, z_raw, _fill_mask(run_idx, runs), fine)
+        prof = pf.mixed_profile(line.s, strip.z, _fill_mask(run_idx, runs), fine & ~strip.coarse)
+        prof.z_raw = z_raw
     if coarse:
         first = prof
         capped = pf.limit_grade(line.s, first.z)
@@ -77,7 +80,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     np.savez_compressed(
         work.stage(STAGE) / "centreline.npz",
         s=line.s, xy=line.xy, heading=line.heading, curvature=line.curvature, run=run_idx,
-        z_raw=z_raw, z=prof.z, grade=prof.grade, vc=prof.vertical_curvature, filled=prof.filled, fine=fine,
+        z_raw=z_raw, z=prof.z, grade=prof.grade, vc=prof.vertical_curvature, filled=prof.filled,
+        # Off-road stretches with no road strip are profiled as coarse, so camber and rails treat them so too.
+        fine=fine & ~strip.coarse if strip is not None else fine,
     )
     summary = st.as_dict() | {
         "dem_tiles": tiles,
@@ -89,6 +94,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "dem_fine_source": fine_source,
         "centreline_max_deviation_m": round(line.max_deviation_m, 2),
         "min_radius_m": round(float(1 / max(np.abs(line.curvature).max(), 1e-9)), 1),
+        "off_road_m": round(float(strip.off_road.sum() * (line.s[1] - line.s[0])), 1) if strip is not None else 0.0,
+        "off_road_strip_m": round(float(np.isfinite(strip.strip_offset).sum() * (line.s[1] - line.s[0])), 1)
+        if strip is not None else 0.0,
+        "off_road_coarse_m": round(float(strip.coarse.sum() * (line.s[1] - line.s[0])), 1) if strip is not None else 0.0,
     }
     work.write_json(STAGE, "stats.json", summary)
     _plot(work, line, prof, summary)

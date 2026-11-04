@@ -270,3 +270,104 @@ def cross_slope(
     raw = np.where(ok, raw, np.interp(s, s[ok], raw[ok]))
     smooth = make_smoothing_spline(s, raw, lam=lam_for_cutoff(cutoff_m))(s)
     return np.clip(smooth, -clamp, clamp)
+
+
+# ----- a line drawn beside the road --------------------------------------------------------------------------
+
+OFF_ROAD_STEP_M = 5.0  # cross-sections this far apart
+OFF_ROAD_REACH_M = 15.0  # sampled this far either side of the line, every metre
+OFF_ROAD_FALL = 0.20  # cross-fall over +-3 m of the line above which it isn't on a road
+OFF_ROAD_MIN_M = 30.0  # stretches shorter than this are left alone (a driveway cutting, a culvert headwall)
+OFF_ROAD_PAD_M = 15.0
+STRIP_HALF_M = 3.0  # a road strip: 7 m across...
+STRIP_MAX_FALL = 0.06  # ...falling no more than this across...
+STRIP_MAX_RMS_M = 0.1  # ...and this flat
+
+
+@dataclass
+class RoadStrip:
+    z: np.ndarray  # heights to profile: the strip's where one was found, else the line's own
+    off_road: np.ndarray  # stations whose line runs up a steep slope beside the road
+    coarse: np.ndarray  # off-road stations with no strip to use: profile them like a coarse DEM
+    strip_offset: np.ndarray  # metres to the strip (+ = left), NaN where none was used
+
+
+def road_strip_heights(s: np.ndarray, xy: np.ndarray, heading: np.ndarray, sample, z_raw: np.ndarray,
+                       fine: np.ndarray) -> RoadStrip:
+    """Where the mapped line runs up a cutting or embankment beside the road, the road's own height.
+
+    OSM's line can sit 10 m or more off the road. On a LiDAR DEM it then reads the batter above or below
+    the road: the Esperance Coast Road's line ran 9-14 m up a 25-59% slope for 360 m, its heights up to
+    5.3 m too high, with a 79 m sag and a 22% pinch the road doesn't have. The road is a flat strip
+    within a few metres of the line.
+
+    On fine (LiDAR) stations only:
+    1. Every OFF_ROAD_STEP_M, find where the cross-fall over +-3 m of the line exceeds OFF_ROAD_FALL, in
+       stretches of OFF_ROAD_MIN_M or more, padded by OFF_ROAD_PAD_M.
+    2. Look for a flat strip within OFF_ROAD_REACH_M: 7 m across, falling under STRIP_MAX_FALL, with
+       residuals under STRIP_MAX_RMS_M.
+    3. Use only strips on the side most of the stretch's strips are on: a lone strip on the other side
+       is a terrace or a driveway. Their heights replace the line's, interpolated between cross-sections.
+    4. A stretch with too few strips (no consistent side, or none at either end) stays as it is but
+       is marked `coarse`, to be profiled like a coarse DEM: harder smoothing and the grade cap.
+    """
+    n = len(s)
+    out = RoadStrip(z_raw.astype(float).copy(), np.zeros(n, bool), np.zeros(n, bool), np.full(n, np.nan))
+    if n < 2 or not fine.any():
+        return out
+    step = float(s[1] - s[0])
+    idx = np.arange(0, n, max(int(round(OFF_ROAD_STEP_M / step)), 1))
+    offsets = np.arange(-OFF_ROAD_REACH_M, OFF_ROAD_REACH_M + 0.5, 1.0)
+    left = np.column_stack([-np.sin(heading[idx]), np.cos(heading[idx])])
+    pts = xy[idx, None, :] + left[:, None, :] * offsets[None, :, None]
+    h = np.asarray(sample(pts[..., 0].ravel(), pts[..., 1].ravel()), dtype=float).reshape(len(idx), len(offsets))
+    near = np.abs(offsets) <= STRIP_HALF_M
+    fall = np.abs(_slopes(offsets[near], h[:, near]))
+    steep = (fall > OFF_ROAD_FALL) & fine[idx]
+    flagged = np.zeros(n, bool)
+    for a, b in _runs(steep):
+        lo, hi = s[idx[a]], s[idx[b - 1]]
+        if hi - lo + OFF_ROAD_STEP_M < OFF_ROAD_MIN_M:
+            continue
+        flagged |= (s >= lo - OFF_ROAD_PAD_M) & (s <= hi + OFF_ROAD_PAD_M)
+    flagged &= fine
+    if not flagged.any():
+        return out
+    out.off_road = flagged
+    # The flattest qualifying strip nearest the line at each cross-section, and its height.
+    w = int(round(2 * STRIP_HALF_M)) + 1
+    strip_z = np.full(len(idx), np.nan)
+    strip_at = np.full(len(idx), np.nan)
+    centres = offsets[w // 2: len(offsets) - w // 2]
+    for j in np.flatnonzero(flagged[idx]):
+        best = None
+        for c, window in zip(centres, np.lib.stride_tricks.sliding_window_view(h[j], w)):
+            if not np.isfinite(window).all() or abs(c) <= STRIP_HALF_M:
+                continue
+            x = np.arange(w) - w // 2
+            slope, icept = np.polyfit(x, window, 1)
+            rms = float(np.sqrt(np.mean((window - (slope * x + icept)) ** 2)))
+            if abs(slope) < STRIP_MAX_FALL and rms < STRIP_MAX_RMS_M and (best is None or abs(c) < abs(best[0])):
+                best = (c, float(icept))
+        if best is not None:
+            strip_at[j], strip_z[j] = best
+    for a, b in _runs(flagged):
+        sel = np.flatnonzero((idx >= a) & (idx < b))
+        found = sel[np.isfinite(strip_at[sel])]
+        side = np.sign(np.median(strip_at[found])) if len(found) else 0.0
+        same = found[np.sign(strip_at[found]) == side] if side else found[:0]
+        # Enough strips on one side, reaching both ends of the stretch: use them. Otherwise profile it as coarse.
+        if len(same) >= max(3, len(sel) // 3) and idx[same[0]] - a <= 4 * OFF_ROAD_STEP_M / step \
+                and b - 1 - idx[same[-1]] <= 4 * OFF_ROAD_STEP_M / step:
+            stations = np.arange(a, b)
+            out.z[a:b] = np.interp(s[stations], s[idx[same]], strip_z[same])
+            out.strip_offset[a:b] = np.interp(s[stations], s[idx[same]], strip_at[same])
+        else:
+            out.coarse[a:b] = True
+    return out
+
+
+def _slopes(x: np.ndarray, h: np.ndarray) -> np.ndarray:
+    """Least-squares slope of each row of h against x (NaN rows give NaN)."""
+    xc = x - x.mean()
+    return ((h - h.mean(axis=1, keepdims=True)) * xc).sum(axis=1) / (xc ** 2).sum()
