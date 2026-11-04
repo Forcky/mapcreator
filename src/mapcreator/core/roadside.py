@@ -57,20 +57,31 @@ def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
     return list(zip(edges[::2], edges[1::2] - 1))
 
 
+def rail_masks(s, xy, z, heading, half_l, half_r, slope_l, slope_r, dem_sample,
+               allowed: np.ndarray | None = None) -> dict[str, np.ndarray]:
+    """Where a guard rail runs on each side ("L", "R"), station by station."""
+    nrm = np.column_stack([-np.sin(heading), np.cos(heading)])
+    out = {}
+    for side, sign, half, slope in (("L", 1.0, half_l, slope_l), ("R", -1.0, half_r, slope_r)):
+        edge_h = z - slope * half
+        probe = xy + nrm * (sign * (half + PROBE_BEYOND_EDGE_M))[:, None]
+        mask = rail_mask(s, edge_h - dem_sample(probe[:, 0], probe[:, 1]))
+        out[side] = mask & allowed if allowed is not None else mask
+    return out
+
+
 def guard_rails(s, xy, z, heading, half_l, half_r, slope_l, slope_r, dem_sample, frame: LocalFrame,
-                allowed: np.ndarray | None = None) -> tuple[list[Mesh], dict]:
+                allowed: np.ndarray | None = None, masks: dict | None = None) -> tuple[list[Mesh], dict]:
     nrm = np.column_stack([-np.sin(heading), np.cos(heading)])
     meshes: list[Mesh] = []
     stats = {}
     step = s[1] - s[0] if len(s) > 1 else 1.0
     stride = max(int(round(STEP_M / step)), 1)
+    if masks is None:
+        masks = rail_masks(s, xy, z, heading, half_l, half_r, slope_l, slope_r, dem_sample, allowed)
     for side, sign, half, slope in (("L", 1.0, half_l, slope_l), ("R", -1.0, half_r, slope_r)):
         edge_h = z - slope * half
-        probe = xy + nrm * (sign * (half + PROBE_BEYOND_EDGE_M))[:, None]
-        drop = edge_h - dem_sample(probe[:, 0], probe[:, 1])
-        mask = rail_mask(s, drop)
-        if allowed is not None:
-            mask &= allowed
+        mask = masks[side]
         runs = _runs(mask)
         stats[side] = {"runs": len(runs), "metres": round(float(mask.sum() * step), 1)}
         for k, (i0, i1) in enumerate(runs):

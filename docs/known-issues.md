@@ -62,3 +62,12 @@ Answered at M4 (AI opponents; Grasstree Hill, both layouts, and Brinktop Road; 8
   - frame rate on a road with many poles.
 - **Tasmania has transmission lines only:** TasNetworks' distribution poles are restricted to emergency services, and OpenStreetMap maps none along Grasstree Hill Road, so roadside poles there are missing.
 - **Inferred supports:** an OSM line drawn with vertices further apart than a span can be (250 m distribution, 650 m transmission) gets evenly spaced supports along it, at a typical span, except between two mapped supports (a long real span). The line is real; those supports' exact positions aren't.
+
+## Roadside furniture
+
+- **To check in game:**
+  - guide posts and their reflectors at night;
+  - CAMs read as chevrons pointing the right way, in both directions;
+  - speed signs readable;
+  - frame rate (Grasstree Hill: about 450 guide posts and 300 CAMs, about 25,000 vertices; each KN5 grows 2 MB).
+- **Speed limits come only from OSM.** Many rural ways have no `maxspeed` (only 24% of Grasstree Hill Road has one), so those stretches get no signs. CAMs assume 100 km/h there. Tasmania's State Road speed limits (theLIST, CC BY) cover state roads fully, but using them with an OSM centreline would combine two road datasets for the same feature.
