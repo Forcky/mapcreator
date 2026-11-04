@@ -391,6 +391,10 @@ def trunk_radius(model: TreeModel) -> float:
 
 
 def tree_ini(height: float, half_w: float, mesh_names: list[str]) -> str:
+    """The model's settings. LOD distances follow Content Manager's converter: the LODs share ten model heights
+    (LOD 0 ends 28-89 m out, the last 85-267 m). Past the last, Tree FX draws the tree as a baked billboard
+    (CSP wiki, Tracks: Trees), the cheapest far tree, so the far scenery (`core.reach`, 600 m) is billboards.
+    Billboards fade out at a far distance CSP sets in its own code; it isn't documented (docs/known-issues.md)."""
     sections = [
         ("BASIC", {"HEIGHT": f"{height:.3f}", "WIDTH": f"{2 * half_w:.3f}", "CACHE_RESOLUTION": "256,512",
                    "VERTICAL_OFFSET": "0"}),

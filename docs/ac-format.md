@@ -70,7 +70,9 @@ A job with `"layouts": "both"` produces:
   - Gravel has no markings. A gravel run is one lane (`gravel_narrow`) with `lanes=1` or `narrow=yes`, or with no `lanes` tag when it's under 5.5 m wide as mapped (so unclassified and residential gravel at 5.0 m is one lane, and tertiary at 5.5 m is two).
   - Runs shorter than 50 m join their neighbours here too, within one surface, so a short single-lane bridge keeps the road's centre line.
 - **Textures:** `u` runs 0 to 1 across the carriageway, so lines and wheel paths sit in the same place whatever the width. `road_marked` and `road_plain` repeat every 12 m along the road; the gravel textures every 24 m, at 512 x 2048 px (about 1 cm a pixel). The gravel has a pair of darker, compacted wheel paths per lane with fewer stones, loose ridges between and beside them, and a few potholes. The one-lane gravel adds a patchy grass strip about 0.3 m wide down the middle and green fringes at the edges, for CSP's Grass FX. The palette is the mean colours of the CC0 photo texture `gravel_ground_01` (Poly Haven), a grey-brown.
-- **Terrain:** `1GRASS_T###` reaches 700 m either side of the road (`mesh_stage.TERRAIN_CORRIDOR_M`), and the world ends there. It's one Delaunay surface over lattices of 4 m to 60 m out, 8 m to 140 m, 16 m to 300 m, then 32 m. The DEM is read 100 m further (`profile_stage.CORRIDOR_M`). Trees and buildings stop at 250 m, so the ground beyond is bare. Until #34 it ended at 300 m, and power towers further out stood on nothing.
+- **Terrain:** `1GRASS_T###` reaches 700 m either side of the road, and the world ends there. It's one Delaunay surface over lattices of 4 m to 60 m out, 8 m to 140 m, 16 m to 300 m, then 32 m. Until #34 it ended at 300 m, and power towers further out stood on nothing.
+  - **Reach:** the distances beside the road are one set (`core.reach`). Trees, buildings and power lines stand within 600 m of the centreline (the scenery reach). The terrain reaches 100 m further, so nothing at the scenery's edge stands at the world's edge, and the DEM is read 100 m beyond that (800 m).
+  - Until the scenery reach, trees and buildings stopped at 250 m and the hills beyond them were bare.
 - **Logic dummies:**
   - `AC_AB_START_L/R` and `AC_AB_FINISH_L/R` sit 0.5 m outside each road edge. L is left of the driving direction.
   - The start gate is 50 m from the layout's start. The finish gate leaves a run-off of real road after it: 250 m, or 15% of a short route, never under 50 m. With only 50 m, AC's AI crossed the finish, reached the end of its line, turned round and left the road (M3).
@@ -137,6 +139,11 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
   - Tree FX trees have no physics, so the KN5 gets an invisible collider for each trunk a car can reach (`1WALL_TRUNK_###`, `scenery.trunk_colliders`). A trunk qualifies if it stands within 20 m of the road edge and is over 10 cm across.
   - Each collider is an eight-sided prism with its corners on the drawn trunk's circle, from 1 m below the ground to 3 m above it. Its radius is the model's trunk trailer in metres, times the tree's `size` and `width`.
   - The faces are wound outwards, as the house walls are. The prisms are grouped into a mesh per 400 m of road, under the vertex limit, at about 200-560 trunks per km.
+- **Far trees are billboards.** Each model's three LODs share ten model heights, the rule Content Manager's converter uses (`AcTreeModelConverter`: `DISTANCE = height × 10 × (i + 1) / LODs`). LOD 0 ends 28-89 m out and the last 85-267 m, by model.
+  - Past its last LOD, Tree FX draws a tree as a billboard baked from the model. CSP's wiki ("Tracks: Trees"): "With LODs, billboards for distant trees and heavy use of instancing CSP should be able to handle hundreds of thousands of trees". CSP's public tree shaders draw each billboard as 6 vertices, from 15 side views and a top view (`flgTree_bb.hlsl`, `flgTree_bb_array_mainobj_vs.fx`).
+  - So from about 270 m to the scenery's 600 m, every tree is a billboard, the cheapest tree Tree FX draws. LOD 2, the cheapest mesh, is about 380-400 triangles.
+  - Billboards fade in past the last LOD and fade out at a far distance (`gLODOutDistance` in the shader) that CSP's own, closed code sets. Neither CSP's docs nor its configs give it. **To confirm in game:** that billboards still draw 600 m out (`docs/known-issues.md`).
+  - The player's `TREES_DISTANCE_MULT` (CSP `graphics_adjustments.ini`, 0.2 to 3.2) scales the LOD distances. Nothing in a track's own config sets them.
 
 `extension/trees/`:
 
@@ -190,9 +197,9 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
 - **Collision:** supports within 15 m of the road's edge get an invisible `1WALL_POWER_n` mesh: the pole, or the tower's four legs, up to 3-4.5 m.
   - No collider where it would come within 0.3 m of the road, or within 2.5 m of it in the 60 m at either end of the road, where the grid spots stand side by side.
   - The validator checks them as it does the trunk colliders: invisible, clear of the road, and at least 3 m from every spawn.
-- **Reach:** supports stand only on the terrain mesh, with their whole base within 5 m of its edge: 695 m of the centreline, since the terrain reaches 700 m (#34; it was 300 m).
-  - Towers further out stood in the sky, their bases floating past the ground's edge (in game, 4 Nov), so a span with a support beyond it isn't built.
-  - On Grasstree Hill that leaves out both TasNetworks lines; widening the terrain (#34) would bring them back.
+- **Reach:** supports stand within the scenery reach, with their whole base within 600 m of the centreline (`core.reach.SCENERY_M`), like the trees and buildings. That's 100 m inside the terrain's edge.
+  - Towers beyond the terrain stood in the sky, their bases floating past the ground's edge (in game, 4 Nov), so a span with a support beyond the reach isn't built.
+  - With the 300 m terrain, Grasstree Hill's two TasNetworks lines were left out. #34 widened the terrain to 700 m and let supports reach 695 m, which brought back 8 towers. At 600 m it keeps 7, 140-589 m out: the one 645 m out goes, with its span.
 - **No wind:** CSP's `[WIND] DYNAMIC_CABLES` (undocumented; CSP's own Laguna Seca config uses it) does act on the wires: its log shows "Preparing cables". But it redraws them as tubes about 8 times thicker than the 3.5 cm mesh. Without it they draw as thin lines and look right (in game, 4 Nov), so `ext_config.ini` leaves it out.
 
 ## Roadside furniture (`core/furniture.py`)

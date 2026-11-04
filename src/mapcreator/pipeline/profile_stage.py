@@ -10,6 +10,7 @@ import numpy as np
 from mapcreator.config import Settings
 from mapcreator.core import centreline as cl
 from mapcreator.core import profile as pf
+from mapcreator.core import reach
 from mapcreator.core import section as sec
 from mapcreator.job import Job
 from mapcreator.pipeline import route_stage
@@ -19,8 +20,8 @@ from mapcreator.regions import FINE_DEM_M, job_region
 log = logging.getLogger(__name__)
 
 STAGE = "02_profile"
-# DEM tiles are fetched this far either side of the road: the terrain corridor (mesh_stage, 700 m) and a margin.
-CORRIDOR_M = 800.0
+# DEM tiles are fetched this far either side of the road: the terrain corridor and a margin (`core.reach`).
+CORRIDOR_M = reach.DEM_M
 FILL_TAGS = {"bridge", "tunnel"}
 
 

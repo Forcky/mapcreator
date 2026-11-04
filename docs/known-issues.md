@@ -18,6 +18,7 @@ These need the in-game harness on a machine with Assetto Corsa (`docs/dev-handov
 - what race.ini's `[AUTOSPAWN]` does
 - whether the tree trunk colliders (#15) stop a car at the bark: their radius assumes Tree FX scales a model by `size` all round and by `width` horizontally on top. And what 200-560 colliders per km cost in frame rate.
 - AI opponents on a road too narrow for pairs, where the grid goes single file: Lower Swamp Road (`examples/lower_swamp_road.json`, 4.0 m) is the first example that narrow (see "Gravel and narrow roads" below)
+- whether Tree FX draws trees 600 m out, and what they cost in frame rate (see "Scenery reach" below)
 
 Answered at milestone M3 (Grasstree Hill, both layouts; CSP 0.2.11, Content Manager's default starter):
 
@@ -25,7 +26,7 @@ Answered at milestone M3 (Grasstree Hill, both layouts; CSP 0.2.11, Content Mana
 - **Spawn:** the car spawns on the road with all four wheels loaded, facing along it.
 - **Without CSP:** not supported, by the maintainer's decision (#28). Plain AC wouldn't load multi-layout tracks (it wants a `<track>.kn5`), built the AI grid on every load (4 minutes for 12.8 km), and its AI crashed on our open AI line. The website, the track description and ATTRIBUTION.txt say CSP is required.
 - **Tree FX:** the models load, and trees stand on the ground with surface alignment on. A comment line in `trees.txt` made CSP load none (fixed: the list has no comments now).
-- **Frame rate:** at about 2,500 trees per km, Tree FX costs about 60% of the frame rate on a GTX 1660 Ti at 1440p, mostly from the trees near the road. Canopy-model builds keep every real crown (#9), with no distance bands or cap, and are faster: Grasstree Hill 90 / 63 fps (median / slowest) against 68 / 45 for the capped WorldCover build, because the near-road trees halve. WorldCover builds keep the bands and the cap.
+- **Frame rate:** at about 2,500 trees per km, Tree FX costs about 60% of the frame rate on a GTX 1660 Ti at 1440p, mostly from the trees near the road. Canopy-model builds keep every real crown (#9), with no distance bands or cap, and are faster: Grasstree Hill 90 / 63 fps (median / slowest) against 68 / 45 for the capped WorldCover build, because the near-road trees halve. WorldCover builds keep the bands and the cap, which counts only the trees within 250 m since the scenery reach went to 600 m.
 - **AI:** AC's AI drives both layouts from the spawn to the finish. It ignores the 130 km/h cap in the line's speed data. After the finish it eases off and comes to rest on the road about 60 m before the end of its line, about 100 m short of the end wall (#30).
   - The last hint is 0. A hint scales the speed AC allows for the line's curvature, so at 0.05 the AI crawled off the end of its line, and on a straight run-off it barely slowed at all (`docs/ac-format.md`).
   - At M3 the line ended 50 m past the finish gate, and the AI turned round there and left the road.
@@ -78,11 +79,27 @@ Nothing about gravel has been loaded in game yet. The `GRAVEL` surface's numbers
 - **Not routable:** `highway=track`, so most forestry roads (and Rally Tasmania's stages) can't be built yet. Lower Swamp Road carries on as a track past where its example ends.
 - **One surface for all unsealed values.** `dirt`, `earth`, `ground`, `mud` and `sand` drive like `gravel`. A looser `DIRT` surface can follow if testing shows it's worth it.
 
+## Scenery reach (600 m)
+
+Trees, buildings and power lines now stand within 600 m of the road (`core.reach`). Trees and buildings stopped at 250 m, and power-line supports at 695 m. None of it has been seen in game yet.
+
+- **To check in game** (CSP 0.2.11, GTX 1660 Ti, 1440p):
+  - **Do far trees draw?** Past its last LOD (85-267 m out, by model), Tree FX draws each tree as a billboard. The billboard fades out at a distance that CSP's own code sets and doesn't document (`docs/ac-format.md`). If that's under 600 m, the far trees never show.
+  - **What do they cost?** Compare frame rates against a 250 m build, at the same probe points, both along the road and looking out to the side (`probe-points --yaw 90` and `--yaw -90`). Near the road, the cost was mostly the trees within 40 m. What a billboard 250-600 m out costs isn't known.
+  - CSP's tree loading time, with 2.4 times as many trees in a canopy-model build.
+- **What it adds** (laptop builds, made-up WorldCover trees with the Meta/WRI mask):
+  - Made-up trees keep 12% of the tree cover 250-600 m out: 9,000 more on Grasstree Hill (28,125 → 37,196), 10,800 on Esperance Coast Road and 68,700 on the 63 km Lyell Highway.
+  - The per-km cap counts only the trees within 250 m. It also never cuts below that 12%, so a forest dense enough to meet the cap thins out evenly to 600 m. Before, the Lyell Highway had no trees at all 150-250 m out.
+  - Canopy-model builds keep every crown, so their count grows with the tree-covered area: about 2.4 times the 250 m count (Grasstree Hill: an estimated 84,000, against 34,850).
+  - Buildings: Grasstree Hill 718 (was 253), Esperance 347 (was 246).
+  - Grasstree Hill keeps 7 of its 8 towers (see "Power lines").
+  - Build: the terrain and the DEM read don't change. KN5s grow under 3% (buildings), zips 0.3-1.5 MB and `trees.txt` 32-44%. Build time and peak memory barely move (Lyell Highway: 104 → 109 s, 1.85 → 1.86 GiB, on a laptop).
+
 ## Power lines
 
 - **Answered in game (4 Nov, Grasstree Hill, with towers then allowed 700 m out):**
   - The wires sag sensibly and cross the road 22-57 m above it.
-  - Towers beyond the 300 m terrain stood in the sky. Supports are now built only on the terrain, and since #34 that reaches 700 m, so Grasstree Hill's two lines are back: 8 towers, the farthest 650 m out.
+  - Towers beyond the 300 m terrain stood in the sky. Supports are now built only on the terrain, and since #34 that reaches 700 m, so Grasstree Hill's two lines are back: 8 towers, the farthest 650 m out. Supports now stand within the 600 m scenery reach, with the trees, so that one goes and 7 stay.
   - CSP's `[WIND] DYNAMIC_CABLES` redrew the wires about 8 times thicker, so it isn't used.
 - **Still to check in game:**
   - towers turned along their line, seen from near;
