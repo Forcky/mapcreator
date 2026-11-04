@@ -85,6 +85,6 @@ The report checks the grid, which fails if any car spawned with a wheel unloaded
 - where it left the road, if it did
 - where it came to rest near the end of the line
 
-- **A race won't show the run-off.** It ends when the last car still running finishes, and AC then puts every car back on the grid. Use `--session practice` to watch the cars stop. In practice, AC sends a stopped AI car back to its pit box after about 20–25 s.
+- **A race may not show the run-off.** It ends when the last car still running finishes, and AC then puts every car back on the grid. With a close field, that happens before the leaders have stopped. Use `--session practice` to watch the cars stop. In practice, AC sends a stopped AI car back to its pit box after about 20–25 s.
 - **In practice the AI leave their pit boxes at random times.** The pit boxes are the grid spots on the road, so cars can bump the ones still standing ahead.
 - **Press Drive with real mouse input.** AC's menus follow raw mouse input, so a scripted click needs absolute mouse moves (`mouse_event` with `MOUSEEVENTF_ABSOLUTE`), not just `SetCursorPos`.

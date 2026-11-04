@@ -31,14 +31,19 @@ Answered at milestone M3 (Grasstree Hill, both layouts; CSP 0.2.11, Content Mana
 - **Timing:** the A→B timer starts and stops at the gates. `race_out.json` records the run as a lap with its time. Laps the AI drove for the player are recorded as time −1 with a cut.
 - **Harness:** the probe app loads with its manifest, `ac.worldCoordinateToTrack` and `sim.isInMainMenu` work, and the CSP log is `custom_shaders_patch.log`.
 
-Answered at M4 (AI opponents; Grasstree Hill, both layouts, 8 Abarth 500s at AI level 100, the player's car driven by AC's AI; same PC and CSP):
+Answered at M4 (AI opponents; Grasstree Hill, both layouts, and Brinktop Road; 8 Abarth 500s at AI level 100, the player's car driven by AC's AI; same PC and CSP):
 
 - **Grid:** all 8 cars spawn on the road with every wheel loaded (2.1–3.6 kN), facing along it (within 1.2°), in pairs 4 m apart and rows 8 m apart, none overlapping. Checked with `harness/ac_harness.py race` and `watch-report`.
-- **Race:** the start is clean in both layouts.
-  - Reverse: all 8 finished within 6 s of each other.
+- **Race:** the start is clean every time.
   - Forward: 6 of 8 finished. Two cars side by side ran wide on a fast bend at 1.5 km (radius about 185 m) and left the 6.4 m road. They didn't touch each other; one picked up light damage off the road.
-- **Run-off:** every car that reached the end came to rest on the road, 56–74 m before the end of the line, with no tyre off and no damage (6 cars forward, 8 reverse). Up to four stood there at once, the closest 2 m apart side by side. No pile-up.
+  - Reverse: all 8 finished within 6 s of each other.
+  - Brinktop Road: all 8 finished. Two left the road briefly mid-race and rejoined.
+- **Run-off:** every car that reached the end came to rest on the road, 56–78 m before the end of the line, with no tyre off.
+  - Grasstree Hill: 6 cars forward and 8 reverse, with no damage. Up to four stood there at once, the closest 2 m apart side by side.
+  - Brinktop Road: 6 cars stood there at once, 3–6 m apart. One crept into the one ahead at about 1 km/h, with slight damage to both (1.3), so not quite no contact.
+  - Why they creep: the cars behind the first one stop short of the 0 hint, where the pace is still 0.2, and AC's own car-following holds them there.
+  - No pile-up.
 - **AC's own behaviour:**
-  - A race ends when the last car still running finishes, and AC puts everyone back on the grid. To watch the run-off, use practice. There, AC sends a stopped AI car back to its pit box after about 20–25 s.
+  - A race ends when the last car still running finishes, and AC puts everyone back on the grid. With a close field, as on Grasstree Hill (all within 6 s), that comes before the leaders have stopped. Practice always shows the run-off. There, AC sends a stopped AI car back to its pit box after about 20–25 s.
   - In practice the AI leave their pit boxes at random times. The pit boxes are our grid spots on the road, so in one of the two practice runs (forward) cars bumped the ones still standing ahead. The damage was light, but two of the bumped cars went back to their boxes and stayed there for the rest of the session.
 - **Frame rate:** 7 AI opponents cost about 1% on the GTX 1660 Ti at 1440p. On the reverse layout, the median was 63 fps with 8 cars against 64 alone (slowest 10%: 48 against 49), and each kilometre's median stayed within 7%. The worst single samples dipped further: 26 fps against 41.
