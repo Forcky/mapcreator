@@ -38,6 +38,9 @@ class Settings:
     # Local COG mirror of NVIS 7.0's Major Vegetation Subgroups (providers/dcceew/nvis.py); outside Tasmania it
     # types the made-up trees. Empty means they're typed by height alone.
     nvis_source: str = ""
+    # Local COG mirror of NSW's State Vegetation Type Map, with its PCT table beside it (providers/nsw/svtm.py);
+    # in NSW it types the made-up trees ahead of NVIS. Empty means NVIS types them there too.
+    svtm_source: str = ""
 
 
 DEFAULT_TAS_DEM = (
@@ -72,4 +75,5 @@ def load() -> Settings:
         meta_canopy=str(os.environ.get("MAPCREATOR_META_CANOPY") or f.get("meta_canopy", "1")).lower()
         not in ("0", "false", "no", "off"),
         nvis_source=get("MAPCREATOR_NVIS", "nvis_source", ""),
+        svtm_source=get("MAPCREATOR_SVTM", "svtm_source", ""),
     )

@@ -6,9 +6,10 @@ Regions are checked in order, best data first:
   communities, which say what kind of tree each one is.
 - Anywhere else in Australia falls back to national data: GA's 5 m LiDAR DEM where it covers
   the whole road (the populated coast, the Murray-Darling and towns), else GA's ~30 m DEM-S,
-  ESA WorldCover trees typed by NVIS 7.0's vegetation subgroups when its mirror is
-  configured, and OSM building footprints and power lines when a local
-  OSM index is configured (none without one). That region works in the MGA zone of the
+  ESA WorldCover trees typed by NSW's State Vegetation Type Map in NSW and NVIS 7.0's
+  vegetation subgroups elsewhere when their mirrors are configured, and OSM building
+  footprints and power lines when a local OSM index is configured (none without one).
+  That region works in the MGA zone of the
   route's mean longitude, so a route may cross a zone boundary (the Great
   Ocean Road crosses 144°E); over a route of tens of kilometres the extra
   scale error is a few parts in 10,000.
@@ -48,8 +49,9 @@ class Region:
     # Overhead power lines (`core.power.Line`s) by bbox in the region's CRS, or None; one source per region.
     power: Callable[[tuple, Settings], list] | None = None
     power_attribution: Attribution | None = None
-    # A vegetation map for the corridor (`core.species.VegetationMap` or `NvisMap`), by centreline and reach; the
-    # callable may return None (no mirror configured).
+    # A vegetation map for the corridor (`core.species.VegetationMap`, `SvtmMap` or `NvisMap`), by centreline and
+    # reach; the callable may return None (no mirror configured). A map names the sources it used
+    # (`attributions`); the region's is credited for one that doesn't.
     vegetation: Callable[..., object] | None = None
     vegetation_attribution: Attribution | None = None
     country: str = "Australia"
@@ -159,18 +161,28 @@ def _osm_buildings(epsg: int) -> Callable[[tuple, Settings], list]:
     return buildings
 
 
-def _nvis(epsg: int) -> Callable:
-    """Tree families from NVIS's subgroups, read from the local mirror; none without one (`nvis_source`)."""
+def _mainland_vegetation(epsg: int) -> Callable:
+    """Tree families from the local mirrors: NSW's SVTM where the corridor is in NSW (`svtm_source`), NVIS's
+    subgroups elsewhere (`nvis_source`); none without either."""
 
     def vegetation(centre_xy, reach_m: float, settings: Settings):
-        if not settings.nvis_source:
-            return None
-        from mapcreator.core.species import NvisMap
-        from mapcreator.providers.dcceew.nvis import Nvis
+        from mapcreator.core import species
 
-        nvis = Nvis(settings.nvis_source, epsg)
-        nvis.load_corridor(centre_xy, reach_m)
-        return NvisMap(nvis)
+        nvis_map = None
+        if settings.nvis_source:
+            from mapcreator.providers.dcceew import nvis
+
+            source = nvis.Nvis(settings.nvis_source, epsg)
+            source.load_corridor(centre_xy, reach_m)
+            nvis_map = species.NvisMap(source, attributions=(nvis.ATTRIBUTION,))
+        if settings.svtm_source:
+            from mapcreator.providers.nsw import svtm
+
+            source = svtm.Svtm(settings.svtm_source, epsg)
+            source.load_corridor(centre_xy, reach_m, halo_m=species.SVTM_NEAREST_M)
+            if any((b != svtm.NO_DATA).any() for b in source.blocks.values()):  # some of it is in NSW
+                return species.SvtmMap(source, nvis_map, attributions=(svtm.ATTRIBUTION,))
+        return nvis_map
 
     return vegetation
 
@@ -213,7 +225,7 @@ def australia(zone: int) -> Region:
     return Region(key=f"au{zone}", name="Australia", epsg=epsg, bbox=AUSTRALIA_BBOX, elevation=elevation,
                   attributions=(OSM, DEM_S), buildings=_osm_buildings(epsg), buildings_attribution=OSM_BUILDINGS,
                   power=_osm_power(epsg), power_attribution=OSM_POWER,
-                  vegetation=_nvis(epsg), vegetation_attribution=_nvis_attribution(),
+                  vegetation=_mainland_vegetation(epsg), vegetation_attribution=_nvis_attribution(),
                   height_datum="AHD (approximately; SRTM-derived)")
 
 
