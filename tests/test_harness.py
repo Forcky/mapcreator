@@ -120,3 +120,58 @@ def test_probe_points_keep_a_car_length_off_both_ends(tmp_path, monkeypatch):
     # A car centred at s = 0 has its rear wheels off the end of the road (Esperance coast road, M3).
     assert s[0] >= ac_harness.PROBE_END_MARGIN_M and s[-1] <= 300 - ac_harness.PROBE_END_MARGIN_M
     assert s == [5.0, 105.0, 205.0]
+
+
+def _straight_line(track: Path, n: int = 301) -> None:
+    """A straight AI line along +x, a point every metre, 3 m of road either side."""
+    import numpy as np
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from mapcreator.core import ai_line
+
+    pos = np.column_stack([np.arange(n, dtype=float), np.zeros(n), np.zeros(n)])
+    extra = np.zeros((n, 18))
+    extra[:, 5:7] = 3.0
+    extra[:, 13] = 1.0
+    ai_line.write(track / "ai" / "fast_lane.ai", ai_line.AiLine(pos=pos, length=np.arange(n, dtype=float), extra=extra))
+
+
+def test_opponents_join_the_players_session_as_ai_in_the_same_car(tmp_path, monkeypatch):
+    (tmp_path / "cfg").mkdir()
+    (tmp_path / "cfg" / "race.ini").write_text(MESSY, encoding="utf-8")
+    for skin in ("red", "white"):
+        (tmp_path / "content" / "cars" / "abarth500" / "skins" / skin).mkdir(parents=True)
+    monkeypatch.setattr(ac_harness, "ac_docs", lambda: tmp_path)
+    monkeypatch.setattr(ac_harness, "ac_root", lambda: tmp_path)
+    cp = configparser.ConfigParser(strict=False, interpolation=None)
+    cp.optionxform = str
+    cp.read_string(ac_harness._opponents_ini("grasstree_hill", "reverse", "abarth500", 8, "race"))
+    assert cp["RACE"]["CARS"] == "8" and cp["RACE"]["CONFIG_TRACK"] == "reverse"
+    assert [cp[f"CAR_{k}"]["MODEL"] for k in range(1, 8)] == ["abarth500"] * 7 and "CAR_8" not in cp
+    assert {cp[f"CAR_{k}"]["SKIN"] for k in range(1, 8)} == {"red", "white"}
+    assert cp["SESSION_0"]["TYPE"] == "3" and cp["SESSION_0"]["SPAWN_SET"] == "START"  # a race starts from the grid
+    cp.read_string(ac_harness._opponents_ini("grasstree_hill", "reverse", "abarth500", 2, "practice"))
+    assert cp["SESSION_0"]["TYPE"] == "1" and cp["SESSION_0"]["SPAWN_SET"] == "PIT"
+
+
+def test_watch_report_checks_the_grid_and_finds_where_each_car_stopped(tmp_path, capsys):
+    import json
+
+    _straight_line(tmp_path / "track")
+
+    def car(i, x, z, kmh, laps=0, valid=True):
+        return {"i": i, "pos": [x, 0.3, z], "look": [1.0, 0.0, 0.0], "kmh": kmh, "out": 0, "laps": laps,
+                "wheels": [{"valid": valid, "load": 3000.0}] * 4}
+
+    grid = {"t": 0.0, "fps": 60, "cars": [car(0, 42, 0, 0), car(1, 34, 2, 0)]}
+    run = {"t": 10.0, "fps": 55, "cars": [car(0, 150, 0, 150), car(1, 140, 1, 150)]}
+    rest = {"t": 20.0, "fps": 60, "cars": [car(0, 250, 0.2, 0, 1), car(1, 244, 2, 0, 1)]}
+    watch = tmp_path / "watch.json"
+    watch.write_text(json.dumps({"csp": 1, "samples": [grid, run, rest]}), encoding="utf-8")
+    assert ac_harness.watch_report(tmp_path / "track", "", watch) == 0
+    out = capsys.readouterr().out
+    assert "grid PASS" in out and "nearest car  8.2 m" in out
+    assert "car 0: furthest     250 m, finished at t 20 s; came to rest at 250 m, +0.20 m off the line" in out
+    grid["cars"][1] = car(1, 34, 2, 0, valid=False)  # a wheel off the road on the grid
+    watch.write_text(json.dumps({"csp": 1, "samples": [grid, run, rest]}), encoding="utf-8")
+    assert ac_harness.watch_report(tmp_path / "track", "", watch) == 1

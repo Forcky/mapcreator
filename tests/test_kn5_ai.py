@@ -166,20 +166,22 @@ def test_the_finish_leaves_a_run_off_and_the_ai_slows_over_it():
     assert layout.finish_distance(12_800.0) == 12_800.0 - layout.RUNOFF_M
     assert layout.finish_distance(1_000.0) == 1_000.0 - 150.0  # a short route gives up a share, not 250 m
     assert layout.finish_distance(200.0) == 200.0 - layout.GATE_FROM_END_M  # never less than before
-    # The AI eases off after the finish and is all but stopped where its line ends, short of the end wall.
+    # The AI eases off after the finish and stops for good before its line ends, short of the end wall. The last
+    # pace is 0: a hint scales AC's corner speed, so anything above 0 barely slows a car on a straight (4 Nov).
     length = 12_800.0
     finish = layout.finish_distance(length)
     sections = ai_line.runoff_hints(length, finish)
-    assert [pace for *_, pace in sections] == [0.5, 0.2, 0.05]
+    assert [pace for *_, pace in sections] == [0.5, 0.2, 0.0]
     assert all(a[1] == b[0] for a, b in zip(sections, sections[1:])) and sections[-1][1] == 1.0
     last = length - layout.AI_END_SHORT_M
     assert sections[0][0] == pytest.approx((finish - ai_line.END_INSET_M) / (last - ai_line.END_INSET_M))
     assert sections[1][0] == pytest.approx((last - 150 - ai_line.END_INSET_M) / (last - ai_line.END_INSET_M))
     text = package.ai_hints_ini(sections)
-    assert text.count("[HINT_") == 3 and "[HINT_2]\r\nSTART=" in text and text.rstrip().endswith("VALUE=0.05")
-    # A short route's run-off keeps only the sections that fit, still ending at the end of the line.
+    assert text.count("[HINT_") == 3 and "[HINT_2]\r\nSTART=" in text and text.rstrip().endswith("VALUE=0")
+    # A short route's run-off keeps only the sections that fit, still ending at the end of the line, and the AI
+    # still stops: the stop is never the section that's dropped.
     short = ai_line.runoff_hints(300.0, layout.finish_distance(300.0))
-    assert short and short[-1][1] == 1.0 and all(a < b for a, b, _ in short)
+    assert short and short[-1][1] == 1.0 and all(a < b for a, b, _ in short) and short[-1][2] == 0.0
 
 
 def test_the_ai_line_stops_short_of_the_end_wall():

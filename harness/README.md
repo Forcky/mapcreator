@@ -32,7 +32,7 @@ It goes through **Content Manager (CM)**, which most players use to install and 
    - With CSP: is there Grass FX grass on the verges and none on the road?
 7. **After the session:** `.venv\Scripts\python harness/ac_harness.py results` lists the times. An A→B run appears as one lap with its time. A lap AC's AI drove for you (Ctrl+C in a session) is recorded as time −1 with a cut.
 8. **After quitting AC:** `.venv\Scripts\python harness/ac_harness.py check-log grasstree_hill` checks `log.txt` and the CSP log.
-9. Repeat for `--layout reverse`, then add an AI opponent in Quick Drive and check it reaches the finish (M4).
+9. Repeat for `--layout reverse`, then race AI opponents (below).
 
 If the track doesn't load at all:
 
@@ -69,3 +69,22 @@ To run it:
 - Results and screenshots land in `Documents/Assetto Corsa/mapcreator_probe/`.
 - A teleport the game ignores is reported as a harness problem, not a track problem.
 - Teleporting is only known to work in offline practice.
+
+## AI opponents (CSP Lua app)
+
+`csp_app/mc_watch/` logs every car in the session: its position, heading, speed, wheels, laps and damage, and the frame rate. It samples 4 times a second for the first 15 s, then once a second. It runs only when the harness switches it on, for one session.
+
+```powershell
+.venv\Scripts\python harness/ac_harness.py race grasstree_hill --layout reverse --cars 8 --session race   # or --session practice
+# press Drive, then Ctrl+C to have AC's AI drive your car too
+.venv\Scripts\python harness/ac_harness.py watch-report "<AC>/content/tracks/grasstree_hill" --layout reverse
+```
+
+The report checks the grid, which fails if any car spawned with a wheel unloaded or off the road, facing more than 10° off the road, or outside it. It then gives, for each car:
+- the furthest point it reached, and when it finished
+- where it left the road, if it did
+- where it came to rest near the end of the line
+
+- **A race won't show the run-off.** It ends when the last car still running finishes, and AC then puts every car back on the grid. Use `--session practice` to watch the cars stop. In practice, AC sends a stopped AI car back to its pit box after about 20–25 s.
+- **In practice the AI leave their pit boxes at random times.** The pit boxes are the grid spots on the road, so cars can bump the ones still standing ahead.
+- **Press Drive with real mouse input.** AC's menus follow raw mouse input, so a scripted click needs absolute mouse moves (`mouse_event` with `MOUSEEVENTF_ABSOLUTE`), not just `SetCursorPos`.

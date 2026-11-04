@@ -387,6 +387,112 @@ def probe_report() -> int:
     return 0 if n and not problems else 1
 
 
+# -- several cars (CSP Lua app mc_watch) -------------------------------------------
+
+WATCH_APP = ROOT / "harness" / "csp_app" / "mc_watch"
+
+
+def _opponents_ini(tid: str, layout: str, car: str, cars: int, session: str) -> str:
+    """The player's race.ini as a session with cars - 1 AI opponents in the same car: a one-lap race from the grid,
+    or practice (each car from its pit box). AI opponents need a track with that many grid spots (`pitboxes`)."""
+    cp = configparser.ConfigParser(strict=False, interpolation=None)
+    cp.optionxform = str
+    cp.read_string(_patched_race_ini(tid, layout, car))
+    skins_dir = ac_root() / "content" / "cars" / car / "skins"
+    skins = sorted(p.name for p in skins_dir.iterdir() if p.is_dir()) if skins_dir.is_dir() else [""]
+    cp["RACE"].update({"CARS": str(cars), "AI_LEVEL": "100", "RACE_LAPS": "1"})
+    if session == "race":
+        cp["SESSION_0"] = {"NAME": "Race", "TYPE": "3", "LAPS": "1", "DURATION_MINUTES": "0", "SPAWN_SET": "START"}
+    for k in range(1, cars):
+        cp[f"CAR_{k}"] = {"MODEL": car, "SKIN": skins[k % len(skins)], "DRIVER_NAME": f"AI {k}", "SETUP": "",
+                          "MODEL_CONFIG": "", "BALLAST": "0", "RESTRICTOR": "0", "AI_LEVEL": "100"}
+    buf = io.StringIO()
+    cp.write(buf, space_around_delimiters=False)
+    return buf.getvalue()
+
+
+def race(tid: str, layout: str, car: str, cars: int, session: str) -> None:
+    """Start a session with AI opponents through CM, with mc_watch logging every car (watch.json)."""
+    dest = ac_root() / "apps" / "lua" / "mc_watch"
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(WATCH_APP, dest)
+    out = _probe_dir()
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "watch.json").unlink(missing_ok=True)
+    (out / "points.json").unlink(missing_ok=True)  # the probe stays idle
+    (out / "watch.on").write_text("1", encoding="utf-8")  # the app deletes it: one session per switch
+    path = Path(tempfile.gettempdir()) / f"mapcreator_{tid}_{layout or 'main'}_{cars}cars.ini"
+    path.write_text(_opponents_ini(tid, layout, car, cars, session), encoding="utf-8")
+    _cm(f"acmanager://race/config?configFile={quote(str(path), safe='')}")
+    print(f"asked Content Manager for a {session} on {tid}/{layout or '(main)'} with {cars} cars; mc_watch is on")
+
+
+def watch_report(track_dir: Path, layout: str, watch: Path | None = None) -> int:
+    """Every car from mc_watch's log: the grid (wheels loaded and on valid track, facing along the road), the run
+    (finished, left the road), and where each car came to rest. AC sends everyone back to the grid when a race ends,
+    so each car's run is read up to the furthest point it reached. Fails if the grid isn't clean."""
+    import numpy as np
+
+    sys.path.insert(0, str(ROOT / "src"))
+    from mapcreator.core import ai_line  # the harness runs from the repo's venv
+
+    data = json.loads((watch or _probe_dir() / "watch.json").read_text(encoding="utf-8"))
+    base = track_dir / layout if layout else track_dir
+    line = ai_line.read(base / "ai" / "fast_lane.ai")
+    pts, length, n = line.pos[:, [0, 2]], line.length, len(line.pos)
+    half = np.minimum(line.extra[:, 5], line.extra[:, 6])
+
+    def where(x, z):
+        i = int(np.argmin(((pts - (x, z)) ** 2).sum(1)))
+        seg = pts[min(i + 1, n - 1)] - pts[max(i - 1, 0)]
+        seg = seg / (np.linalg.norm(seg) + 1e-9)
+        d = np.array([x, z]) - pts[i]
+        return i, float(seg[0] * d[1] - seg[1] * d[0]), seg
+
+    samples = data["samples"]
+    moving = [k for k, s in enumerate(samples) if any(c["kmh"] > 1 for c in s["cars"])]
+    grid = samples[max(moving[0] - 1, 0) if moving else -1]
+    xy = np.array([[c["pos"][0], c["pos"][2]] for c in grid["cars"]])
+    ok = True
+    print(f"{len(grid['cars'])} cars, {len(samples)} samples over {samples[-1]['t']:.0f} s, CSP {data.get('csp')}")
+    print("grid:")
+    for c in grid["cars"]:
+        i, lat, seg = where(c["pos"][0], c["pos"][2])
+        look = c.get("look")
+        facing = float(np.degrees(np.arccos(np.clip(np.dot(np.array([look[0], look[2]]) / (np.hypot(look[0], look[2]) + 1e-9),
+                                                           seg), -1, 1)))) if look else float("nan")
+        gap = float(np.delete(np.linalg.norm(xy - xy[c["i"]], axis=1), c["i"]).min()) if len(xy) > 1 else float("nan")
+        loads = [w.get("load") for w in c["wheels"]]
+        good = (all(w["valid"] for w in c["wheels"]) and all(v is None or v > 100 for v in loads)
+                and not facing > 10 and abs(lat) <= half[i])
+        ok &= good
+        print(f"  car {c['i']}: {length[i]:6.1f} m, {lat:+.2f} m off the line, facing {facing:4.1f} deg off it, "
+              f"nearest car {gap:4.1f} m, wheel loads {[None if v is None else round(v) for v in loads]} "
+              f"{'OK' if good else 'NOT OK'}")
+    print(f"start: t {samples[moving[0]]['t']:.1f} s" if moving else "start: no car moved")
+    print("run:")
+    for ci in range(len(grid["cars"])):
+        seq = [(s["t"],) + where(s["cars"][ci]["pos"][0], s["cars"][ci]["pos"][2])[:2]
+               + (s["cars"][ci]["kmh"], s["cars"][ci]["out"], s["cars"][ci].get("laps")) for s in samples]
+        far = max(range(len(seq)), key=lambda k: seq[k][1])
+        before = seq[:far + 1]
+        off = next(((t, length[i], lat) for t, i, lat, v, out, laps in before if out >= 4), None)
+        done = next((t for t, *_, laps in seq if laps and laps >= 1), None)
+        rest = next(((t, length[i], lat, out) for t, i, lat, v, out, laps in seq[moving[0] if moving else 0:]
+                     if v < 1 and length[i] > length[-1] - 400), None)
+        print(f"  car {ci}: furthest {length[seq[far][1]]:7.0f} m"
+              + (f", finished at t {done:.0f} s" if done is not None else ", didn't finish")
+              + (f"; left the road at {off[1]:.0f} m ({off[2]:+.1f} m) at t {off[0]:.0f} s" if off else "")
+              + (f"; came to rest at {rest[1]:.0f} m, {rest[2]:+.2f} m off the line, {rest[3]} tyres off, t {rest[0]:.0f} s"
+                 if rest else "; didn't come to rest near the end"))
+    fps = [s["fps"] for s in samples if s.get("fps") and any(c["kmh"] > 5 for c in s["cars"])]
+    if fps:
+        print(f"frame rate while cars move: median {np.median(fps):.0f}, min {min(fps):.0f}")
+    print("grid PASS" if ok else "grid FAIL")
+    return 0 if ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="ac_harness")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -414,7 +520,22 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--quit", action="store_true", help="quit AC when the probe finishes")
     p.add_argument("--screenshots-every", type=int, default=0, help="screenshot every Nth point (0 = none)")
     sub.add_parser("probe-report")
+    p = sub.add_parser("race")
+    p.add_argument("track_id")
+    p.add_argument("--layout", default="forward", help="layout folder; empty string for single-layout tracks")
+    p.add_argument("--car", default="abarth500")
+    p.add_argument("--cars", type=int, default=8, help="cars in all, the player's included")
+    p.add_argument("--session", choices=("race", "practice"), default="race")
+    p = sub.add_parser("watch-report")
+    p.add_argument("track_dir", type=Path)
+    p.add_argument("--layout", default="forward")
+    p.add_argument("--watch", type=Path, default=None, help="a saved watch.json (default: the latest)")
     args = ap.parse_args(argv)
+    if args.cmd == "race":
+        race(args.track_id, args.layout, args.car, args.cars, args.session)
+        return 0
+    if args.cmd == "watch-report":
+        return watch_report(args.track_dir, args.layout, args.watch)
     if args.cmd == "probe-install":
         probe_install()
         return 0
