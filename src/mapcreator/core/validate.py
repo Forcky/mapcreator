@@ -82,10 +82,11 @@ class Report:
 
 
 def bend_checks(rep: Report, label: str, line: ai_line.AiLine, *, allow_tight_bends: bool = False,
-                radius: np.ndarray | None = None) -> None:
-    """The AI line's speeds and the road's tightest bend (`radius`, by default the AI line's own). A slow AI line
-    is put down to the bend when there's one."""
-    radius = line.extra[:, 4] if radius is None else radius
+                radius: np.ndarray | None = None, at: np.ndarray | None = None) -> None:
+    """The AI line's speeds and the road's tightest bend: `radius` at AC x/z points `at`, by default the AI line's
+    own radius at its points. A slow AI line is put down to the bend when there's one."""
+    radius = line.extra[:, 4] if radius is None else np.asarray(radius, dtype=float)
+    at = np.asarray(line.pos, dtype=float)[:, [0, 2]] if at is None else np.asarray(at, dtype=float)
     i = int(np.argmin(radius))
     r = float(radius[i])
     v = line.extra[:, 0]
@@ -95,7 +96,7 @@ def bend_checks(rep: Report, label: str, line: ai_line.AiLine, *, allow_tight_be
     if r >= MIN_RADIUS_M:
         rep.check(True, what)
         return
-    rep.bends.append(TightBend(label, r, float(line.pos[i][0]), float(line.pos[i][2])))
+    rep.bends.append(TightBend(label, r, float(at[i][0]), float(at[i][1])))
     if allow_tight_bends and r >= FLOOR_RADIUS_M:
         rep.warnings.append(f"{what}; built anyway, as asked")
     else:
@@ -105,7 +106,9 @@ def bend_checks(rep: Report, label: str, line: ai_line.AiLine, *, allow_tight_be
 # The racing line (core/racing_line.py) keeps EDGE_MARGIN_M from each road edge; between its stations, at the
 # apex of a hairpin, it can come a few centimetres closer. This much closer fails.
 AI_EDGE_MIN_M = racing_line.EDGE_MARGIN_M - 0.2
-LINE_RADIUS_TOL = 0.05  # the line may be this much (a share) tighter than the road nearby before it fails
+# The line may be this much (a share) tighter than the road nearby before it's warned about. Only a warning, by
+# the maintainer's decision (#44): it never stops a build.
+LINE_RADIUS_TOL = 0.05
 LINE_RADIUS_NEAR_M = 30.0  # either side of a point, the road's tightest radius in this reach is "nearby"
 # Above this radius the planned speed is capped anyway, so the line's radius there doesn't matter.
 LINE_RADIUS_CARE_M = ai_line.V_MAX ** 2 / (ai_line.MU * ai_line.G)
@@ -138,7 +141,9 @@ def _radius(xz: np.ndarray) -> np.ndarray:
 
 def road_middle(line: ai_line.AiLine) -> tuple[np.ndarray, np.ndarray]:
     """The middle of the road beside each AI point, from the point and its distances to the two edges (fields 5
-    and 6), as AC x/z; and its radius. On a line along the middle of the road, the line itself."""
+    and 6), as AC x/z; and its radius. On a line along the middle of the road, the line itself. From points 5 m
+    apart the radius reads a little tight in hairpins (Brinktop Road's 7.2 m corner as 6.9 m), so the route check
+    reads the centreline itself when it has it (`track_folder`'s `road_radius`)."""
     fwd = line.extra[:, [13, 15]]
     left = np.column_stack([fwd[:, 1], -fwd[:, 0]]) / np.maximum(np.hypot(*fwd.T), 1e-9)[:, None]
     xz = np.asarray(line.pos, dtype=float)[:, [0, 2]] + left * ((line.extra[:, 5] - line.extra[:, 6]) / 2)[:, None]
@@ -147,7 +152,7 @@ def road_middle(line: ai_line.AiLine) -> tuple[np.ndarray, np.ndarray]:
 
 def racing_line_checks(rep: Report, label: str, line: ai_line.AiLine, road: RoadSurface, middle_radius) -> None:
     """The AI line stays on the road, AI_EDGE_MIN_M or more from each edge (by its own edge distances, and on the
-    road's triangles), and nowhere bends tighter than the road does nearby."""
+    road's triangles): failures. And it nowhere bends tighter than the road does nearby: a warning if it does."""
     side = np.minimum(line.extra[:, 5], line.extra[:, 6])
     i = int(np.argmin(side))
     rep.check(bool(side[i] >= AI_EDGE_MIN_M),
@@ -168,10 +173,13 @@ def racing_line_checks(rep: Report, label: str, line: ai_line.AiLine, road: Road
     nearby = minimum_filter1d(np.asarray(middle_radius, dtype=float), w, mode="nearest")
     ratio = np.where(r_line < LINE_RADIUS_CARE_M, r_line / np.minimum(nearby, LINE_RADIUS_CARE_M), np.inf)
     j = int(np.argmin(ratio))
-    rep.check(bool(ratio[j] >= 1 - LINE_RADIUS_TOL),
-              f"{label}: AI line's tightest radius {r_line.min():.1f} m, nowhere tighter than the road nearby "
-              f"(the road's {float(np.min(middle_radius)):.1f} m; worst {r_line[j]:.1f} m against {nearby[j]:.1f} m, "
-              f"{line.length[j]:.0f} m along it)")
+    if ratio[j] >= 1 - LINE_RADIUS_TOL:
+        rep.passed.append(f"{label}: AI line's tightest radius {r_line.min():.1f} m, nowhere tighter than the road "
+                          f"nearby (worst {r_line[j]:.1f} m against {nearby[j]:.1f} m, "
+                          f"{line.length[j]:.0f} m along it)")
+    else:
+        rep.warnings.append(f"{label}: the AI line bends tighter than the road near {line.length[j]:.0f} m along it: "
+                            f"{r_line[j]:.1f} m against the road's {nearby[j]:.1f} m")
 
 
 VERTICAL_G_LIMIT = 0.5  # a crest or sag pulling more than this, at the AI's planned speed, gets a warning
@@ -303,7 +311,9 @@ def _kn5_checks(rep: Report, path: Path) -> tuple[dict, dict] | None:
 
 
 def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: Path, *,
-                   allow_tight_bends: bool = False) -> None:
+                   allow_tight_bends: bool = False, road_radius: tuple[np.ndarray, np.ndarray] | None = None) -> None:
+    """`road_radius`: the centreline's radius every metre, as (AC x/z points, radii), for the route check. Without
+    it (a folder checked on its own) the road's middle is found from the AI file."""
     road = RoadSurface(data["nodes"])
     for name in sorted(n for n in dummies if SPAWN.match(n)):
         x, y, z = dummies[name]["matrix"][3, :3]
@@ -352,7 +362,10 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
     rep.check(len(lift) > 0.9 * len(sample) and AI_HEIGHT[0] <= min(lift) and max(lift) <= AI_HEIGHT[1],
               f"{label}: AI line {min(lift):.2f}-{max(lift):.2f} m above the road" if lift else f"{label}: AI line off the road")
     _middle, middle_radius = road_middle(line)
-    bend_checks(rep, label, line, allow_tight_bends=allow_tight_bends, radius=middle_radius)
+    if road_radius is None:
+        bend_checks(rep, label, line, allow_tight_bends=allow_tight_bends, radius=middle_radius)
+    else:
+        bend_checks(rep, label, line, allow_tight_bends=allow_tight_bends, radius=road_radius[1], at=road_radius[0])
     racing_line_checks(rep, label, line, road, middle_radius)
     vertical_checks(rep, label, line)
     for name in sorted(n for n in dummies if re.fullmatch(r"AC_START_\d+", n)):
@@ -368,7 +381,11 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
         rep.check(float(fwd @ ai_dir) > 0.8, f"{label}: {name} faces the AI line's direction")
 
 
-def track_folder(track_dir: Path, *, allow_tight_bends: bool = False) -> Report:
+def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
+                 road_radius: dict[str, tuple[np.ndarray, np.ndarray]] | None = None) -> Report:
+    """`road_radius`: by layout label ("main", "forward", "reverse"), the centreline's radius every metre over the
+    layout's AI line, as (AC x/z points, radii). The validate stage passes it from the profile, so a bend is judged
+    as main's 1 m centreline line judged it."""
     rep = Report()
     tid = track_dir.name
     rep.check(bool(re.fullmatch(r"[a-z0-9_]{1,32}", tid)), f"track folder name '{tid}' is valid")
@@ -416,7 +433,7 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False) -> Report:
         if datas:
             merged = {"nodes": [n for d in datas for n in d["nodes"]], "materials": datas[0]["materials"]}
             _layout_checks(rep, label, merged, all_dummies, base / "ai" / "fast_lane.ai",
-                           allow_tight_bends=allow_tight_bends)
+                           allow_tight_bends=allow_tight_bends, road_radius=(road_radius or {}).get(label))
     for rel in ("ATTRIBUTION.txt", "centreline.geojson", "extension/ext_config.ini"):
         rep.check((track_dir / rel).exists(), f"{rel} present")
     return rep

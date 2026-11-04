@@ -194,10 +194,11 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         line = ai_line.build(road, scene.frame, end_short_m=AI_END_SHORT_M)
         ai_line.write(layout_dir / "ai" / "fast_lane.ai", line)
         tight = ""
-        if job.allow_tight_bends and line.centre_radius.min() < validate.MIN_RADIUS_M:
-            i = int(np.argmin(line.centre_radius))  # the road's bend, as the validator judges it
-            tight = (f" Built as asked with a {line.centre_radius[i]:.1f} m bend about {line.station[i] / 1000:.1f} km "
-                     "in: some cars can't turn that tightly, and AI cars may stop there.")
+        bend_d, bend_r = ai_line.road_radius(road, end_short_m=AI_END_SHORT_M)  # the road's bends, as validated
+        if job.allow_tight_bends and bend_r.min() < validate.MIN_RADIUS_M:
+            i = int(np.argmin(bend_r))
+            tight = (f" Built as asked with a {bend_r[i]:.1f} m bend about {bend_d[i] / 1000:.1f} km in: "
+                     "some cars can't turn that tightly, and AI cars may stop there.")
 
         xz = scene.frame.to_ac(road.e, road.n, road.z)[:, [0, 2]]
         map_png, map_ini = package.map_files(xz)
@@ -241,7 +242,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             "top_speed_kmh": round(float(line.extra[:, 0].max() * 3.6), 1),
             "slowest_kmh": round(float(line.extra[:, 0].min() * 3.6), 1),
             "ai_tightest_radius_m": round(float(line.extra[:, 4].min()), 1),
-            "road_tightest_radius_m": round(float(line.centre_radius.min()), 1),
+            "road_tightest_radius_m": round(float(bend_r.min()), 1),
         }
 
     power_geo = work.root / scenery_stage.STAGE / "power.geojson"

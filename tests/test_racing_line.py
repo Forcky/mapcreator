@@ -186,6 +186,57 @@ def test_fast_lane_ai_round_trips_with_points_5_m_apart(tmp_path):
     assert np.all(np.diff(back.length) > 0)
 
 
+def _ac_xz(road: RoadModel, d: np.ndarray) -> np.ndarray:
+    """AC x/z of the centreline at distances `d`."""
+    return FRAME.to_ac(np.interp(d, road.d, road.e), np.interp(d, road.d, road.n), np.interp(d, road.d, road.z))[:, [0, 2]]
+
+
+def _main_road_radius(road: RoadModel, end_short_m: float) -> tuple[np.ndarray, np.ndarray]:
+    """The radius main's centreline AI line carried (extra field 4): every metre from END_INSET_M, |curvature|
+    smoothed over 2 points, capped at 1,000 m. Written out here so the route check can't drift from it."""
+    from scipy.ndimage import gaussian_filter1d
+
+    d = np.arange(ai_line.END_INSET_M, road.length - end_short_m, 1.0)
+    k = gaussian_filter1d(np.abs(np.interp(d, road.d, road.curvature)), 2)
+    return d, np.minimum(1.0 / np.maximum(k, 1e-6), 1000.0)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_the_route_check_reads_the_centreline_every_metre_as_main_did(reverse):
+    # A 6 m hairpin, 180 degrees, on a 6.4 m road: the racing line's radius there is far wider, and the road's
+    # middle found from its points 5 m apart reads tight. The route check reads the centreline itself.
+    road = road_from(bends((300, 0), (np.pi * 6, 6), (300, 0)), half=3.2, reverse=reverse)
+    d, r = ai_line.road_radius(road, end_short_m=AI_END_SHORT_M)
+    d_main, r_main = _main_road_radius(road, AI_END_SHORT_M)
+    assert np.array_equal(d, d_main) and np.array_equal(r, r_main)
+    assert r.min() == pytest.approx(6.0, abs=0.05)
+    line = ai_line.build(road, FRAME, end_short_m=AI_END_SHORT_M)
+    assert line.extra[:, 4].min() > 7.0  # the racing line's own radius
+    xz = _ac_xz(road, d)
+    rep = validate.Report()
+    validate.bend_checks(rep, "t", line, radius=r, at=xz)
+    assert f"t: tightest bend radius {r.min():.1f} m (needs >= 5 m)" in rep.passed and rep.ok
+    # A tight bend found this way is reported where the road bends, from the centreline's own points.
+    rep = validate.Report()
+    validate.bend_checks(rep, "t", line, radius=r * 0.6, at=xz)  # 3.6 m: tighter than any real road
+    i = int(np.argmin(r))
+    assert rep.route_failed and rep.bends == [validate.TightBend("t", float(r[i] * 0.6), xz[i, 0], xz[i, 1])]
+
+
+def test_a_road_at_5_m_passes_the_route_check_as_on_main():
+    # A bend of 5.05 m radius: main's centreline line read it as 5.0 m and passed. The road's middle found from
+    # the racing line's points 5 m apart would read it tighter; the route check doesn't use that any more.
+    road = road_from(bends((300, 0), (np.pi * 5.05, 5.05), (300, 0)), half=3.2)
+    d, r = ai_line.road_radius(road, end_short_m=AI_END_SHORT_M)
+    assert np.array_equal(r, _main_road_radius(road, AI_END_SHORT_M)[1]) and r.min() >= validate.MIN_RADIUS_M
+    line = ai_line.build(road, FRAME, end_short_m=AI_END_SHORT_M)
+    xz = _ac_xz(road, d)
+    rep = validate.Report()
+    validate.bend_checks(rep, "t", line, radius=r, at=xz)
+    assert rep.ok and not rep.bends
+    assert validate.road_middle(line)[1].min() < validate.MIN_RADIUS_M  # what reading the AI file would have said
+
+
 def _flat_road_surface(half=HALF):
     """A validate.RoadSurface wide enough for anything (the radius check doesn't look at it)."""
     pos = np.array([[-1e5, 0, -1e5], [1e5, 0, -1e5], [-1e5, 0, 1e5], [1e5, 0, 1e5]], dtype=float)
@@ -206,7 +257,7 @@ def _straight_line(offset: np.ndarray, half: float = HALF) -> ai_line.AiLine:
     return ai_line.AiLine(pos=pos, length=x, extra=extra)
 
 
-def test_the_validator_fails_a_line_that_weaves_or_comes_too_near_an_edge():
+def test_the_validator_warns_of_a_line_that_weaves_and_fails_one_too_near_an_edge():
     s = np.arange(400.0)
     good = _straight_line(np.zeros(len(s)))
     rep = validate.Report()
@@ -218,7 +269,10 @@ def test_the_validator_fails_a_line_that_weaves_or_comes_too_near_an_edge():
     assert np.abs(middle[:, 1]).max() < 1e-6 and radius.min() > 500  # the road's middle, found from the edges
     rep = validate.Report()
     validate.racing_line_checks(rep, "t", weave, _flat_road_surface(), radius)
-    assert [f for f in rep.failed if "nowhere tighter than the road nearby" in f]
+    # Tighter than the road is a warning, never a failure (#44): the build goes on.
+    assert rep.failed == [] and rep.route_failed == [] and rep.ok
+    assert [w for w in rep.warnings if "bends tighter than the road" in w]
+    assert not [p for p in rep.passed if "nowhere tighter than the road nearby" in p]
     # 0.8 m from the left edge.
     near = _straight_line(np.full(len(s), HALF - 0.8))
     rep = validate.Report()

@@ -192,8 +192,8 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
 For the AI line it also checks:
 - distances strictly increase, and each spawn faces along the line;
 - every point is at least 1.0 m (the 1.2 m margin less 0.2 m) inside both edges: by its side distances, and on the road's triangles either side of it;
-- the line is nowhere more than 5% tighter than the road within 30 m of it. The road's middle is found from each point and its two side distances, and both radii come from a spline through the points.
-- The route check (a bend under 5 m) is on the road's radius found that way, not the racing line's. From points 5 m apart it reads a little tight: Brinktop Road's tightest bend reads 6.9 m against 7.1 m from the centreline itself.
+- the line is nowhere more than 5% tighter than the road within 30 m of it: a warning, never a failure (the maintainer's decision, #44). The road's middle is found from each point and its two side distances, and both radii come from a spline through the points.
+- The route check (a bend under 5 m) judges the road, not the racing line: the centreline's radius every metre over the AI line's stretch, from the profile (`ai_line.road_radius`), exactly as main's centreline line carried it. The AI file can't give it: its radius is the racing line's, and the road's middle found from points 5 m apart reads hairpins tight (Brinktop Road's 7.2 m corner as 6.9 m). Only a folder validated on its own, without the build's profile, falls back to that.
 
 ## Power lines (`core/power.py`)
 

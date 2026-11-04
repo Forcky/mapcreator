@@ -68,6 +68,15 @@ def radius_of(curvature: np.ndarray, step: float = PROFILE_M) -> np.ndarray:
     return np.minimum(1.0 / np.maximum(gaussian_filter1d(np.abs(curvature), SMOOTH_M / step), 1e-6), 1000.0)
 
 
+def road_radius(road: RoadModel, *, end_short_m: float = END_INSET_M) -> tuple[np.ndarray, np.ndarray]:
+    """The centreline's radius every PROFILE_M over the AI line's stretch (END_INSET_M from the layout's start to
+    `end_short_m` before its end), as distances along the road and radii. This is the road's bend, which the route
+    check judges (`validate.bend_checks`), not the racing line's; it's the radius main's centreline AI line carried
+    at the same stations."""
+    d = np.arange(END_INSET_M, road.length - end_short_m, PROFILE_M)
+    return d, radius_of(np.interp(d, road.d, road.curvature))
+
+
 def speed_profile(d: np.ndarray, curvature: np.ndarray, grade: np.ndarray) -> np.ndarray:
     """Speeds (m/s) at distances `d`, PROFILE_M apart, along a line of the given curvature and grade."""
     v = np.minimum(np.sqrt(MU * G * radius_of(curvature)), V_MAX)
