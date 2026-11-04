@@ -111,9 +111,13 @@ def test_reverse_layout_runs_the_other_way():
 def test_ai_line_brakes_before_the_bend_and_round_trips(tmp_path):
     line = ai_line.build(_road(), FRAME)
     v = line.extra[:, 0]
-    assert v[150] > v[400]  # straight faster than a 40 m bend
-    assert v[400] == pytest.approx(np.sqrt(ai_line.MU * ai_line.G * 40), rel=0.05)
-    assert v[280] < v[200]  # already braking before the bend starts at 300 m
+
+    def at(d):  # the speed where the line passes `d` metres along the road (its points are about 5 m apart)
+        return float(np.interp(d, line.station, v))
+
+    assert at(150) > at(400)  # straight faster than a 40 m bend
+    assert at(400) == pytest.approx(np.sqrt(ai_line.MU * ai_line.G * 40), rel=0.05)
+    assert at(280) < at(200)  # already braking before the bend starts at 300 m
     assert np.all(line.pos[:, 1] > 0)
     path = tmp_path / "ai" / "fast_lane.ai"
     ai_line.write(path, line)

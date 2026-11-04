@@ -69,7 +69,9 @@ def build_and_check(tmp_path, tags: dict, *, reverse: bool = False, shape=gentle
     ai_line.write(ai, ai_line.build(road, frame))
     rep = validate.Report()
     data, by_name = validate._kn5_checks(rep, model)
-    validate._layout_checks(rep, "t", data, by_name, ai)
+    d, r = ai_line.road_radius(road)  # as the validate stage passes it, from the profile
+    xz = frame.to_ac(np.interp(d, road.d, road.e), np.interp(d, road.d, road.n), np.interp(d, road.d, road.z))
+    validate._layout_checks(rep, "t", data, by_name, ai, road_radius=(xz[:, [0, 2]], r))
     return rep
 
 

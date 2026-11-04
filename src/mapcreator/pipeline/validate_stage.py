@@ -11,10 +11,11 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from mapcreator.config import Settings
-from mapcreator.core import validate
+from mapcreator.core import ai_line, validate
+from mapcreator.core.layout import AI_END_SHORT_M, RoadModel, layouts_for
 from mapcreator.core.scene import Scene
 from mapcreator.job import Job
-from mapcreator.pipeline import mesh_stage, profile_stage, track_stage
+from mapcreator.pipeline import mesh_stage, profile_stage, section_stage, track_stage
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.regions import job_region
 
@@ -55,8 +56,27 @@ def _where(job: Job, work: WorkDir, bend: validate.TightBend) -> tuple[float, fl
     return float(c["s"][i]), float(lon), float(lat)
 
 
+def road_radius(job: Job, work: WorkDir) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """Each layout's centreline radius every metre over its AI line, with the AC x/z of each point: what the
+    route check judges. The AI file's points are 5 m apart and its radius is the racing line's, so it isn't read
+    for this."""
+    frame = Scene.load(work.root / mesh_stage.STAGE).frame
+    c = np.load(work.root / profile_stage.STAGE / "centreline.npz")
+    sec = np.load(work.root / section_stage.STAGE / "section.npz")
+    out = {}
+    for lay in layouts_for(job.layouts.value):
+        road = RoadModel.from_arrays(c["s"], c["xy"], c["z"], c["heading"], c["curvature"], c["grade"],
+                                     sec["half_left"], sec["half_right"], sec["slope_left"], sec["slope_right"],
+                                     lay.reverse)
+        d, r = ai_line.road_radius(road, end_short_m=AI_END_SHORT_M)
+        xz = frame.to_ac(np.interp(d, road.d, road.e), np.interp(d, road.d, road.n), np.interp(d, road.d, road.z))
+        out[lay.key or "main"] = (xz[:, [0, 2]], r)
+    return out
+
+
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
-    rep = validate.track_folder(work.root / track_stage.STAGE / job.track_id, allow_tight_bends=job.allow_tight_bends)
+    rep = validate.track_folder(work.root / track_stage.STAGE / job.track_id, allow_tight_bends=job.allow_tight_bends,
+                                road_radius=road_radius(job, work))
     work.write_json(STAGE, "report.json", {"ok": rep.ok, "passed": rep.passed, "failed": rep.failed,
                                            "route_failed": rep.route_failed, "warnings": rep.warnings})
     if rep.failed:
