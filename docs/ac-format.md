@@ -128,3 +128,23 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
   - Towers further out stood in the sky, their bases floating past the ground's edge (in game, 4 Nov), so a span with a support beyond it isn't built.
   - On Grasstree Hill that leaves out both TasNetworks lines; widening the terrain (#34) would bring them back.
 - **No wind:** CSP's `[WIND] DYNAMIC_CABLES` (undocumented; CSP's own Laguna Seca config uses it) does act on the wires: its log shows "Preparing cables". But it redraws them as tubes about 8 times thicker than the 3.5 cm mesh. Without it they draw as thin lines and look right (in game, 4 Nov), so `ext_config.ini` leaves it out.
+
+## Roadside furniture (`core/furniture.py`)
+
+Built in the mesh stage, visual only, in `FURNITURE_n` meshes with one material (`furniture`) and a texture atlas the stage draws (`furniture.png`).
+
+- **Guide posts** stand on both sides, 0.8 m beyond the road's edge and about 1 m tall, with a black band and a reflector on each face.
+  - Red faces the traffic for which the post is on the left; white faces the traffic for which it's on the right.
+  - Spacing follows Main Roads WA's "Design of Guide Posts" (citing AS 1742.2-2009 clause 4.2.4.4): 150 m on straights. On curves it's closer, and closer still on the outside: 6/12 m (outside/inside) below 100 m radius, 10/20 m to 200 m, 15/30 m to 300 m, 20/40 m to 400 m, then 40, 50, 60 and 90 m both sides out to 2,000 m.
+  - The spacing is checked at every station, so posts close up as soon as a curve begins.
+  - None where a guard rail runs.
+- **Curve alignment markers** (CAMs: black chevron on yellow, 0.45 x 0.6 m, 1.2 m up, 2 m beyond the edge) go on the outside of a bend whose advisory speed is at least 15 km/h below the speed limit.
+  - Advisory speed is v = sqrt(127 R (e + 0.35)) km/h. The limit comes from OSM; where it's unknown, 100 km/h.
+  - At least three per bend, spaced at twice the outside guide post spacing (12-40 m), starting one spacing before the bend and ending one after.
+  - Boards stand back to back, so each direction sees its own chevron.
+  - Each bend of an S-bend is treated on its own.
+  - The spacing is an approximation: the AS 1742.2 table isn't openly published.
+- **Speed limit signs** (white, red ring, black numerals; 0.45 x 0.6 m, 1.5 m up, 2 m beyond the edge) go on the left for each direction of travel.
+  - One where OSM's `maxspeed` changes between two known values.
+  - One near each layout's start (70 m in), where the limit there is known.
+  - Unknown or non-km/h limits make no sign. The numerals use Pillow's built-in Aileron font (CC0).

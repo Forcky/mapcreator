@@ -8,11 +8,11 @@ import math
 import numpy as np
 
 from mapcreator.config import Settings
-from mapcreator.core import mesh, roadside
+from mapcreator.core import furniture, mesh, roadside
 from mapcreator.core import water as water_core
 from mapcreator.core.scene import LocalFrame, Material, Scene
 from mapcreator.job import Job
-from mapcreator.pipeline import profile_stage, section_stage
+from mapcreator.pipeline import profile_stage, route_stage, section_stage
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.regions import FINE_DEM_M, job_region
 
@@ -64,11 +64,25 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     meshes += water_core.meshes(water, frame)
     rails, rail_stats = [], {"skipped": "DEM too coarse to place rails"}
     fine = c["fine"] if "fine" in c else np.full(len(c["s"]), getattr(dem, "resolution_m", 2.0) <= FINE_DEM_M)
+    no_rail = np.zeros(len(c["s"]), dtype=bool)
+    masks = {"L": no_rail, "R": no_rail}
     if fine.any():  # only where the DEM shows real drops: a coarse one shows hillsides as cliffs
+        masks = roadside.rail_masks(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"], sec["half_right"],
+                                    sec["slope_left"], sec["slope_right"], dem.sample, allowed=fine)
         rails, rail_stats = roadside.guard_rails(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"],
                                                  sec["half_right"], sec["slope_left"], sec["slope_right"],
-                                                 dem.sample, frame, allowed=fine)
+                                                 dem.sample, frame, allowed=fine, masks=masks)
     meshes += rails
+    out = work.stage(STAGE)
+    limits = furniture.speed_limits(c["run"], work.read_json(route_stage.STAGE, "runs.json"))
+    furn, furn_stats, atlas = furniture.furniture(
+        c["s"], c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
+        sec["slope_left"], sec["slope_right"], sec["superelevation"], limits, frame, masks["L"], masks["R"])
+    meshes += furn
+    textures = {}
+    if furn:
+        textures[furniture.MATERIAL] = str(out / "furniture.png")
+        atlas.image.save(textures[furniture.MATERIAL])
     meshes += roadside.end_walls(c["s"], c["xy"], c["z"], c["heading"], dem.sample, frame)
 
     scene = Scene(
@@ -80,9 +94,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             "terrain": Material("terrain", texture="ground"),
             "rail": Material("rail", texture="steel"),
             **({"water": Material("water", texture="water")} if water else {}),
+            **({furniture.MATERIAL: Material(furniture.MATERIAL, furniture.MATERIAL)} if furn else {}),
         },
+        textures=textures,
     )
-    out = work.stage(STAGE)
     scene.save(out)
     water_summary = water_core.summary(water)
     work.write_json(STAGE, "water.json", water_summary)
@@ -101,5 +116,6 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "by_kind": {k: {"meshes": len(v), "vertices": int(sum(v))} for k, v in by_kind.items()},
         "frame": [frame.e0, frame.n0, frame.h0],
         "guard_rails": rail_stats,
+        "furniture": furn_stats,
         "water": water_summary,
     }
