@@ -116,6 +116,7 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
   - A lattice tower is 26-50 m tall by voltage, with three levels of cross-arms carrying one circuit on each side and an earth wire at the peak.
   - A pole is 11 m of timber (14 m on lines tagged `power=line`) with a cross-arm and three insulators, carrying one circuit.
   - Each support is turned to the bisector of the spans on either side of it. Wires attach to whatever stands at each end.
+  - Every leg and pole goes 2.5 m below the ground at its own foot (`LEG_SINK_M`), so a downhill leg on a slope, or a support on coarse terrain cells, never shows a gap.
 - **Wires:**
   - A parabolic sag of span² / (8 C), with C 1,600 m for transmission and 700 m for distribution.
   - Where the DEM rises under a span, the sag is cut back so the wire stays 8 m (transmission) or 5.5 m (distribution) above the ground. Spans that still can't clear it are counted as `low_spans`.
