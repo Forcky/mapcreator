@@ -21,11 +21,12 @@ def road(curvature: np.ndarray, step: float = 1.0):
                 half_r=np.full(n, HALF), slope_l=flat, slope_r=flat, superelevation=flat)
 
 
-def build(r, limits=None, rail_l=None, rail_r=None):
+def build(r, limits=None, rail_l=None, rail_r=None, unsealed=None):
     n = len(r["s"])
     limits = np.full(n, 80.0) if limits is None else limits
     return furniture.furniture(r["s"], r["xy"], r["z"], r["heading"], r["curvature"], r["half_l"], r["half_r"],
-                               r["slope_l"], r["slope_r"], r["superelevation"], limits, FRAME, rail_l, rail_r)
+                               r["slope_l"], r["slope_r"], r["superelevation"], limits, FRAME, rail_l, rail_r,
+                               unsealed=unsealed)
 
 
 def posts_by_side(meshes, r):
@@ -99,6 +100,22 @@ def test_no_guide_posts_along_a_guard_rail():
     meshes, info, _ = build(r, rail_l=rail)
     left = [s for s, side in posts_by_side(meshes, r) if side == "L"]
     assert not [s for s in left if 300 <= s < 700] and info["guide_posts"]["R"] == 7
+
+
+def test_gravel_gets_no_guide_posts_but_keeps_its_cams_and_speed_signs():
+    k = np.zeros(1201)
+    k[600:700] = 1 / 50.0  # a left-hander at 50 m radius: advisory about 54 km/h, against 80
+    r = road(k)
+    limits = np.where(r["s"] < 900, 80.0, 60.0)
+    unsealed = r["s"] >= 400  # sealed for 400 m, then gravel
+    sealed_meshes, sealed, _ = build(r, limits=limits)
+    meshes, gravel, _ = build(r, limits=limits, unsealed=unsealed)
+    posts = posts_by_side(meshes, r)
+    assert posts and all(s < 400 for s, _ in posts)  # posts on the seal only
+    assert posts == [p for p in posts_by_side(sealed_meshes, r) if p[0] < 400]  # and just as they were there
+    # The tight bend on the gravel keeps its CAMs, by the same rule as on a seal, and the signs are as mapped.
+    assert gravel["cam_curves"] == sealed["cam_curves"] == 1 and gravel["cams"] == sealed["cams"] >= furniture.CAM_MIN
+    assert gravel["speed_signs"] == sealed["speed_signs"] == 4
 
 
 def test_speed_signs_where_the_limit_changes_for_both_directions_and_near_each_start():

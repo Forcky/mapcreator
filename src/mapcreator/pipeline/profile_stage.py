@@ -10,6 +10,7 @@ import numpy as np
 from mapcreator.config import Settings
 from mapcreator.core import centreline as cl
 from mapcreator.core import profile as pf
+from mapcreator.core import section as sec
 from mapcreator.job import Job
 from mapcreator.pipeline import route_stage
 from mapcreator.pipeline.workdir import WorkDir
@@ -63,8 +64,11 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             fine, fine_source = pf.fine_stations(line.s, line.xy, line.heading, dem.sample), "texture"
     else:
         fine = np.ones(len(line.s), dtype=bool)
-    # Where the mapped line runs up a cutting beside the road, profile the road's own strip instead.
-    strip = pf.road_strip_heights(line.s, line.xy, line.heading, dem.sample, z_raw, fine) if not coarse else None
+    # Where the mapped line runs up a cutting beside the road, profile the road's own strip instead: a strip as
+    # wide as the road is mapped (its width tags, or the class default for its surface; core/section.py).
+    width = sec.mapped_width([r["tags"] for r in runs], line.s, run_idx)
+    strip = pf.road_strip_heights(line.s, line.xy, line.heading, dem.sample, z_raw, fine,
+                                  width=width) if not coarse else None
     if coarse:
         prof = pf.smooth_profile(line.s, z_raw, _fill_mask(run_idx, runs), cutoff_m=cutoff)
     else:
