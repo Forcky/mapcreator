@@ -9,7 +9,7 @@ cite it), the way the road markings are:
 - **Curve alignment markers** (CAMs, black chevrons on yellow) on the outside of a curve whose advisory
   speed is at least 15 km/h below the speed limit, at least three per curve so three are in view, boards
   back to back for both directions. Their spacing here is an approximation: the AS 1742.2 table isn't
-  openly published.
+  openly published. None on unsealed road: a bend partly on gravel counts only by its sealed part.
 - **Speed limit signs** where OpenStreetMap's `maxspeed` changes along the route, and once near each
   layout's start, on the left for each direction of travel.
 
@@ -129,9 +129,8 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
     their material uses.
 
     `limits` is the posted speed at each station (NaN where unknown), `rail_l`/`rail_r` where a guard rail runs
-    on that side (no guide posts there), `unsealed` where the road is gravel (no guide posts there either: CAMs
-    on its tight bends by the same rule as on a seal, and speed signs as mapped). Left is left of the direction
-    the stations run (the forward layout).
+    on that side (no guide posts there), `unsealed` where the road is gravel (no guide posts or CAMs there; speed
+    signs as mapped). Left is left of the direction the stations run (the forward layout).
     """
     n = len(s)
     step = float(s[1] - s[0]) if n > 1 else 1.0
@@ -161,6 +160,9 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
     tight = advisory <= limit - CAM_SPEED_DROP_KMH
     cam_zone = {"L": np.zeros(n, bool), "R": np.zeros(n, bool)}
     cams = curves = 0
+    # None on gravel: a bend partly on it counts only by its sealed part, which must qualify on its own (long
+    # enough), and a marker whose place falls on the gravel isn't put up.
+    tight &= ~gravel
     # Each bend on its own: an S-bend's two halves have their outsides on opposite sides.
     bends = [(i0, i1, True) for i0, i1 in _runs(tight & (k > 0))] + [(i0, i1, False) for i0, i1 in _runs(tight & (k < 0))]
     for i0, i1, turn_left in sorted(bends):
@@ -175,7 +177,7 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
             stations = np.linspace(s[i0] - lead, s[i1] + lead, CAM_MIN)
         idx = np.clip(np.searchsorted(s, stations), 0, n - 1)
         cam_zone[side][max(idx[0] - 1, 0):idx[-1] + 2] = True
-        for i in np.unique(idx):
+        for i in np.unique(idx[~gravel[idx]]):
             e, nn, h = point(i, side, CAM_OFFSET_M)
             builder.sign(e, nn, h, tangent[i], CAM_BOARD, CAM_BOTTOM_M,
                          front="cam_left" if turn_left else "cam_right",  # seen by forward traffic
