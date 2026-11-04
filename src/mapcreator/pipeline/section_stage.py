@@ -21,8 +21,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     c = np.load(work.root / profile_stage.STAGE / "centreline.npz")
     runs = work.read_json(route_stage.STAGE, "runs.json")
 
-    # Metres of centreline on each run: the surface merge measures stretches of the road as built.
-    lengths = np.bincount(c["run"][:-1], weights=np.diff(c["s"]), minlength=len(runs))
+    lengths = sec.run_lengths(c["s"], c["run"], len(runs))
     per_run = sec.run_sections([r["tags"] for r in runs], lengths.tolist())
     raw_width = np.array([r.width_m for r in per_run])[c["run"]] * job.width.factor
     width = sec.eased(c["s"], raw_width)
@@ -43,11 +42,14 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     fine = c["fine"] if "fine" in c else np.full(len(c["s"]), getattr(dem, "resolution_m", 2.0) <= FINE_DEM_M)
     if not fine.all():
         e = e * sec.eased(c["s"], fine.astype(float))
-    slope_l, slope_r = sec.half_slopes(e, crown)
+    # Less camber on a narrow road, and always a little crown (core/section.py).
+    limit = sec.camber_limit(width)
+    e = np.clip(e, -limit, limit)
+    slope_l, slope_r = sec.half_slopes(e, crown, keep=sec.crown_kept(width))
 
     np.savez_compressed(work.stage(STAGE) / "section.npz", s=c["s"], half_left=half, half_right=half,
                         slope_left=slope_l, slope_right=slope_r, superelevation=e, crown=crown, style=style,
-                        unsealed=unsealed)
+                        unsealed=unsealed, camber_limit=limit)
     sources: dict[str, float] = {}
     inherited: dict[str, float] = {}
     for r, run, m in zip(per_run, runs, lengths):
@@ -60,6 +62,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "width_min": round(float(width.min()), 2), "width_max": round(float(width.max()), 2),
         "width_source_m": sources, "max_superelevation": round(float(np.abs(e).max()), 3),
         "banked_share": round(float(np.mean(np.abs(e) > crown)), 3),
+        "camber_limit": [round(float(limit.min()), 3), round(float(limit.max()), 3)],
+        "at_camber_limit_share": round(float(np.mean(np.abs(e) >= limit - 1e-4)), 3),
+        # Where the two halves form one tilted plane, with no crown left.
+        "plane_share": round(float(np.mean(slope_l + slope_r < 1e-6)), 3),
         "surface_m": {sec.SEALED: round(float(ds[~unsealed[:-1]].sum()), 1),
                       sec.UNSEALED: round(float(ds[unsealed[:-1]].sum()), 1)},
         # Runs whose own `surface` gave no class (no tag, or a value outside both lists), by that value.

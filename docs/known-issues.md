@@ -58,6 +58,7 @@ Nothing about gravel has been loaded in game yet. The `GRAVEL` surface's numbers
   - **Lower Swamp Road** (`examples/lower_swamp_road.json`, both layouts): one lane at 4.0 m, sealed for 1.6 km and then unsealed for 5.2 km.
     - All 5 single-file spots spawn on the road with every wheel loaded, and `pitboxes` is 5. The forward grid stands on the seal and the reverse grid on the gravel.
     - 4 AI opponents start and drive in file.
+    - Guide posts on the seal only (94); none on the gravel. CAMs on its 21 tight bends (125), as on a seal: whether that many reads right on a single-lane gravel road.
     - The change from seal to gravel at 1.6 km is felt, with no bump.
     - Dust behind the cars, gravel skidmarks, and dirt carried onto the seal. Dust and tyre dirt should match the road (`[TYRES_FX]` colours from our textures).
     - The grass strip down the middle grows Grass FX blades, and only there.
@@ -69,7 +70,10 @@ Nothing about gravel has been loaded in game yet. The `GRAVEL` surface's numbers
   - **CSP's Rally Stage mode** (Quick Drive, CSP 0.2.4) and its Rally Copilot app with our point-to-point layouts, and whether CSP picks street tyres for the AI on a track tagged `rally`. Their requirements aren't documented.
   - The gravel texture's colour (a grey-brown from a CC0 photo; Tasmanian dolerite gravel runs from blue-grey to brown-grey), and whether its 24 m repeat shows.
   - A narrow seal with no centre line at 4.0 m (Allens Rivulet Road, `lanes=1`).
-- **Camber on narrow roads looks too strong.** The section stage reads camber from the DEM 0.5 m inside each edge, but never closer than 1 m to the centreline, so on a 4 m road its two samples are 3 m apart and seem to catch the hillside and the cut and fill beside the road. On Lower Swamp Road 55% of stations sit at the 7% limit, against 37% on Hartz Road (6.0 m) and 12-31% on the 6.4 m examples. Where it's that steep the road is one tilted plane and the crown is gone. The gravel work didn't change this (`lanes=1` made Lower Swamp Road 4.0 m before too), but it will colour how the gravel feels, so check it before tuning the surface.
+- **Camber on narrow roads is capped, to be tuned in game.** The section stage reads camber from the DEM 0.5 m inside each edge, but never closer than 1 m to the centreline, so on a 4 m road its two samples are 3 m apart and catch the hillside and the cut and fill beside the road.
+  - Before: 37% of Lower Swamp Road sat at the 7% limit (55% before the road-strip profile), and 63% of it was one tilted plane with no crown.
+  - Now the limit follows the width (4% at or under 5 m, 7% at 6.4 m) and narrow roads keep some crown (`docs/ac-format.md`). Lower Swamp Road: 67% at its 4% limit, none of it one plane, at least 0.5% of crown everywhere. Hartz Road (6.0 m, limit 6.1%): 36% at its limit, against 33% at 7% before; its crown kept fades to 0.14% at that width, so in banked bends it's still all but a plane, as before.
+  - **To check in game:** whether 4% feels right on a single-lane road, or whether the DEM's camber should be trusted less still (a probe further from the edges, or no camber at all under 5 m).
 - **Widths are guesses.** About 98% of unsealed ways in OSM carry neither `lanes` nor `width`, so the class default (5.0-6.0 m) decides. The defaults follow NATSPEC AUS-SPEC 0052's minimum formations, not measurements. Measuring about 20 unsealed roads in theLIST's CC BY aerial photos (AerialPhoto2020-2024; never the NC-ND imagery) would calibrate them.
 - **Not routable:** `highway=track`, so most forestry roads (and Rally Tasmania's stages) can't be built yet. Lower Swamp Road carries on as a track past where its example ends.
 - **One surface for all unsealed values.** `dirt`, `earth`, `ground`, `mud` and `sand` drive like `gravel`. A looser `DIRT` surface can follow if testing shows it's worth it.
@@ -102,6 +106,7 @@ Nothing about gravel has been loaded in game yet. The `GRAVEL` surface's numbers
 - **A mapped line beside the road reads the cutting, not the road** (the Esperance Coast Road dip, 4 Nov).
   - Cause: OSM's line ran 9-14 m up a 25-59% batter for 360 m, so its heights were up to 5.3 m high. That made a 79 m sag, about 1 g at the AI's speed, and a 22% pinch the road doesn't have.
   - Fix: the profile stage now finds such stretches on LiDAR ground and takes the height of the flat road strip beside the line (`profile.road_strip_heights`), or profiles them as coarse where there's no strip.
+  - The strip is as wide as the road is mapped: 7 one-metre samples (6 m between the outer two) on a 6-7.9 m road, as before, 5 (4 m) on a narrower one, and more on a wider one (`profile.strip_half`). With a fixed 7, a 4 m road's strip never lay flat, and the steepness test reached over its batters: on Lower Swamp Road 1,022 m was profiled as coarse and 449 m from a strip. Now 629 m is coarse and 651 m from a strip, and 191 m fewer are taken for off the road at all.
   - Esperance after the fix: tightest vertical radius 73 m → 184 m, steepest 10 m grade 22.4% → 13%.
   - The line itself stays where OSM draws it. Realigning OSM way 23248489 there would fix it at the source.
 - **The validator warns** (it never fails a build) where a crest or sag would pull more than 0.5 g at the AI's planned speed.

@@ -16,6 +16,9 @@ both halves: `CROWN` on a seal and `CROWN_UNSEALED` on gravel, eased over `WIDTH
 the DEM shows the road banked (superelevation `e`, positive = left edge higher), the high side's slope ramps
 from +crown to -crown as |e| reaches the crown. Beyond that, both halves form one plane with slope |e|. This is
 the usual way of removing adverse crown in a curve, and every shape along the way is continuous.
+
+**Narrow roads** get less camber: at most 4% under 5 m wide, rising to the full 7% at 6.4 m (`camber_limit`),
+and they always keep a little crown (`crown_kept`), so a single-lane road never becomes one tilted plane.
 """
 
 from __future__ import annotations
@@ -30,6 +33,19 @@ CROWN = 0.025
 # NATSPEC AUS-SPEC 0052 (geometric rural road design, unsealed): "Minimum cross-fall: More than 4%".
 CROWN_UNSEALED = 0.045
 MAX_SUPERELEVATION = 0.07
+# The camber limit by carriageway width: NARROW_CAMBER at or under NARROW_CAMBER_WIDTH_M, MAX_SUPERELEVATION at or
+# over FULL_CAMBER_WIDTH_M, straight between (`camber_limit`). On a 4 m road the DEM's two camber samples are 3 m
+# apart and catch the hillside and the cut and fill beside the road: over a third of Lower Swamp Road read 7% or
+# more, and nearly two thirds of it was one tilted plane with no crown. 4% sits under the gravel crown (4.5%), so
+# narrow gravel keeps its crown at any camber; 6.4 m is the widest two-lane class default, so roads that wide or
+# wider are as they were.
+NARROW_CAMBER = 0.04
+NARROW_CAMBER_WIDTH_M = 5.0
+FULL_CAMBER_WIDTH_M = 6.4
+# A narrow road keeps at least this fall either side of its centre at any camber (`half_slopes`' `keep`), fading
+# to none at FULL_CAMBER_WIDTH_M: a single-lane seal (crown 2.5%) under the 4% limit keeps a crown rather than
+# becoming one tilted plane. At the limit it then has the same section as narrow gravel: 4.5% and -3.5%.
+NARROW_CROWN_KEPT = 0.005
 WIDTH_EASE_M = 60.0
 MIN_WIDTH, MAX_WIDTH = 3.0, 20.0
 
@@ -199,19 +215,52 @@ def run_sections(tags: list[dict], lengths: list[float]) -> list[RunSection]:
             for s, o, (w, src), one in zip(surface, own, widths, single)]
 
 
+def run_lengths(s: np.ndarray, run: np.ndarray, n_runs: int) -> np.ndarray:
+    """Metres of centreline on each run, given each station's run: the surface merge measures the road as built."""
+    return np.bincount(np.asarray(run)[:-1], weights=np.diff(s), minlength=n_runs)
+
+
+def mapped_width(tags: list[dict], s: np.ndarray, run: np.ndarray) -> np.ndarray:
+    """Each station's carriageway width as mapped (before the job's width option), from its run's tags."""
+    per_run = run_sections(tags, run_lengths(s, run, len(tags)).tolist())
+    return np.array([r.width_m for r in per_run])[np.asarray(run)]
+
+
 def eased(s: np.ndarray, values: np.ndarray, ease_m: float = WIDTH_EASE_M) -> np.ndarray:
     step = s[1] - s[0] if len(s) > 1 else 1.0
     size = max(int(round(ease_m / step)), 1)
     return uniform_filter1d(values.astype(float), size=size, mode="nearest")
 
 
-def half_slopes(e: np.ndarray, crown=CROWN) -> tuple[np.ndarray, np.ndarray]:
-    """Fall from centre to the left and right edges, given superelevation e (+ = left edge higher). `crown` is
-    one number or one per station."""
+def narrowness(width) -> np.ndarray:
+    """1 at or under NARROW_CAMBER_WIDTH_M, 0 at or over FULL_CAMBER_WIDTH_M, straight between."""
+    return np.clip((FULL_CAMBER_WIDTH_M - np.asarray(width, float)) / (FULL_CAMBER_WIDTH_M - NARROW_CAMBER_WIDTH_M),
+                   0.0, 1.0)
+
+
+def camber_limit(width) -> np.ndarray:
+    """The largest camber (superelevation) a road this wide gets: 4% under 5 m, rising to 7% at 6.4 m."""
+    return MAX_SUPERELEVATION - (MAX_SUPERELEVATION - NARROW_CAMBER) * narrowness(width)
+
+
+def crown_kept(width) -> np.ndarray:
+    """The fall a road this wide keeps either side of its centre at any camber (`half_slopes`' `keep`)."""
+    return NARROW_CROWN_KEPT * narrowness(width)
+
+
+def half_slopes(e: np.ndarray, crown=CROWN, keep=0.0) -> tuple[np.ndarray, np.ndarray]:
+    """Fall from centre to the left and right edges, given superelevation e (+ = left edge higher). `crown` and
+    `keep` are one number or one per station.
+
+    The two halves meet at a break of 2 x crown on a straight. As |e| grows the high side turns, and the break
+    shrinks to nothing at |e| = crown: one plane from there on. With `keep` the break never falls under
+    2 x keep, so the road keeps a crown; the extra tilt then goes on both sides, about the centre.
+    """
     e = np.clip(e, -MAX_SUPERELEVATION, MAX_SUPERELEVATION)
     a = np.abs(e)
-    high = np.where(a <= crown, crown - 2 * a, -a)
-    low = np.where(a <= crown, crown, a)
+    half_break = np.maximum(crown - a, keep)  # how far the two halves' falls sit above a plane tilted by |e|
+    high = half_break - a
+    low = half_break + a
     left = np.where(e >= 0, high, low)
     right = np.where(e >= 0, low, high)
     return left, right

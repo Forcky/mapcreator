@@ -58,6 +58,8 @@ A job with `"layouts": "both"` produces:
   - anything else, or no tag, takes the class of the longer stretch beside it (with nothing tagged at all: unsealed on `highway=track`, sealed otherwise);
   - then any stretch shorter than 50 m takes its longer neighbour's class, shortest first, so a 10 m culvert or an untagged bridge doesn't make a sliver. Bridges get no exception.
 - **Cross-section:** the carriageway carries a crown of 2.5% on a seal and 4.5% on gravel (NATSPEC AUS-SPEC 0052, unsealed rural roads: "more than 4%"). Width and crown both change gradually over 60 m.
+  - **Camber** (superelevation) comes from the DEM either side of the road. Its limit follows the width: 4% at or under 5.0 m, rising in a straight line to 7% at 6.4 m and wider (`section.camber_limit`). On a 4 m road the DEM's two samples are only 3 m apart and catch the hillside and the cut and fill beside it, so before the limit a third of Lower Swamp Road sat at 7%.
+  - **Crown in bends:** as the camber grows, the high side turns until, at a camber equal to the crown, the road is one plane. A road under 6.4 m always keeps some crown: at least 0.5% fall either side of the centre at or under 5 m, fading to none at 6.4 m (`section.crown_kept`). So a single-lane road is never one tilted plane. At its 4% limit, a single-lane road, sealed or gravel, falls 4.5% on its low side and rises 3.5% on its high side.
   - Width comes from the `width` tag (raised to 3 m if under it), else `lanes`, else `narrow=yes` (4.5 m), else the class default. `lanes=1` is 4.0 m on either surface.
   - Sealed class defaults: twice the class lane width (secondary 6.4, tertiary 6.0, unclassified and residential 5.8 m).
   - Unsealed class defaults: trunk and primary 6.5, secondary 6.0, tertiary 5.5, unclassified, residential and road 5.0, track 4.0 m; a tagged lane is 3.0 m. AUS-SPEC 0052 asks for at least a 6.0 m formation, verges included, for a single-lane unsealed road and 7.5 m for two lanes, and our road gets 2 m of grass verge either side. These are guideline minima, to be calibrated against measured roads.
@@ -201,7 +203,7 @@ Built in the mesh stage, visual only, in `FURNITURE_n` meshes with one material 
   - Red faces the traffic for which the post is on the left; white faces the traffic for which it's on the right.
   - Spacing follows Main Roads WA's "Design of Guide Posts" (citing AS 1742.2-2009 clause 4.2.4.4): 150 m on straights. On curves it's closer, and closer still on the outside: 6/12 m (outside/inside) below 100 m radius, 10/20 m to 200 m, 15/30 m to 300 m, 20/40 m to 400 m, then 40, 50, 60 and 90 m both sides out to 2,000 m.
   - The spacing is checked at every station, so posts close up as soon as a curve begins.
-  - None where a guard rail runs.
+  - None where a guard rail runs, and none on unsealed road (the maintainer's call for gravel: CAMs on its tight bends, by the same rule as on a seal, and speed signs as mapped).
 - **Curve alignment markers** (CAMs: black chevron on yellow, 0.45 x 0.6 m, 1.2 m up, 2 m beyond the edge) go on the outside of a bend whose advisory speed is at least 15 km/h below the speed limit.
   - Advisory speed is v = sqrt(127 R (e + 0.35)) km/h. The limit comes from OSM; where it's unknown, 100 km/h.
   - At least three per bend, spaced at twice the outside guide post spacing (12-40 m), starting one spacing before the bend and ending one after.

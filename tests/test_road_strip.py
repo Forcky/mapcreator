@@ -2,6 +2,7 @@
 And the validator's warning for crests and sags too tight for the AI's planned speed."""
 
 import numpy as np
+import pytest
 
 from mapcreator.core import ai_line, profile, validate
 
@@ -10,9 +11,10 @@ XY = np.column_stack([S, np.zeros_like(S)])  # the mapped line: east along y = 0
 HEADING = np.zeros_like(S)
 
 
-def batter(strip_at: float | None, steep=(150.0, 250.0)):
+def batter(strip_at: float | None, steep=(150.0, 250.0), road_width: float = 8.0):
     """Ground climbing 7% along x. Across, between x = 150 and 250 the mapped line sits on a 40% side slope, with
-    the real road a flat 8 m strip centred `strip_at` metres to its left (None: no strip, just the slope)."""
+    the real road a flat strip `road_width` across, centred `strip_at` metres to its left (None: no strip, just
+    the slope)."""
 
     def sample(x, y):
         x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
@@ -20,9 +22,9 @@ def batter(strip_at: float | None, steep=(150.0, 250.0)):
         on = (x >= steep[0]) & (x <= steep[1])
         if strip_at is None:
             return np.where(on, road + 0.4 * y, road)
-        # Flat within 4 m of the strip's centre; rising 40% away from it beyond, towards the line.
+        # Flat across the road; rising 40% away from it beyond, towards the line.
         across = np.abs(y - strip_at)
-        return np.where(on, road + 0.4 * np.maximum(across - 4.0, 0.0), road)
+        return np.where(on, road + 0.4 * np.maximum(across - road_width / 2, 0.0), road)
 
     return sample
 
@@ -37,6 +39,37 @@ def test_the_road_strip_beside_a_line_on_a_cutting_gives_the_heights():
     assert (z_raw[on] - 0.07 * S[on]).min() > 2.0  # the line's own reading is on the batter, 2.4 m up
     assert np.nanmedian(got.strip_offset[on]) > 4  # to the left
     assert not got.coarse.any()
+
+
+def test_a_narrow_road_s_strip_is_found_when_its_width_is_known():
+    # A single-lane road, 4.5 m across, 8 m to the left of a line on a cutting. A 7-sample strip (6 m between
+    # its outer samples) can't lie flat on it, so without the width the stretch is profiled as coarse; with it,
+    # the strip is 5 samples (4 m) and fits.
+    sample = batter(8.0, road_width=4.5)
+    z_raw = sample(XY[:, 0], XY[:, 1])
+    fine = np.ones(len(S), bool)
+    on = (S > 160) & (S < 240)
+    blind = profile.road_strip_heights(S, XY, HEADING, sample, z_raw, fine)
+    assert blind.coarse[on].all()
+    got = profile.road_strip_heights(S, XY, HEADING, sample, z_raw, fine, width=np.full(len(S), 4.5))
+    assert got.off_road[on].all() and not got.coarse.any()
+    assert np.allclose(got.z[on], 0.07 * S[on], atol=0.05)  # the road, not the batter
+    assert (z_raw[on] - 0.07 * S[on]).min() > 2.0
+    assert np.nanmedian(got.strip_offset[on]) == pytest.approx(8.0, abs=1.0)
+
+
+@pytest.mark.parametrize("width,half", [(3.0, 2), (4.0, 2), (4.5, 2), (5.9, 2), (6.0, 3), (6.4, 3), (8.0, 4)])
+def test_the_strip_follows_the_road_s_width(width, half):
+    assert int(profile.strip_half(width)) == half  # 6.4 m: +-3 m, as before widths were known
+
+
+def test_a_line_on_a_narrow_road_on_a_hillside_isn_t_taken_for_off_road():
+    # The line is on a 4.5 m road cut into a 40% hillside: within +-3 m of the line, the old window reached
+    # over the batter at both edges and read it as steep.
+    sample = batter(0.0, road_width=4.5)
+    z_raw = sample(XY[:, 0], XY[:, 1])
+    got = profile.road_strip_heights(S, XY, HEADING, sample, z_raw, np.ones(len(S), bool), width=np.full(len(S), 4.5))
+    assert not got.off_road.any() and np.array_equal(got.z, z_raw)
 
 
 def test_with_no_strip_the_stretch_is_profiled_as_coarse():

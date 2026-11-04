@@ -79,7 +79,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     limits = furniture.speed_limits(c["run"], work.read_json(route_stage.STAGE, "runs.json"))
     furn, furn_stats, atlas = furniture.furniture(
         c["s"], c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
-        sec["slope_left"], sec["slope_right"], sec["superelevation"], limits, frame, masks["L"], masks["R"])
+        sec["slope_left"], sec["slope_right"], sec["superelevation"], limits, frame, masks["L"], masks["R"],
+        unsealed=sec["unsealed"] if "unsealed" in sec else None)
     meshes += furn
     textures = {}
     if furn:

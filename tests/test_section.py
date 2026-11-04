@@ -37,3 +37,43 @@ def test_width_changes_are_eased_not_stepped():
     e = sec.eased(s, w)
     assert np.abs(np.diff(e)).max() < 0.05
     assert e[0] == pytest.approx(6.0) and e[-1] == pytest.approx(7.0)
+
+
+@pytest.mark.parametrize("width,limit,kept", [
+    (3.0, 0.04, 0.005), (4.0, 0.04, 0.005), (5.0, 0.04, 0.005), (5.7, 0.055, 0.0025), (6.4, 0.07, 0.0),
+    (7.0, 0.07, 0.0),
+])
+def test_the_camber_limit_and_the_crown_kept_follow_the_width(width, limit, kept):
+    assert float(sec.camber_limit(width)) == pytest.approx(limit)
+    assert float(sec.crown_kept(width)) == pytest.approx(kept)
+
+
+def test_the_camber_limit_changes_smoothly_with_an_eased_width():
+    s = np.arange(0, 400.0)
+    width = sec.eased(s, np.where(s < 200, 4.0, 6.4))  # a single-lane seal widening to two lanes
+    limit = sec.camber_limit(width)
+    assert limit[0] == pytest.approx(0.04) and limit[-1] == pytest.approx(0.07)
+    assert np.abs(np.diff(limit)).max() < 0.002
+
+
+@pytest.mark.parametrize("crown", [sec.CROWN, sec.CROWN_UNSEALED])
+def test_a_narrow_road_keeps_a_crown_at_any_camber(crown):
+    width = np.full(201, 4.0)
+    limit, keep = sec.camber_limit(width), sec.crown_kept(width)
+    e = np.clip(np.linspace(-0.12, 0.12, 201), -limit, limit)  # the DEM reads up to 12%; the limit holds it at 4%
+    left, right = sec.half_slopes(e, crown, keep=keep)
+    assert np.abs(e).max() == pytest.approx(0.04)
+    assert ((left + right) / 2 >= keep - 1e-12).all()  # never one tilted plane: a break of at least 1% at the centre
+    # Seal or gravel, at the limit it's the same section: the low side falls 4.5%, the high side rises 3.5%.
+    assert (left[-1], right[-1]) == pytest.approx((-0.035, 0.045))
+    # The camber, measured edge to edge, is the e asked for.
+    assert ((right - left) / 2) == pytest.approx(e)
+    # On a straight the crown is as before.
+    flat_l, flat_r = sec.half_slopes(np.zeros(1), crown, keep=sec.crown_kept(4.0))
+    assert (flat_l[0], flat_r[0]) == pytest.approx((crown, crown))
+
+
+def test_a_wide_road_still_becomes_one_plane_in_a_banked_bend():
+    left, right = sec.half_slopes(np.array([0.06]), sec.CROWN, keep=sec.crown_kept(6.4))
+    assert (left[0], right[0]) == pytest.approx((-0.06, 0.06))
+    assert float(sec.camber_limit(6.4)) == pytest.approx(sec.MAX_SUPERELEVATION)

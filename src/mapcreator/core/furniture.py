@@ -5,7 +5,7 @@ cite it), the way the road markings are:
 - **Guide posts** on both sides: about 1 m tall, a red reflector facing the traffic they're on the left
   of and a white one facing the traffic they're on the right of. Spacing by curve radius, closer on the
   outside of a curve (`GUIDE_POST_SPACING`, Main Roads WA's "Design of Guide Posts", citing AS 1742.2-2009
-  clause 4.2.4.4). None where a guard rail runs.
+  clause 4.2.4.4). None where a guard rail runs, and none on unsealed road.
 - **Curve alignment markers** (CAMs, black chevrons on yellow) on the outside of a curve whose advisory
   speed is at least 15 km/h below the speed limit, at least three per curve so three are in view, boards
   back to back for both directions. Their spacing here is an approximation: the AS 1742.2 table isn't
@@ -124,12 +124,14 @@ def _spacing(radius: float, outside: bool) -> float:
 
 
 def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, superelevation, limits,
-              frame: LocalFrame, rail_l=None, rail_r=None) -> tuple[list[Mesh], dict, Atlas]:
+              frame: LocalFrame, rail_l=None, rail_r=None, unsealed=None) -> tuple[list[Mesh], dict, Atlas]:
     """Guide posts, CAMs and speed signs along the road: meshes (in AC axes), a summary, and the texture atlas
     their material uses.
 
     `limits` is the posted speed at each station (NaN where unknown), `rail_l`/`rail_r` where a guard rail runs
-    on that side (no guide posts there). Left is left of the direction the stations run (the forward layout).
+    on that side (no guide posts there), `unsealed` where the road is gravel (no guide posts there either: CAMs
+    on its tight bends by the same rule as on a seal, and speed signs as mapped). Left is left of the direction
+    the stations run (the forward layout).
     """
     n = len(s)
     step = float(s[1] - s[0]) if n > 1 else 1.0
@@ -139,6 +141,7 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
     left = np.column_stack([-np.sin(heading), np.cos(heading)])
     rails = {"L": np.zeros(n, bool) if rail_l is None else np.asarray(rail_l, bool),
              "R": np.zeros(n, bool) if rail_r is None else np.asarray(rail_r, bool)}
+    gravel = np.zeros(n, bool) if unsealed is None else np.asarray(unsealed, bool)
     half = {"L": np.asarray(half_l, float), "R": np.asarray(half_r, float)}
     slope = {"L": np.asarray(slope_l, float), "R": np.asarray(slope_r, float)}
     sign = {"L": 1.0, "R": -1.0}
@@ -189,7 +192,7 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
             if s[i] < s[0] + 5.0 or s[i] - last < _spacing(float(radius[i]), outside):
                 continue
             last = s[i]
-            if rails[side][i] or cam_zone[side][i]:
+            if rails[side][i] or cam_zone[side][i] or gravel[i]:
                 continue
             e, nn, h = point(i, side, GUIDE_POST_OFFSET_M)
             # The forward traffic has a left-side post on its left (red) and a right-side one on its right (white).

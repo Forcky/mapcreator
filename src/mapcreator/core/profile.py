@@ -276,12 +276,22 @@ def cross_slope(
 
 OFF_ROAD_STEP_M = 5.0  # cross-sections this far apart
 OFF_ROAD_REACH_M = 15.0  # sampled this far either side of the line, every metre
-OFF_ROAD_FALL = 0.20  # cross-fall over +-3 m of the line above which it isn't on a road
+OFF_ROAD_FALL = 0.20  # cross-fall over the road strip's width about the line above which it isn't on a road
 OFF_ROAD_MIN_M = 30.0  # stretches shorter than this are left alone (a driveway cutting, a culvert headwall)
 OFF_ROAD_PAD_M = 15.0
-STRIP_HALF_M = 3.0  # a road strip: 7 m across...
-STRIP_MAX_FALL = 0.06  # ...falling no more than this across...
-STRIP_MAX_RMS_M = 0.1  # ...and this flat
+# A road strip is 2 x half + 1 one-metre samples across, where half is the road's width halved, in whole metres
+# (`strip_half`): 7 samples on a 6.4 m road (as before widths were known), 5 on a 4.0-5.9 m one. So on any road
+# 4 m or wider the strip's outer samples fall on the road, and a narrow road's strip isn't asked to be flat over
+# the batter beside it. Never fewer than STRIP_MIN_HALF_M either side. STRIP_HALF_M is used where no width is given.
+STRIP_HALF_M = 3.0
+STRIP_MIN_HALF_M = 2  # 5 samples, 4 m between the outer two
+STRIP_MAX_FALL = 0.06  # a strip falls no more than this across...
+STRIP_MAX_RMS_M = 0.1  # ...and is this flat
+
+
+def strip_half(width) -> np.ndarray:
+    """Whole metres either side of a road strip's centre, for a road this wide."""
+    return np.maximum(np.floor(np.asarray(width, float) / 2), STRIP_MIN_HALF_M).astype(int)
 
 
 @dataclass
@@ -293,7 +303,7 @@ class RoadStrip:
 
 
 def road_strip_heights(s: np.ndarray, xy: np.ndarray, heading: np.ndarray, sample, z_raw: np.ndarray,
-                       fine: np.ndarray) -> RoadStrip:
+                       fine: np.ndarray, width: np.ndarray | None = None) -> RoadStrip:
     """Where the mapped line runs up a cutting or embankment beside the road, the road's own height.
 
     OSM's line can sit 10 m or more off the road. On a LiDAR DEM it then reads the batter above or below
@@ -301,11 +311,14 @@ def road_strip_heights(s: np.ndarray, xy: np.ndarray, heading: np.ndarray, sampl
     5.3 m too high, with a 79 m sag and a 22% pinch the road doesn't have. The road is a flat strip
     within a few metres of the line.
 
+    `width` is the road's width as mapped at each station; it sets the strip's width (`strip_half`: +-3 m on a
+    6.4 m road, +-2 m on a 4-5.9 m one). Without it every strip is +-STRIP_HALF_M.
+
     On fine (LiDAR) stations only:
-    1. Every OFF_ROAD_STEP_M, find where the cross-fall over +-3 m of the line exceeds OFF_ROAD_FALL, in
-       stretches of OFF_ROAD_MIN_M or more, padded by OFF_ROAD_PAD_M.
-    2. Look for a flat strip within OFF_ROAD_REACH_M: 7 m across, falling under STRIP_MAX_FALL, with
-       residuals under STRIP_MAX_RMS_M.
+    1. Every OFF_ROAD_STEP_M, find where the cross-fall over the strip's width about the line exceeds
+       OFF_ROAD_FALL, in stretches of OFF_ROAD_MIN_M or more, padded by OFF_ROAD_PAD_M.
+    2. Look for a flat strip within OFF_ROAD_REACH_M: the road's width across, falling under STRIP_MAX_FALL,
+       with residuals under STRIP_MAX_RMS_M.
     3. Use only strips on the side most of the stretch's strips are on: a lone strip on the other side
        is a terrace or a driveway. Their heights replace the line's, interpolated between cross-sections.
     4. A stretch with too few strips (no consistent side, or none at either end) stays as it is but
@@ -321,8 +334,11 @@ def road_strip_heights(s: np.ndarray, xy: np.ndarray, heading: np.ndarray, sampl
     left = np.column_stack([-np.sin(heading[idx]), np.cos(heading[idx])])
     pts = xy[idx, None, :] + left[:, None, :] * offsets[None, :, None]
     h = np.asarray(sample(pts[..., 0].ravel(), pts[..., 1].ravel()), dtype=float).reshape(len(idx), len(offsets))
-    near = np.abs(offsets) <= STRIP_HALF_M
-    fall = np.abs(_slopes(offsets[near], h[:, near]))
+    half = np.full(len(idx), int(STRIP_HALF_M)) if width is None else strip_half(np.asarray(width)[idx])
+    fall = np.full(len(idx), np.nan)
+    for hw in np.unique(half):
+        rows, near = half == hw, np.abs(offsets) <= hw
+        fall[rows] = np.abs(_slopes(offsets[near], h[rows][:, near]))
     steep = (fall > OFF_ROAD_FALL) & fine[idx]
     flagged = np.zeros(n, bool)
     for a, b in _runs(steep):
@@ -335,14 +351,14 @@ def road_strip_heights(s: np.ndarray, xy: np.ndarray, heading: np.ndarray, sampl
         return out
     out.off_road = flagged
     # The flattest qualifying strip nearest the line at each cross-section, and its height.
-    w = int(round(2 * STRIP_HALF_M)) + 1
     strip_z = np.full(len(idx), np.nan)
     strip_at = np.full(len(idx), np.nan)
-    centres = offsets[w // 2: len(offsets) - w // 2]
     for j in np.flatnonzero(flagged[idx]):
+        w = 2 * int(half[j]) + 1
+        centres = offsets[w // 2: len(offsets) - w // 2]
         best = None
         for c, window in zip(centres, np.lib.stride_tricks.sliding_window_view(h[j], w)):
-            if not np.isfinite(window).all() or abs(c) <= STRIP_HALF_M:
+            if not np.isfinite(window).all() or abs(c) <= half[j]:
                 continue
             x = np.arange(w) - w // 2
             slope, icept = np.polyfit(x, window, 1)
