@@ -165,7 +165,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
                        f"capped_at_{species.OTHER_HEIGHT_M:.0f}m": capped, "families": species.counts(families)}
         # Every tree's community code: the count by code is how to spot crowns the map calls treeless.
         work.write_json(STAGE, "vegetation.json", {**vegetation, "by_code": species.counts(codes)})
-    fx, trunk_r = _tree_fx(trees, ground, frame, rng, out, families)
+    fx, trunk_r, folded = _tree_fx(trees, ground, frame, rng, out, families)
     edge, station = scenery.edge_distance(trees.xy, xy, c["heading"], sec["half_left"], sec["half_right"])
     colliders = scenery.trunk_colliders(trees.xy, ground, trunk_r, edge, c["s"][station], frame)
     meshes += colliders
@@ -188,6 +188,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "trees": len(trees),
         "tree_source": source,
         "tree_fx_models": fx,
+        "tree_fx_folded": folded,
         "vegetation": vegetation,
         "trunk_colliders": sum(len(m.positions) for m in colliders) // (2 * scenery.TRUNK_SIDES),
         "trunk_collider_meshes": len(colliders),
@@ -231,10 +232,11 @@ def _power(region, settings: Settings, xy: np.ndarray, half: float, dem, frame, 
 
 
 def _tree_fx(trees: scenery.Trees, ground: np.ndarray, frame, rng: np.random.Generator, out,
-             families: np.ndarray | None = None) -> tuple[list[str], np.ndarray]:
+             families: np.ndarray | None = None) -> tuple[list[str], np.ndarray, dict[str, str]]:
     """3D models for Tree FX and a placement for every tree: a model that suits its family (when the region
-    has a vegetation map) and its height, scaled to it. Only the models some tree uses are written. Returns
-    their names and each tree's trunk radius in metres, as Tree FX draws it."""
+    has a vegetation map) and its height, scaled to it. A model few trees would draw folds into a similar one
+    (`treefx.fold_rare`), and only the models some tree uses are written. Returns their names, each tree's
+    trunk radius in metres as Tree FX draws it, and which models folded into which."""
     fx = out / "treefx"
     if fx.exists():
         for old in fx.iterdir():
@@ -246,6 +248,7 @@ def _tree_fx(trees: scenery.Trees, ground: np.ndarray, frame, rng: np.random.Gen
         model = treefx.assign_families(trees.height, families, every, rng)
     else:
         model = treefx.assign(trees.height, every, rng)
+    model, folded = treefx.fold_rare(model, trees.height, every)
     used = sorted(set(model.tolist()))
     names = [every[i] for i in used]
     model = np.searchsorted(used, model).astype(np.int64)
@@ -254,14 +257,14 @@ def _tree_fx(trees: scenery.Trees, ground: np.ndarray, frame, rng: np.random.Gen
     for name in names:
         (fx / f"{name}.bin").write_bytes(treefx.model_bin(models[name], tex))
     own_height = np.array([models[name].box[0] for name in names])
-    size = np.clip(trees.height / own_height[model], 0.3, 3.0) if n else np.zeros(0)
+    size = np.clip(trees.height / own_height[model], *treefx.SIZE_CLIP) if n else np.zeros(0)
     angle = rng.uniform(0, 360, n)
     width = rng.uniform(0.85, 1.15, n)
     np.savez(fx / "placement.npz",
              pos=frame.to_ac(trees.xy[:, 0], trees.xy[:, 1], ground) if n else np.zeros((0, 3)),
              model=model, size=size, angle=angle, width=width, names=np.array(names))
     trunk = np.array([treefx.trunk_radius(models[name]) for name in names])
-    return names, trunk[model] * size * width
+    return names, trunk[model] * size * width, folded
 
 
 def _attr(module: str):
