@@ -58,7 +58,7 @@ Nothing about gravel has been loaded in game yet. The `GRAVEL` surface's numbers
   - **Lower Swamp Road** (`examples/lower_swamp_road.json`, both layouts): one lane at 4.0 m, sealed for 1.6 km and then unsealed for 5.2 km.
     - All 5 single-file spots spawn on the road with every wheel loaded, and `pitboxes` is 5. The forward grid stands on the seal and the reverse grid on the gravel.
     - 4 AI opponents start and drive in file.
-    - Guide posts on the seal only (94); none on the gravel. CAMs on its 21 tight bends (125), as on a seal: whether that many reads right on a single-lane gravel road.
+    - Guide posts and CAMs on the seal only; none on the gravel.
     - The change from seal to gravel at 1.6 km is felt, with no bump.
     - Dust behind the cars, gravel skidmarks, and dirt carried onto the seal. Dust and tyre dirt should match the road (`[TYRES_FX]` colours from our textures).
     - The grass strip down the middle grows Grass FX blades, and only there.

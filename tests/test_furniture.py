@@ -102,20 +102,47 @@ def test_no_guide_posts_along_a_guard_rail():
     assert not [s for s in left if 300 <= s < 700] and info["guide_posts"]["R"] == 7
 
 
-def test_gravel_gets_no_guide_posts_but_keeps_its_cams_and_speed_signs():
+def bend_road():
     k = np.zeros(1201)
     k[600:700] = 1 / 50.0  # a left-hander at 50 m radius: advisory about 54 km/h, against 80
-    r = road(k)
+    return road(k)
+
+
+def cam_stations(meshes, r, around=(300.0, 1000.0)):
+    """Stations of the CAM boards (and their posts' tops) near the bend: not the speed signs near the ends."""
+    pos = np.vstack([m.positions for m in meshes]).astype(float)
+    e, n, h = FRAME.from_ac(pos)
+    high = h >= 100.0 + furniture.CAM_BOTTOM_M - 1e-6
+    i = np.argmin(np.hypot(r["xy"][:, None, 0] - e[high], r["xy"][:, None, 1] - n[high]), axis=0)
+    s = r["s"][i]
+    return s[(s > around[0]) & (s < around[1])]
+
+
+def test_gravel_gets_no_guide_posts_and_no_cams_but_keeps_its_speed_signs():
+    r = bend_road()
     limits = np.where(r["s"] < 900, 80.0, 60.0)
-    unsealed = r["s"] >= 400  # sealed for 400 m, then gravel
+    unsealed = r["s"] >= 400  # sealed for 400 m, then gravel, with the tight bend on the gravel
     sealed_meshes, sealed, _ = build(r, limits=limits)
     meshes, gravel, _ = build(r, limits=limits, unsealed=unsealed)
     posts = posts_by_side(meshes, r)
     assert posts and all(s < 400 for s, _ in posts)  # posts on the seal only
     assert posts == [p for p in posts_by_side(sealed_meshes, r) if p[0] < 400]  # and just as they were there
-    # The tight bend on the gravel keeps its CAMs, by the same rule as on a seal, and the signs are as mapped.
-    assert gravel["cam_curves"] == sealed["cam_curves"] == 1 and gravel["cams"] == sealed["cams"] >= furniture.CAM_MIN
-    assert gravel["speed_signs"] == sealed["speed_signs"] == 4
+    assert sealed["cam_curves"] == 1 and sealed["cams"] >= furniture.CAM_MIN  # sealed, the bend has CAMs
+    assert gravel["cam_curves"] == gravel["cams"] == 0  # on gravel, none
+    assert gravel["speed_signs"] == sealed["speed_signs"] == 4  # the signs as mapped
+
+
+def test_a_bend_partly_on_gravel_gets_cams_only_if_its_sealed_part_qualifies_alone():
+    r = bend_road()  # tight from about 590 m to 710 m (the curvature is smoothed over 20 m)
+    sealed_meshes, sealed, _ = build(r)
+    # The seal ends at 680 m: 90 m of the bend is sealed, enough on its own. Its CAMs stand on the seal only.
+    meshes, info, _ = build(r, unsealed=r["s"] >= 680)
+    at = cam_stations(meshes, r)
+    assert info["cam_curves"] == 1 and 0 < info["cams"] < sealed["cams"]
+    assert len(at) and at.max() < 680 and at.min() < 600  # one before the bend, as on a seal
+    # The seal ends at 600 m: about 10 m of the bend is sealed, under CAM_MIN_CURVE_M. No CAMs at all.
+    _, info, _ = build(r, unsealed=r["s"] >= 600)
+    assert info["cam_curves"] == info["cams"] == 0
 
 
 def test_speed_signs_where_the_limit_changes_for_both_directions_and_near_each_start():
