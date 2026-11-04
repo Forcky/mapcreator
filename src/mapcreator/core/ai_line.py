@@ -15,13 +15,16 @@ the line itself (`AI_POINT_SPACING_M`), each 0.4 m above the road surface where 
 included. The game casts a ray down from each point to find the surface, and points on the surface crashed
 it in an open-source generator's testing. Speeds are m/s from a grip-limited profile on the line's own
 curvature, with forward (acceleration) and backward (braking) passes, so the AI brakes before bends instead
-of in them; the profile is worked out every metre and read at each point. sideLeft and sideRight are the
+of in them, and braking shares the grip with cornering, so it slows before a bend tightens; the profile is
+worked out every metre and read at each point. The racing line's margin from the edges is set from these
+speeds (`racing_line.edge_margin`), so the line is solved again once they're known. sideLeft and sideRight are the
 distances from the line to each road edge: Content Manager draws the road's outline from them
 (AcTools.Render's AiLaneObject).
 """
 
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,16 +81,27 @@ def road_radius(road: RoadModel, *, end_short_m: float = END_INSET_M) -> tuple[n
 
 
 def speed_profile(d: np.ndarray, curvature: np.ndarray, grade: np.ndarray) -> np.ndarray:
-    """Speeds (m/s) at distances `d`, PROFILE_M apart, along a line of the given curvature and grade."""
-    v = np.minimum(np.sqrt(MU * G * radius_of(curvature)), V_MAX)
-    ds = np.diff(d)
+    """Speeds (m/s) at distances `d`, PROFILE_M apart, along a line of the given curvature and grade.
+
+    Grip-limited in the bends, then a forward pass for acceleration and a backward pass for braking. Braking
+    shares the tyres' grip with cornering (a friction ellipse: MU G turning, 8 m/s^2 braking): turning at
+    lateral acceleration a, a car can brake at only sqrt(1 - (a / (MU G))^2) of its straight-line rate. So
+    where a bend tightens, the line slows before it, while there's still grip to spare, instead of arriving at
+    the grip limit for the radius it's on and needing to brake for the tighter one ahead with none left (#50).
+    Acceleration is limited by traction alone, as before: AC's AI sets its own throttle."""
+    radius = radius_of(curvature)
+    grip = MU * G
+    # Plain lists: these loops index one element at a time, which numpy arrays make several times slower.
+    v = np.minimum(np.sqrt(grip * radius), V_MAX).tolist()
+    ds, r, gr = np.diff(d).tolist(), radius.tolist(), np.asarray(grade, dtype=float).tolist()
     for i in range(1, len(v)):  # traction-limited acceleration, harder uphill
-        a = max(4.5 - G * grade[i], 0.8)
-        v[i] = min(v[i], np.sqrt(v[i - 1] ** 2 + 2 * a * ds[i - 1]))
-    for i in range(len(v) - 2, -1, -1):  # braking, easier uphill
-        b = max(8.0 + G * grade[i], 3.0)
-        v[i] = min(v[i], np.sqrt(v[i + 1] ** 2 + 2 * b * ds[i]))
-    return v
+        a = max(4.5 - G * gr[i], 0.8)
+        v[i] = min(v[i], math.sqrt(v[i - 1] ** 2 + 2 * a * ds[i - 1]))
+    for i in range(len(v) - 2, -1, -1):  # braking, easier uphill, less in a bend
+        lateral = min(v[i + 1] ** 2 / r[i], grip)
+        b = max(8.0 + G * gr[i], 3.0) * math.sqrt(1.0 - (lateral / grip) ** 2)
+        v[i] = min(v[i], math.sqrt(v[i + 1] ** 2 + 2 * b * ds[i]))
+    return np.array(v)
 
 
 def runoff_hints(length: float, finish: float, *, end_short_m: float = AI_END_SHORT_M,
@@ -118,6 +132,90 @@ def runoff_hints(length: float, finish: float, *, end_short_m: float = AI_END_SH
     return out
 
 
+class _Traced:
+    """A line `off` metres from the road's centreline (or on it, with `off` None), traced every FINE_M from
+    `first` to `last` metres along the road, with its planned speed, curvature and grade every PROFILE_M."""
+
+    def __init__(self, road: RoadModel, centre: CubicSpline, off: racing_line.Offsets | None, first: float,
+                 last: float):
+        self.road, self.centre, self.off = road, centre, off
+        self.lateral = None
+        if off is not None and len(off.s) > 1 and np.any(off.hi > off.lo):
+            self.lateral = CubicSpline(off.s, off.n)
+        # Trace the line finely for its length and heading.
+        self.d_fine = np.append(np.arange(first, last, FINE_M), last)
+        r_fine, self.a_fine = self.at(self.d_fine)
+        self.arc_fine = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(r_fine, axis=0).T))])
+        tangent = np.gradient(r_fine, self.arc_fine, axis=0)
+        self.heading_fine = np.unwrap(np.arctan2(tangent[:, 1], tangent[:, 0]))
+        self.total = float(self.arc_fine[-1])
+        # Speed, radius and grade every PROFILE_M along the line.
+        self.arc_p = np.append(np.arange(0.0, self.total, PROFILE_M), self.total)
+        self.d_p = np.interp(self.arc_p, self.arc_fine, self.d_fine)
+        self.curv_p = np.interp(self.arc_p, self.arc_fine, np.gradient(self.heading_fine, self.arc_fine))
+        a_p = np.interp(self.arc_p, self.arc_fine, self.a_fine)
+        n = len(self.arc_p)
+        grade_p = np.gradient(self.surface(self.d_p, a_p), self.arc_p) if n > 1 else np.zeros(n)
+        self.grade_p = gaussian_filter1d(grade_p, SMOOTH_M / PROFILE_M)
+        self.v_p = speed_profile(self.arc_p, self.curv_p, self.grade_p)
+
+    def at(self, d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Points on the line at stations `d` (east/north about the road's first point), and their offsets from
+        the centreline."""
+        p = self.centre(d)
+        t = self.centre(d, 1)
+        t /= np.linalg.norm(t, axis=1, keepdims=True)
+        a = np.zeros(len(d))
+        if self.lateral is not None:
+            # Exactly on the centreline wherever it's held there, even between a station with room and the next
+            # one without; elsewhere the spline through the stations.
+            off = self.off
+            free = (d > off.hold_until) & (d < off.hold_from) & (np.interp(d, off.s, off.hi - off.lo) > 0)
+            a = np.where(free, self.lateral(d), 0.0)
+        return p + np.column_stack([-t[:, 1], t[:, 0]]) * a[:, None], a
+
+    def surface(self, d: np.ndarray, a: np.ndarray) -> np.ndarray:
+        """The road's height under the line: it falls from the crown to each edge, by `slope_*` per metre."""
+        road = self.road
+        return (np.interp(d, road.d, road.z) - np.where(a >= 0, np.interp(d, road.d, road.slope_left) * a,
+                                                         -np.interp(d, road.d, road.slope_right) * a))
+
+
+# The racing line keeps a margin from the edges for its planned speed (racing_line.edge_margin), and the speed
+# depends on the line. So the margins are first set from the centreline's speeds, the line solved, its own speeds
+# worked out and the margins set again from them, and the line solved again from where it was: up to MARGIN_ROUNDS
+# times, until no margin needs to grow by more than MARGIN_TOL_M. The last round only widens margins. On Grasstree
+# Hill, Brinktop Road and Lower Swamp Road that takes both rounds, and the line written then comes within 2 cm of
+# the margin its own speed asks for wherever that margin holds it.
+MARGIN_ROUNDS = 2
+MARGIN_TOL_M = 0.05
+
+
+def _racing(road: RoadModel, centre: CubicSpline, first: float, last: float) -> _Traced:
+    """The racing line, traced, with each edge margin suited to the line's own planned speed."""
+    def solve(margin, start=None):
+        return racing_line.offsets(road.d, road.e, road.n, road.heading, road.curvature, road.half_left,
+                                   road.half_right, hold_until=racing_line.HOLD_START_M,
+                                   hold_from=finish_distance(road.length) - racing_line.HOLD_BEFORE_FINISH_M,
+                                   margin=margin, start=start)
+
+    def margins(traced: _Traced) -> np.ndarray:
+        return np.interp(road.d, traced.d_p, racing_line.edge_margin(traced.v_p))
+
+    # The racing line is a little faster than the centreline, so this is a first guess, a little narrow.
+    margin = margins(_Traced(road, centre, None, first, last))
+    traced = _Traced(road, centre, solve(margin), first, last)
+    for i in range(MARGIN_ROUNDS):
+        if traced.lateral is None:  # held on the centreline everywhere: nothing to set
+            break
+        want = margins(traced)
+        if np.all(want <= margin + MARGIN_TOL_M):
+            break
+        margin = want if i < MARGIN_ROUNDS - 1 else np.maximum(margin, want)
+        traced = _Traced(road, centre, solve(margin, traced.off), first, last)
+    return traced
+
+
 def build(road: RoadModel, frame: LocalFrame, step: float = AI_POINT_SPACING_M, *,
           end_short_m: float = END_INSET_M, racing: bool = True) -> AiLine:
     """The AI line, from END_INSET_M after the layout's start to `end_short_m` before its end, with points about
@@ -125,46 +223,11 @@ def build(road: RoadModel, frame: LocalFrame, step: float = AI_POINT_SPACING_M, 
     first, last = END_INSET_M, road.length - end_short_m
     e0, n0 = float(road.e[0]), float(road.n[0])
     centre = CubicSpline(road.d, np.column_stack([road.e - e0, road.n - n0]))
-    lateral = off = None
-    if racing:
-        off = racing_line.offsets(road.d, road.e, road.n, road.heading, road.curvature, road.half_left,
-                                  road.half_right, hold_until=racing_line.HOLD_START_M,
-                                  hold_from=finish_distance(road.length) - racing_line.HOLD_BEFORE_FINISH_M)
-        if len(off.s) > 1 and np.any(off.hi > off.lo):
-            lateral = CubicSpline(off.s, off.n)
+    line = _racing(road, centre, first, last) if racing else _Traced(road, centre, None, first, last)
+    arc_fine, d_fine, heading_fine, total = line.arc_fine, line.d_fine, line.heading_fine, line.total
 
-    def at(d):
-        """Points on the line at stations `d` (east/north about e0/n0), and their offsets from the centreline."""
-        p = centre(d)
-        t = centre(d, 1)
-        t /= np.linalg.norm(t, axis=1, keepdims=True)
-        a = np.zeros(len(d))
-        if lateral is not None:
-            # Exactly on the centreline wherever it's held there; elsewhere the spline through the stations.
-            a = np.where(np.interp(d, off.s, off.hi - off.lo) > 0, lateral(d), 0.0)
-        return p + np.column_stack([-t[:, 1], t[:, 0]]) * a[:, None], a
-
-    def surface(d, a):
-        """The road's height under the line: it falls from the crown to each edge, by `slope_*` per metre."""
-        return (np.interp(d, road.d, road.z) - np.where(a >= 0, np.interp(d, road.d, road.slope_left) * a,
-                                                         -np.interp(d, road.d, road.slope_right) * a))
-
-    # Trace the line finely for its length and heading.
-    d_fine = np.append(np.arange(first, last, FINE_M), last)
-    r_fine, a_fine = at(d_fine)
-    arc_fine = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(r_fine, axis=0).T))])
-    tangent = np.gradient(r_fine, arc_fine, axis=0)
-    heading_fine = np.unwrap(np.arctan2(tangent[:, 1], tangent[:, 0]))
-    total = float(arc_fine[-1])
-
-    # Speeds, gas, brake, radius and grade every PROFILE_M along the line...
-    arc_p = np.append(np.arange(0.0, total, PROFILE_M), total)
-    d_p = np.interp(arc_p, arc_fine, d_fine)
-    curv_p = np.interp(arc_p, arc_fine, np.gradient(heading_fine, arc_fine))
-    a_p = np.interp(arc_p, arc_fine, a_fine)
-    grade_p = np.gradient(surface(d_p, a_p), arc_p) if len(arc_p) > 1 else np.zeros(len(arc_p))
-    grade_p = gaussian_filter1d(grade_p, SMOOTH_M / PROFILE_M)
-    v_p = speed_profile(arc_p, curv_p, grade_p)
+    # Gas, brake and radius every PROFILE_M along the line, from its speeds...
+    arc_p, curv_p, grade_p, v_p = line.arc_p, line.curv_p, line.grade_p, line.v_p
     dv = np.gradient(v_p, arc_p) if len(arc_p) > 1 else np.zeros(len(arc_p))  # per metre
     gas_p = np.where(dv >= -0.01, np.clip(0.4 + 6 * dv, 0, 1), 0.0)
     brake_p = np.where(dv < -0.01, np.clip(-4 * dv, 0, 1), 0.0)
@@ -174,10 +237,10 @@ def build(road: RoadModel, frame: LocalFrame, step: float = AI_POINT_SPACING_M, 
     count = max(int(np.ceil(total / step - 1e-9)), 1)
     arc = np.linspace(0.0, total, count + 1)
     d = np.interp(arc, arc_fine, d_fine)
-    r, a = at(d)
+    r, a = line.at(d)
     heading = np.interp(arc, arc_fine, heading_fine)
     grade = np.interp(arc, arc_p, grade_p)
-    pos = frame.to_ac(e0 + r[:, 0], n0 + r[:, 1], surface(d, a) + LIFT_M)
+    pos = frame.to_ac(e0 + r[:, 0], n0 + r[:, 1], line.surface(d, a) + LIFT_M)
 
     fwd = np.column_stack([np.cos(heading), grade, -np.sin(heading)])
     fwd /= np.linalg.norm(fwd, axis=1, keepdims=True)

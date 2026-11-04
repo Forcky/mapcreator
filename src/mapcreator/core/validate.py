@@ -103,9 +103,12 @@ def bend_checks(rep: Report, label: str, line: ai_line.AiLine, *, allow_tight_be
         rep.route_failed.append(what)
 
 
-# The racing line (core/racing_line.py) keeps EDGE_MARGIN_M from each road edge; between its stations, at the
-# apex of a hairpin, it can come a few centimetres closer. This much closer fails.
+# The racing line (core/racing_line.py) keeps at least EDGE_MARGIN_M from each road edge; between its stations, at
+# the apex of a hairpin, it can come a few centimetres closer. This much closer fails.
 AI_EDGE_MIN_M = racing_line.EDGE_MARGIN_M - 0.2
+# Where it's fast it keeps more (racing_line.edge_margin, #50), or the middle of a road too narrow for that. This
+# much less than that is a warning: the build goes on, as with the line's radius below.
+AI_EDGE_SPEED_TOL_M = 0.2
 # The line may be this much (a share) tighter than the road nearby before it's warned about. Only a warning, by
 # the maintainer's decision (#44): it never stops a build.
 LINE_RADIUS_TOL = 0.05
@@ -152,12 +155,26 @@ def road_middle(line: ai_line.AiLine) -> tuple[np.ndarray, np.ndarray]:
 
 def racing_line_checks(rep: Report, label: str, line: ai_line.AiLine, road: RoadSurface, middle_radius) -> None:
     """The AI line stays on the road, AI_EDGE_MIN_M or more from each edge (by its own edge distances, and on the
-    road's triangles): failures. And it nowhere bends tighter than the road does nearby: a warning if it does."""
+    road's triangles): failures. It keeps the margin its planned speed asks for, and nowhere bends tighter than
+    the road does nearby: warnings if not."""
     side = np.minimum(line.extra[:, 5], line.extra[:, 6])
     i = int(np.argmin(side))
     rep.check(bool(side[i] >= AI_EDGE_MIN_M),
               f"{label}: AI line at least {AI_EDGE_MIN_M:.1f} m inside both road edges "
               f"({side[i]:.2f} m at the closest, {line.length[i]:.0f} m along it)")
+    # The margin for the planned speed, or half the road where it's narrower than twice that.
+    need = np.minimum(racing_line.edge_margin(line.extra[:, 0]), (line.extra[:, 5] + line.extra[:, 6]) / 2)
+    short = need - side
+    j = int(np.argmax(short))
+    what = (f"{side[j]:.2f} m from the edge at {line.extra[j, 0] * 3.6:.0f} km/h, {line.length[j]:.0f} m along it, "
+            f"against {need[j]:.2f} m")
+    if short[j] <= AI_EDGE_SPEED_TOL_M:
+        rep.passed.append(f"{label}: AI line keeps its speed's margin from both road edges "
+                          f"({racing_line.EDGE_MARGIN_M:.1f} m at {racing_line.MARGIN_SLOW_KMH:.0f} km/h to "
+                          f"{racing_line.EDGE_MARGIN_FAST_M:.1f} m at {racing_line.MARGIN_FAST_KMH:.0f} km/h; "
+                          f"the closest {what})")
+    else:
+        rep.warnings.append(f"{label}: the AI line runs close to the edge for its speed: {what}")
     spacing = _spacing(line)
     pick = np.arange(0, len(line.pos), max(int(round(5.0 / spacing)), 1))  # every point, or every 5 m
     fwd = line.extra[pick][:, [13, 15]]
