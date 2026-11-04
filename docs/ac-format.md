@@ -225,9 +225,9 @@ Built in the mesh stage, visual only, in `FURNITURE_n` meshes with one material 
   - Spacing follows Main Roads WA's "Design of Guide Posts" (citing AS 1742.2-2009 clause 4.2.4.4): 150 m on straights. On curves it's closer, and closer still on the outside: 6/12 m (outside/inside) below 100 m radius, 10/20 m to 200 m, 15/30 m to 300 m, 20/40 m to 400 m, then 40, 50, 60 and 90 m both sides out to 2,000 m.
   - The spacing is checked at every station, so posts close up as soon as a curve begins.
   - None where a guard rail runs, and none on unsealed road.
-- **Curve alignment markers** (CAMs: black chevron on yellow, 0.45 x 0.6 m, 1.2 m up, 2 m beyond the edge) go on the outside of a bend whose advisory speed is at least 15 km/h below the speed limit.
-  - Advisory speed is v = sqrt(127 R (e + 0.35)) km/h. The limit comes from OSM; where it's unknown, 100 km/h.
-  - At least three per bend, spaced at twice the outside guide post spacing (12-40 m), starting one spacing before the bend and ending one after.
+- **Curve alignment markers** (CAMs: black chevron on yellow, 0.45 x 0.6 m, 1.2 m up, 2 m beyond the edge) go on the outside of a bend whose advisory speed is at least 15 km/h below the speed limit and no more than 60 km/h.
+  - Advisory speed is v = sqrt(127 R (e + 0.35)) km/h. The limit comes from OSM; where it's unknown, 80 km/h. (At 100 km/h and with no 60 km/h ceiling, the Esperance Coast Road got 723 CAMs over 20 km.)
+  - Three to six per bend, spaced at twice the outside guide post spacing (12-40 m), starting one spacing before the bend and ending one after.
   - Boards stand back to back, so each direction sees its own chevron.
   - Each bend of an S-bend is treated on its own.
   - None on unsealed road. A bend partly on gravel counts only by its sealed part: that must qualify on its own (tight, and at least 15 m long), and any of its markers whose place falls on the gravel, such as the one after the bend, isn't put up.
