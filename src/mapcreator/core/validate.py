@@ -44,8 +44,9 @@ AI_HEIGHT = (0.3, 0.5)
 # A gate must reach past both road edges; any span is fine as long as it does. This floor only catches
 # a degenerate gate (both ends in one place).
 MIN_GATE_M = 3.0
-# Content Manager's own length pattern (TrackObjectBase): a number followed by a unit.
-CM_LENGTH = re.compile(r"^\W*(\d+(?:[\.,]\d+)?)\W*(?:(km|kilometers)|(mi|miles?)|m)\b")
+# The length as `package.ui_track_json` writes it: kilometres to two places, then the unit. Content Manager ignores
+# a bare number, so the unit has to be there.
+UI_LENGTH = re.compile(r"^\d+\.\d{2} km$")
 MIN_RADIUS_M = 5.0  # tighter than any real hairpin: usually a routing artefact
 # Not even on request below this: the route turns on the spot. It also keeps the AI line's slowest speed,
 # sqrt(MU * G * r), above the 5 m/s the speed check wants.
@@ -314,10 +315,9 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False) -> Report:
             rep.check(meta.get("pitboxes") == str(pits), f"{label}: pitboxes matches {pits} AC_PIT dummies")
             rep.check(isinstance(meta.get("geotags"), list) and all(isinstance(g, str) for g in meta["geotags"]),
                       f"{label}: geotags are strings")
-            length_ok = isinstance(meta.get("length"), str) and re.match(
-                CM_LENGTH, meta["length"])
+            length_ok = isinstance(meta.get("length"), str) and UI_LENGTH.match(meta["length"])
             rep.check(bool(length_ok) and isinstance(meta.get("year"), int),
-                      f"{label}: length parses with a unit (as CM reads it) and year is an integer")
+                      f"{label}: length in km with its unit, and year an integer")
         if datas:
             merged = {"nodes": [n for d in datas for n in d["nodes"]], "materials": datas[0]["materials"]}
             _layout_checks(rep, label, merged, all_dummies, base / "ai" / "fast_lane.ai",
