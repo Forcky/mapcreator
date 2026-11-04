@@ -17,7 +17,7 @@ These need the in-game harness on a machine with Assetto Corsa (`docs/dev-handov
 - CSP rewrites each tree `.bin` the first time it loads it: the same entries, re-packed in another order and about 9 KB larger. Harmless so far, but it suggests our zip differs from the layout CSP's own writer uses.
 - what race.ini's `[AUTOSPAWN]` does
 - whether the tree trunk colliders (#15) stop a car at the bark: their radius assumes Tree FX scales a model by `size` all round and by `width` horizontally on top. And what 200-560 colliders per km cost in frame rate.
-- AI opponents on a road too narrow for pairs, where the grid goes single file: none of the example roads is that narrow
+- AI opponents on a road too narrow for pairs, where the grid goes single file: Lower Swamp Road (`examples/lower_swamp_road.json`, 4.0 m) is the first example that narrow (see "Gravel and narrow roads" below)
 
 Answered at milestone M3 (Grasstree Hill, both layouts; CSP 0.2.11, Content Manager's default starter):
 
@@ -49,6 +49,30 @@ Answered at M4 (AI opponents; Grasstree Hill, both layouts, and Brinktop Road; 8
   - A race ends when the last car still running finishes, and AC puts everyone back on the grid. With a close field, as on Grasstree Hill (all within 6 s), that comes before the leaders have stopped. Practice always shows the run-off. There, AC sends a stopped AI car back to its pit box after about 20–25 s.
   - In practice the AI leave their pit boxes at random times. The pit boxes are our grid spots on the road, so in one of the two practice runs (forward) cars bumped the ones still standing ahead. The damage was light, but two of the bumped cars went back to their boxes and stayed there for the rest of the session.
 - **Frame rate:** 7 AI opponents cost about 1% on the GTX 1660 Ti at 1440p. On the reverse layout, the median was 63 fps with 8 cars against 64 alone (slowest 10%: 48 against 49), and each kilometre's median stayed within 7%. The worst single samples dipped further: 26 fps against 41.
+
+## Gravel and narrow roads
+
+Nothing about gravel has been loaded in game yet. The `GRAVEL` surface's numbers (`docs/ac-format.md`) are a starting point from community gravel stages, to be tuned by feel.
+
+- **To check in game** (CSP 0.2.11):
+  - **Lower Swamp Road** (`examples/lower_swamp_road.json`, both layouts): one lane at 4.0 m, sealed for 1.6 km and then unsealed for 5.2 km.
+    - All 5 single-file spots spawn on the road with every wheel loaded, and `pitboxes` is 5. The forward grid stands on the seal and the reverse grid on the gravel.
+    - 4 AI opponents start and drive in file.
+    - The change from seal to gravel at 1.6 km is felt, with no bump.
+    - Dust behind the cars, gravel skidmarks, and dirt carried onto the seal. Dust and tyre dirt should match the road (`[TYRES_FX]` colours from our textures).
+    - The grass strip down the middle grows Grass FX blades, and only there.
+    - `custom_shaders_patch.log` is clean.
+    - A Lua probe reads `wheels[i].surfaceSectionIndex` 2 and `surfaceExtendedType` (CSP 0.2.8) on the gravel: that shows `_EXT_SURFACE_TYPE=GRAVEL` takes effect without extended physics.
+  - **Hartz Road** (C632, 13.2 km of two-lane gravel at 6.0 m, a 700 m climb): gravel at speed.
+  - **Tuning (Q3 of the gravel research):** friction 0.88, damping 0.01, dirt additive 0.8, `gravel.wav`, 1 cm Perlin bumps, on Lower Swamp Road and Hartz Road. With CSP's Surfaces FX **off** first, because it's off by default and offline only, so the plain numbers must feel right on their own; then **on**.
+  - **AI on gravel:** whether AC's AI copes with friction 0.88 plus dirty tyres, or overdrives. There are no pace hints on gravel; if it overdrives, try about 0.8 over the unsealed stretches.
+  - **CSP's Rally Stage mode** (Quick Drive, CSP 0.2.4) and its Rally Copilot app with our point-to-point layouts, and whether CSP picks street tyres for the AI on a track tagged `rally`. Their requirements aren't documented.
+  - The gravel texture's colour (a grey-brown from a CC0 photo; Tasmanian dolerite gravel runs from blue-grey to brown-grey), and whether its 24 m repeat shows.
+  - A narrow seal with no centre line at 4.0 m (Allens Rivulet Road, `lanes=1`).
+- **Camber on narrow roads looks too strong.** The section stage reads camber from the DEM 0.5 m inside each edge, but never closer than 1 m to the centreline, so on a 4 m road its two samples are 3 m apart and seem to catch the hillside and the cut and fill beside the road. On Lower Swamp Road 55% of stations sit at the 7% limit, against 37% on Hartz Road (6.0 m) and 12-31% on the 6.4 m examples. Where it's that steep the road is one tilted plane and the crown is gone. The gravel work didn't change this (`lanes=1` made Lower Swamp Road 4.0 m before too), but it will colour how the gravel feels, so check it before tuning the surface.
+- **Widths are guesses.** About 98% of unsealed ways in OSM carry neither `lanes` nor `width`, so the class default (5.0-6.0 m) decides. The defaults follow NATSPEC AUS-SPEC 0052's minimum formations, not measurements. Measuring about 20 unsealed roads in theLIST's CC BY aerial photos (AerialPhoto2020-2024; never the NC-ND imagery) would calibrate them.
+- **Not routable:** `highway=track`, so most forestry roads (and Rally Tasmania's stages) can't be built yet. Lower Swamp Road carries on as a track past where its example ends.
+- **One surface for all unsealed values.** `dirt`, `earth`, `ground`, `mud` and `sand` drive like `gravel`. A looser `DIRT` surface can follow if testing shows it's worth it.
 
 ## Power lines
 

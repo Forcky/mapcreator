@@ -59,7 +59,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     water = _water(c, rb, dem, settings, region)
     # Inside water the terrain sits just under the surface, so the land never shows through it.
     ground = water_core.lowered(dem.sample, water) if water else dem.sample
-    meshes = mesh.ribbon_meshes(rb, c["s"], frame)
+    # A section stage from before surfaces has no styles: all sealed and marked, as it was built then.
+    style = sec["style"] if "style" in sec else np.zeros(len(c["s"]), dtype=np.int8)
+    meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style)
     meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, ground, frame)
     meshes += water_core.meshes(water, frame)
     rails, rail_stats = [], {"skipped": "DEM too coarse to place rails"}
@@ -89,7 +91,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         frame=frame,
         meshes=meshes,
         materials={
-            "road": Material("road", texture="road_marked", uv_scale=1.0),
+            # The road's materials are those its chunks use: road, road_plain, gravel, gravel_narrow.
+            **{name: Material(name, texture=mesh.ROAD_TEXTURE[name])
+               for name in sorted({m.material for m in meshes if m.material in mesh.ROAD_TEXTURE})},
             "grass": Material("grass", texture="grass"),
             "terrain": Material("terrain", texture="ground"),
             "rail": Material("rail", texture="steel"),

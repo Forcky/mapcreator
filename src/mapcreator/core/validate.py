@@ -28,7 +28,7 @@ from scipy.ndimage import uniform_filter1d
 from scipy.spatial import cKDTree
 
 from mapcreator.core import ai_line, kn5
-from mapcreator.core.package import SURFACE_KEYS
+from mapcreator.core.package import ROAD_KEYS, SURFACE_KEYS, surface_keys
 from mapcreator.core.power import POWER_COLLIDER
 from mapcreator.core.scenery import TRUNK_MESH
 
@@ -123,13 +123,18 @@ def vertical_checks(rep: Report, label: str, line: ai_line.AiLine) -> None:
             f"{1 / abs(k[i]):.0f} m vertical radius: {extra[i]:.2f} g extra at the AI's planned {v[i] * 3.6:.0f} km/h")
 
 
+def is_road_mesh(name: str) -> bool:
+    """A physics mesh of the drivable road: sealed (1ROAD_###) or unsealed (1GRAVEL_###)."""
+    return name[:1].isdigit() and any(k in name for k in ROAD_KEYS)
+
+
 class RoadSurface:
-    """Height of the road (1ROAD meshes) under arbitrary X/Z points."""
+    """Height of the road (1ROAD and 1GRAVEL meshes) under arbitrary X/Z points."""
 
     def __init__(self, nodes: list[dict]):
         tris = []
         for nd in nodes:
-            if nd["class"] == 2 and "ROAD" in nd["name"]:
+            if nd["class"] == 2 and is_road_mesh(nd["name"]):
                 p = nd["vertices"]["pos"].astype(float)
                 tris.append(p[nd["indices"].reshape(-1, 3)])
         self.tri = np.concatenate(tris) if tris else np.zeros((0, 3, 3))
@@ -172,6 +177,13 @@ class RoadSurface:
             v = (v0[..., 0] * v2[..., 1] - v2[..., 0] * v0[..., 1]) / den
             out[start:start + batch] = (ok & (u >= -1e-6) & (v >= -1e-6) & (u + v <= 1 + 1e-6)).any(axis=1)
         return out
+
+
+def undefined_surfaces(mesh_names: list[str], surfaces_ini: str) -> list[str]:
+    """Physics meshes whose surface KEY the layout's `surfaces.ini` doesn't define: a 1GRAVEL mesh on a track
+    written without GRAVEL. WALL needs no KEY (it's deliberately left undefined)."""
+    defined = surface_keys(surfaces_ini)
+    return [n for n in mesh_names if n[:1].isdigit() and "WALL" not in n and not any(k in n for k in defined)]
 
 
 def _kn5_checks(rep: Report, path: Path) -> tuple[dict, dict] | None:
@@ -318,6 +330,11 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False) -> Report:
             length_ok = isinstance(meta.get("length"), str) and UI_LENGTH.match(meta["length"])
             rep.check(bool(length_ok) and isinstance(meta.get("year"), int),
                       f"{label}: length in km with its unit, and year an integer")
+        if datas and (base / "data" / "surfaces.ini").exists():
+            names = [n["name"] for d in datas for n in d["nodes"] if n["class"] == 2]
+            bad = undefined_surfaces(names, (base / "data" / "surfaces.ini").read_text(encoding="ascii"))
+            rep.check(not bad, f"{label}: data/surfaces.ini defines every physics mesh's surface"
+                      + (f" (not {bad[:5]})" if bad else ""))
         if datas:
             merged = {"nodes": [n for d in datas for n in d["nodes"]], "materials": datas[0]["materials"]}
             _layout_checks(rep, label, merged, all_dummies, base / "ai" / "fast_lane.ai",

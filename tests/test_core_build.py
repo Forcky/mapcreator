@@ -9,6 +9,7 @@ from mapcreator.core import centreline as cl
 from mapcreator.core import profile as pf
 from mapcreator.core import section as sec
 from mapcreator.core.layout import RoadModel, logic_dummies
+from mapcreator.core.power import POWER_COLLIDER
 from mapcreator.pipeline.mesh_stage import frame_for
 
 
@@ -29,26 +30,37 @@ def hairpin_first() -> np.ndarray:
     return np.vstack([arc, leg]) + [500000.0, 5250000.0]
 
 
-def build_and_check(tmp_path, tags: dict, *, reverse: bool = False, shape=gentle, trunks=()) -> validate.Report:
-    """`trunks`: (metres along the road, metres left of the centreline) for 0.4 m trunk colliders."""
+def build_and_check(tmp_path, tags: dict, *, reverse: bool = False, shape=gentle, trunks=(),
+                    gravel: tuple[float, float] | None = None, collider: str = scenery.TRUNK_MESH,
+                    ground=flat) -> validate.Report:
+    """`trunks`: (metres along the road, metres left of the centreline) for 0.4 m trunk colliders, named
+    `collider` (a power line's are checked the same way). `gravel`: (from, to) metres along the road that are
+    unsealed, as 1GRAVEL meshes with the steeper crown. `ground`: the road's height at each point (the DEM)."""
     line = cl.smooth(shape())
-    prof = pf.smooth_profile(line.s, flat(line.xy[:, 0], line.xy[:, 1]), np.zeros(len(line.s), bool))
+    prof = pf.smooth_profile(line.s, ground(line.xy[:, 0], line.xy[:, 1]), np.zeros(len(line.s), bool))
+    unsealed = np.zeros(len(line.s), bool) if gravel is None else (line.s >= gravel[0]) & (line.s <= gravel[1])
     w, _ = sec.width_from_tags(tags)
     half = sec.eased(line.s, np.full(len(line.s), w)) / 2
-    sl, sr = sec.half_slopes(np.zeros(len(line.s)))
+    crown = sec.eased(line.s, np.where(unsealed, sec.CROWN_UNSEALED, sec.CROWN))
+    sl, sr = sec.half_slopes(np.zeros(len(line.s)), crown)
+    style = np.where(unsealed, sec.style_code(True, w < sec.SINGLE_LANE_BELOW_M), sec.style_code(False, False))
     frame = frame_for(line.xy, prof.z)
-    rb = mesh.build_ribbon(line.xy, prof.z, line.heading, line.curvature, half, half, sl, sr, flat)
-    meshes = mesh.ribbon_meshes(rb, line.s, frame)
+    rb = mesh.build_ribbon(line.xy, prof.z, line.heading, line.curvature, half, half, sl, sr, ground)
+    meshes = mesh.ribbon_meshes(rb, line.s, frame, style=style)
     if trunks:
         i = np.searchsorted(line.s, [s for s, _ in trunks])
         nrm = np.column_stack([-np.sin(line.heading[i]), np.cos(line.heading[i])])
         xy = line.xy[i] + nrm * np.array([off for _, off in trunks])[:, None]
-        meshes += scenery.trunk_colliders(xy, flat(*xy.T), np.full(len(xy), 0.4), np.zeros(len(xy)), line.s[i], frame)
+        cols = scenery.trunk_colliders(xy, ground(*xy.T), np.full(len(xy), 0.4), np.zeros(len(xy)), line.s[i], frame)
+        for m in cols:
+            m.name = m.name.replace(scenery.TRUNK_MESH, collider)
+        meshes += cols
     road = RoadModel.from_arrays(line.s, line.xy, prof.z, line.heading, line.curvature, prof.grade,
                                  half, half, sl, sr, reverse)
     dummies = [kn5.Kn5Dummy(d.name, kn5.dummy_matrix(d.position, d.forward, d.up)) for d in logic_dummies(road, frame)]
-    materials = [kn5.Kn5Material(n, textures={"txDiffuse": "a.dds"}) for n in ("road", "grass", "walls")]
-    index = {"road": 0, "grass": 1, "walls": 2}
+    names = sorted({m.material for m in meshes})
+    materials = [kn5.Kn5Material(n, textures={"txDiffuse": "a.dds"}) for n in names]
+    index = {n: i for i, n in enumerate(names)}
     km = [kn5.Kn5Mesh(m.name, index[m.material], m.positions, m.normals, m.uvs, m.triangles, renderable=m.renderable)
           for m in meshes]
     model = tmp_path / "t.kn5"
@@ -91,6 +103,63 @@ def test_tree_colliders_must_stay_off_the_road_and_clear_of_the_grid(tmp_path):
     rep = build_and_check(tmp_path, road, trunks=beside + [(34.0, half + 0.6)])
     assert [f for f in rep.failed if "from every spawn" in f]
     assert not [f for f in rep.failed if "clear of the road" in f]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("tags", [{"highway": "unclassified", "lanes": "1"}, {"highway": "secondary"}])
+def test_a_road_that_turns_to_gravel_validates_on_both_surfaces(tmp_path, tags, reverse):
+    # Gravel for the first 500 m: the forward grid stands on gravel, the reverse grid on the seal, and the AI
+    # line crosses the change. Spawn and AI heights are measured against 1ROAD and 1GRAVEL alike.
+    rep = build_and_check(tmp_path, tags, reverse=reverse, gravel=(0.0, 500.0))
+    assert rep.failed == []
+    assert any("each physics mesh matches exactly one surface key" in p for p in rep.passed)
+    assert any("AC_START_0 sits 0.30 m above the road" in p for p in rep.passed)
+    assert any("AI line" in p and "above the road" in p for p in rep.passed)
+
+
+def test_an_all_gravel_road_validates_and_is_seen_as_road(tmp_path):
+    rep = build_and_check(tmp_path, {"highway": "unclassified", "lanes": "1"}, gravel=(0.0, 1e9))
+    assert rep.failed == []
+    assert not [p for p in rep.passed if "off the road" in p]
+
+
+@pytest.mark.parametrize("what,collider", [("tree", scenery.TRUNK_MESH), ("power", POWER_COLLIDER)])
+def test_scenery_colliders_are_checked_against_gravel_too(tmp_path, what, collider):
+    road = {"highway": "unclassified", "lanes": "1"}  # 4.0 m: single file
+    half = sec.width_from_tags(road, unsealed=True)[0] / 2
+    beside = [(300.0, half + 6.0), (520.0, -(half + 6.0))]
+    all_gravel = (0.0, 1e9)
+    rep = build_and_check(tmp_path, road, trunks=beside, gravel=all_gravel, collider=collider)
+    assert rep.failed == []
+    assert any(f"{what} colliders clear of the road (0 corners" in p for p in rep.passed)
+    rep = build_and_check(tmp_path, road, trunks=beside + [(600.0, 0.0)], gravel=all_gravel, collider=collider)
+    assert [f for f in rep.failed if f"{what} colliders clear of the road" in f]  # in the middle of the gravel
+    # Just off the edge beside the third single-file spot (26 m in): off the road, but too close to the spawn.
+    rep = build_and_check(tmp_path, road, trunks=beside + [(26.0, half + 0.6)], gravel=all_gravel, collider=collider)
+    assert [f for f in rep.failed if "from every spawn" in f]
+    assert not [f for f in rep.failed if "clear of the road" in f]
+
+
+def test_a_tight_sag_on_gravel_is_measured_and_warned_about(tmp_path):
+    # A V-shaped dip 500 m along an all-gravel road: 12% down, then 12% up. The AI line's heights are measured
+    # against the 1GRAVEL meshes, and the vertical check reads the AI line, whatever the surface under it.
+    def dip(e, n):
+        return 100.0 + 0.12 * np.abs(np.asarray(e, float) - 500500.0)
+
+    rep = build_and_check(tmp_path, {"highway": "unclassified", "lanes": "1"}, gravel=(0.0, 1e9), ground=dip)
+    assert rep.failed == []
+    assert any("AI line 0.40-0.40 m above the road" in p for p in rep.passed)
+    assert [w for w in rep.warnings if "sag at" in w and "vertical radius" in w]
+    rep = build_and_check(tmp_path, {"highway": "unclassified", "lanes": "1"}, gravel=(0.0, 1e9))
+    assert not [w for w in rep.warnings if "vertical radius" in w]  # flat: nothing to warn about
+
+
+def test_a_gravel_mesh_needs_gravel_in_surfaces_ini():
+    from mapcreator.core import package
+
+    names = ["1ROAD_000", "1GRAVEL_001", "1GRASS_V001L", "1WALL_TRUNK_000", "RAIL_L000"]
+    assert validate.undefined_surfaces(names, package.surfaces_ini(gravel=True)) == []
+    assert validate.undefined_surfaces(names, package.surfaces_ini()) == ["1GRAVEL_001"]
 
 
 def test_skirts_stop_halfway_to_a_parallel_leg():
