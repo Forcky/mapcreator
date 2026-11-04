@@ -4,7 +4,7 @@ then the validator's model and layout checks, on a synthetic road over flat grou
 import numpy as np
 import pytest
 
-from mapcreator.core import ai_line, kn5, mesh, validate
+from mapcreator.core import ai_line, kn5, mesh, scenery, validate
 from mapcreator.core import centreline as cl
 from mapcreator.core import profile as pf
 from mapcreator.core import section as sec
@@ -29,7 +29,8 @@ def hairpin_first() -> np.ndarray:
     return np.vstack([arc, leg]) + [500000.0, 5250000.0]
 
 
-def build_and_check(tmp_path, tags: dict, *, reverse: bool = False, shape=gentle) -> validate.Report:
+def build_and_check(tmp_path, tags: dict, *, reverse: bool = False, shape=gentle, trunks=()) -> validate.Report:
+    """`trunks`: (metres along the road, metres left of the centreline) for 0.4 m trunk colliders."""
     line = cl.smooth(shape())
     prof = pf.smooth_profile(line.s, flat(line.xy[:, 0], line.xy[:, 1]), np.zeros(len(line.s), bool))
     w, _ = sec.width_from_tags(tags)
@@ -38,12 +39,18 @@ def build_and_check(tmp_path, tags: dict, *, reverse: bool = False, shape=gentle
     frame = frame_for(line.xy, prof.z)
     rb = mesh.build_ribbon(line.xy, prof.z, line.heading, line.curvature, half, half, sl, sr, flat)
     meshes = mesh.ribbon_meshes(rb, line.s, frame)
+    if trunks:
+        i = np.searchsorted(line.s, [s for s, _ in trunks])
+        nrm = np.column_stack([-np.sin(line.heading[i]), np.cos(line.heading[i])])
+        xy = line.xy[i] + nrm * np.array([off for _, off in trunks])[:, None]
+        meshes += scenery.trunk_colliders(xy, flat(*xy.T), np.full(len(xy), 0.4), np.zeros(len(xy)), line.s[i], frame)
     road = RoadModel.from_arrays(line.s, line.xy, prof.z, line.heading, line.curvature, prof.grade,
                                  half, half, sl, sr, reverse)
     dummies = [kn5.Kn5Dummy(d.name, kn5.dummy_matrix(d.position, d.forward, d.up)) for d in logic_dummies(road, frame)]
-    materials = [kn5.Kn5Material(n, textures={"txDiffuse": "a.dds"}) for n in ("road", "grass")]
-    index = {"road": 0, "grass": 1}
-    km = [kn5.Kn5Mesh(m.name, index[m.material], m.positions, m.normals, m.uvs, m.triangles) for m in meshes]
+    materials = [kn5.Kn5Material(n, textures={"txDiffuse": "a.dds"}) for n in ("road", "grass", "walls")]
+    index = {"road": 0, "grass": 1, "walls": 2}
+    km = [kn5.Kn5Mesh(m.name, index[m.material], m.positions, m.normals, m.uvs, m.triangles, renderable=m.renderable)
+          for m in meshes]
     model = tmp_path / "t.kn5"
     kn5.write(model, root="t", textures={"a.dds": b"DDS x"}, materials=materials, meshes=km, dummies=dummies)
     ai = tmp_path / "fast_lane.ai"
@@ -66,6 +73,24 @@ def test_a_synthetic_road_of_any_width_validates(tmp_path, tags, reverse):
 def test_a_road_that_starts_or_ends_in_a_hairpin_validates(tmp_path, reverse):
     rep = build_and_check(tmp_path, {"highway": "secondary"}, reverse=reverse, shape=hairpin_first)
     assert rep.failed == []
+
+
+def test_tree_colliders_must_stay_off_the_road_and_clear_of_the_grid(tmp_path):
+    road = {"highway": "secondary"}  # wide enough for the grid's pairs, 2 m either side of the centreline
+    half = sec.width_from_tags(road)[0] / 2
+    beside = [(300.0, half + 6.0), (520.0, -(half + 6.0))]  # either side of the 400 m chunk boundary
+    rep = build_and_check(tmp_path, road, trunks=beside)
+    assert rep.failed == []
+    assert any("2 tree collider meshes, all invisible" in p for p in rep.passed)
+    assert any("tree colliders clear of the road (0 corners" in p for p in rep.passed)
+    assert any("tree colliders at least 3 m from every spawn" in p for p in rep.passed)
+
+    rep = build_and_check(tmp_path, road, trunks=beside + [(600.0, 0.0)])  # in the middle of the road
+    assert [f for f in rep.failed if "tree colliders clear of the road" in f]
+    # Just off the edge, beside the pair of grid spots behind spot 0 (34 m in): off the road, but too close.
+    rep = build_and_check(tmp_path, road, trunks=beside + [(34.0, half + 0.6)])
+    assert [f for f in rep.failed if "from every spawn" in f]
+    assert not [f for f in rep.failed if "clear of the road" in f]
 
 
 def test_skirts_stop_halfway_to_a_parallel_leg():

@@ -4,11 +4,13 @@ Trees come from the region's individual-crown canopy model when one is
 configured (Tasmania's 2 m CHM mirror), and then every crown in the corridor is
 kept, at its own height. Otherwise they're made-up positions in ESA WorldCover
 tree cover, thinned with distance and capped per km. Buildings come from the
-region's footprint layer. Everything here is visual only.
+region's footprint layer.
 
 Trees are 3D models in a Custom Shaders Patch Tree FX list (`treefx/`), which
 only CSP reads; the KN5 has no trees of its own. The track stage packs the list
-and models into the track's extension folder.
+and models into the track's extension folder. Tree FX has no physics, so the
+trunks a car can reach get invisible colliders here (`scenery.trunk_colliders`).
+Building walls are solid too; roofs are visual only.
 """
 
 from __future__ import annotations
@@ -114,7 +116,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     meshes = scenery.building_meshes(buildings, dem.sample, frame, rng)
 
     out = work.stage(STAGE)
-    fx = _tree_fx(trees, ground, frame, rng, out)
+    fx, trunk_r = _tree_fx(trees, ground, frame, rng, out)
+    edge, station = scenery.edge_distance(trees.xy, xy, c["heading"], sec["half_left"], sec["half_right"])
+    colliders = scenery.trunk_colliders(trees.xy, ground, trunk_r, edge, c["s"][station], frame)
+    meshes += colliders
     textures = {"walls": out / "walls.png"}
     sprites.weatherboard().save(textures["walls"])
     materials = {"walls": Material("walls", "walls")}
@@ -130,6 +135,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "trees": len(trees),
         "tree_source": source,
         "tree_fx_models": fx,
+        "trunk_colliders": sum(len(m.positions) for m in colliders) // (2 * scenery.TRUNK_SIDES),
+        "trunk_collider_meshes": len(colliders),
         "buildings": len(buildings),
         "buildings_source": buildings_note or "ok",
         "meshes": len(meshes),
@@ -138,8 +145,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     }
 
 
-def _tree_fx(trees: scenery.Trees, ground: np.ndarray, frame, rng: np.random.Generator, out) -> list[str]:
-    """3D models for Tree FX and a placement for every tree: a model that suits its height, scaled to it."""
+def _tree_fx(trees: scenery.Trees, ground: np.ndarray, frame, rng: np.random.Generator,
+             out) -> tuple[list[str], np.ndarray]:
+    """3D models for Tree FX and a placement for every tree: a model that suits its height, scaled to it.
+    Returns the model names and each tree's trunk radius in metres, as Tree FX draws it."""
     fx = out / "treefx"
     if fx.exists():
         for old in fx.iterdir():
@@ -153,11 +162,14 @@ def _tree_fx(trees: scenery.Trees, ground: np.ndarray, frame, rng: np.random.Gen
     n = len(trees)
     model = treefx.assign(trees.height, names, rng)
     own_height = np.array([models[name].box[0] for name in names])
+    size = np.clip(trees.height / own_height[model], 0.3, 3.0) if n else np.zeros(0)
+    angle = rng.uniform(0, 360, n)
+    width = rng.uniform(0.85, 1.15, n)
     np.savez(fx / "placement.npz",
              pos=frame.to_ac(trees.xy[:, 0], trees.xy[:, 1], ground) if n else np.zeros((0, 3)),
-             model=model, size=np.clip(trees.height / own_height[model], 0.3, 3.0) if n else np.zeros(0),
-             angle=rng.uniform(0, 360, n), width=rng.uniform(0.85, 1.15, n), names=np.array(names))
-    return names
+             model=model, size=size, angle=angle, width=width, names=np.array(names))
+    trunk = np.array([treefx.trunk_radius(models[name]) for name in names])
+    return names, trunk[model] * size * width
 
 
 def _attr(module: str):

@@ -99,6 +99,17 @@ def test_mesh_files_parse_and_are_normalised_to_the_model_box(lib, tex):
         assert ((face * v["normal"][idx].mean(axis=1)).sum(axis=1) < 0).mean() > 0.99
 
 
+def test_trunk_radius_is_the_trailer_in_metres(lib, tex):
+    """The trunk colliders are sized from the same number the .mesh trailer gives Tree FX."""
+    names = sorted(tex)
+    for name, model in lib.items():
+        height, half_w = model.box
+        *_, trunk = read_mesh(treefx.mesh_file(model.lods[0], names, [1] * len(names), height, half_w))
+        assert treefx.trunk_radius(model) == pytest.approx(trunk * half_w, rel=1e-6)
+        # The base radius with its root flare, seen across the ring's flats.
+        assert treefx.KINDS[name].radius < treefx.trunk_radius(model) < treefx.KINDS[name].radius * 1.3
+
+
 def test_a_bin_is_a_zip_with_tree_ini_lods_and_textures(lib, tex):
     model = lib["wattle"]
     with zipfile.ZipFile(io.BytesIO(treefx.model_bin(model, tex))) as z:
