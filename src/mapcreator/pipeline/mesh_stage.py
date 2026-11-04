@@ -8,7 +8,7 @@ import math
 import numpy as np
 
 from mapcreator.config import Settings
-from mapcreator.core import furniture, mesh, roadside
+from mapcreator.core import furniture, mesh, reach, roadside
 from mapcreator.core import water as water_core
 from mapcreator.core.scene import LocalFrame, Material, Scene
 from mapcreator.job import Job
@@ -17,9 +17,9 @@ from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.regions import FINE_DEM_M, job_region
 
 STAGE = "04_mesh"
-# Terrain reaches this far either side of the road: the world's edge, and the ground under far power towers.
-# Beyond 300 m its lattice is coarse (mesh.OUTER_LATTICE_M). The DEM corridor must cover it (profile_stage).
-TERRAIN_CORRIDOR_M = 700.0
+# Terrain reaches this far either side of the road: the world's edge, 100 m beyond the scenery (`core.reach`).
+# Beyond 300 m its lattice is coarse (mesh.OUTER_LATTICE_M). The DEM corridor covers it (profile_stage).
+TERRAIN_CORRIDOR_M = reach.TERRAIN_M
 
 log = logging.getLogger(__name__)
 

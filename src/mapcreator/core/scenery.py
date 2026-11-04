@@ -1,7 +1,10 @@
 """Scenery: where the trees stand, and buildings as extruded footprints.
 
+Trees and buildings stand within the scenery reach (`core.reach`).
+
 Trees:
-- Chosen here (positions and heights, thinned with distance from the road and to a per-km budget).
+- Chosen here (positions and heights; made-up ones thinned with distance from the road and, near it, to a
+  per-km budget).
 - Drawn by Custom Shaders Patch Tree FX as 3D models (see `treefx`). The KN5 has no trees of its own,
   so players without CSP see none.
 - Tree FX has no physics. So each trunk a car can reach gets an invisible collider in the KN5
@@ -23,19 +26,26 @@ import numpy as np
 import shapely
 from scipy.spatial import cKDTree
 
+from mapcreator.core import reach
 from mapcreator.core.scene import MAX_VERTICES, LocalFrame, Mesh
 from mapcreator.core.sprites import ROOF_COLOURS
 
+# Trees and buildings stand within the scenery reach of the centreline (`core.reach`, 600 m).
 # Made-up trees only (tree cover with no crowns, e.g. WorldCover): distance bands from the centreline,
 # (up to metres, share of trees kept). Real crowns from a canopy model are all kept (`keep_trees`).
-TREE_BANDS = ((60.0, 1.0), (150.0, 0.55), (250.0, 0.25))
+# The far band is sparse, a tree about every 20 m in full cover: far trees are many, and cost frame rate too.
+NEAR_M = 250.0
+TREE_BANDS = ((60.0, 1.0), (150.0, 0.55), (NEAR_M, 0.25), (reach.SCENERY_M, 0.12))
 TREE_REACH_M = TREE_BANDS[-1][0]
 COVER_SPACING_M = 7.0  # candidate spacing where only tree *cover* is known
 CLEAR_OF_VERGE_M = 2.0
-BUILDING_REACH_M = 250.0
+BUILDING_REACH_M = reach.SCENERY_M
 STOREY_M = 3.0
 SINK_M = 0.4
-MAX_TREES_PER_KM = 2500  # made-up trees only: keeps their dense forest within a frame-rate budget
+# Made-up trees within NEAR_M only: keeps their dense forest near the road, where the frame-rate cost is
+# (docs/known-issues.md), within a budget (`keep_trees`). Beyond NEAR_M the far band's share is its own bound: at
+# most 0.12 x 2 x 350 m x 1,000 m / (7 m x 7 m), about 1,700 trees per km, in unbroken forest both sides.
+MAX_TREES_PER_KM = 2500
 # Trunk colliders (`trunk_colliders`). The reach is from the road edge: in run-offs leaving the road at 5-30
 # degrees, 80-90% of first hits on a trunk were within 20 m of the edge (Grasstree Hill, Esperance Coast Road,
 # Dandenong Tourist Rd; 4 Nov 2026), and each 5 m beyond added about a quarter more colliders for 5-7% more.
@@ -92,40 +102,42 @@ def heights_for_cover(n: int, rng: np.random.Generator) -> np.ndarray:
 
 
 def keep_trees(trees: Trees, centre_xy: np.ndarray, length_m: float, rng: np.random.Generator, *,
-               real_crowns: bool) -> Trees:
+               real_crowns: bool, per_km: float = MAX_TREES_PER_KM) -> Trees:
     """The trees that go in the scene.
 
     Real crowns (a canopy model: each a tree that's there, at its own height) are all kept, so the forest is
     as close to real life as the data allows. Made-up positions (only tree cover is known) are thinned with
-    distance from the road and capped per km.
+    distance from the road (`TREE_BANDS`), and those within NEAR_M capped at `per_km`.
+
+    Each made-up tree gets one random draw and is kept if the draw is under its band's share. Over the cap, the
+    trees within NEAR_M are kept nearest first, except that the cap never cuts a tree whose draw is under the far
+    band's share. That floor runs all the way in, so a forest dense enough to meet the cap still thins out
+    smoothly to the reach, rather than stopping short of NEAR_M and starting again beyond it (a 63 km road
+    through forest kept no trees at all 150-250 m out).
     """
     if real_crowns:
         return trees
-    return cap_trees(thin_by_distance(trees, centre_xy, rng), centre_xy, length_m, rng)
-
-
-def thin_by_distance(trees: Trees, centre_xy: np.ndarray, rng: np.random.Generator) -> Trees:
     d, _ = cKDTree(centre_xy).query(trees.xy, workers=-1)
-    keep = np.zeros(len(trees), dtype=bool)
-    lower = -1.0
-    for reach, share in TREE_BANDS:
-        band = (d > lower) & (d <= reach)
-        keep |= band & (rng.random(len(trees)) < share)
-        lower = reach
-    return trees.subset(keep)
-
-
-def cap_trees(trees: Trees, centre_xy: np.ndarray, length_m: float, rng: np.random.Generator,
-              per_km: float = MAX_TREES_PER_KM) -> Trees:
-    """Thin to a per-km budget. Nearer trees are kept first; the far bands give way."""
+    draw = rng.random(len(trees))
+    keep = draw < band_share(d)
+    near = keep & (d <= NEAR_M)
     budget = int(per_km * length_m / 1000)
-    if len(trees) <= budget:
-        return trees
-    d, _ = cKDTree(centre_xy).query(trees.xy, workers=-1)
-    order = np.argsort(d + rng.uniform(0, 30, len(d)))  # mostly by distance, mixed a little at band edges
-    keep = np.zeros(len(trees), dtype=bool)
-    keep[order[:budget]] = True
+    if near.sum() > budget:
+        floor = near & (draw < TREE_BANDS[-1][1])
+        extra = np.flatnonzero(near & ~floor)
+        order = extra[np.argsort(d[extra] + rng.uniform(0, 30, len(extra)))]  # by distance, mixed at band edges
+        keep[order[max(budget - int(floor.sum()), 0):]] = False
     return trees.subset(keep)
+
+
+def band_share(d: np.ndarray) -> np.ndarray:
+    """The share of made-up trees kept at each distance from the centreline (`TREE_BANDS`; none beyond them)."""
+    share = np.zeros(np.shape(d))
+    lower = -1.0
+    for reach_m, s in TREE_BANDS:
+        share[(d > lower) & (d <= reach_m)] = s
+        lower = reach_m
+    return share
 
 
 # -- trunk colliders ---------------------------------------------------------

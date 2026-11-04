@@ -37,8 +37,8 @@ METAL, TIMBER, CABLE = "power_metal", "power_timber", "power_cable"
 
 # A support's whole base stands within this distance of the centreline: on the terrain mesh. Towers beyond it stood
 # in the sky, their bases floating past the ground's edge (in game, 4 Nov), so a span with a support beyond it isn't
-# built. The scenery stage passes the terrain's own reach, `mesh_stage.TERRAIN_CORRIDOR_M` less 5 m (695 m since
-# #34); this default is for the 300 m terrain before it.
+# built. The scenery stage passes `core.reach.POWER_M`: the terrain's own reach less 5 m (695 m since #34), past the
+# trees and buildings (600 m); this default is for the 300 m terrain before #34.
 SUPPORT_REACH_M = 295.0
 ON_ROAD_MARGIN_M = 0.5  # a support closer to the centreline than the road's half-width plus this is misplaced
 COLLIDE_BEYOND_EDGE_M = 15.0  # supports within this distance of the road's edge get a collider

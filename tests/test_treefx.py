@@ -7,7 +7,7 @@ import zipfile
 import numpy as np
 import pytest
 
-from mapcreator.core import package, sprites, treefx
+from mapcreator.core import package, reach, sprites, treefx
 
 
 def read_mesh(data: bytes):
@@ -124,6 +124,19 @@ def test_a_bin_is_a_zip_with_tree_ini_lods_and_textures(lib, tex):
     assert f"DISTANCE={height * 10:.1f}" in ini  # the last LOD reaches ten heights out
     # The same model gives the same bytes, so builds are reproducible.
     assert treefx.model_bin(model, tex) == treefx.model_bin(model, tex)
+
+
+def test_far_trees_are_left_to_tree_fx_billboards(lib):
+    """Past its last LOD, Tree FX draws a tree as a baked billboard of six vertices, not as a mesh (CSP wiki, Tracks:
+    Trees; its billboard shader). That's the cheapest far tree, so the meshes stop far inside the scenery reach:
+    beyond about 270 m, every tree on a 600 m hillside is a billboard."""
+    for model in lib.values():
+        height, half_w = model.box
+        ini = treefx.tree_ini(height, half_w, ["lod0.mesh", "lod1.mesh", "lod2.mesh"])
+        distances = [float(line.split("=")[1]) for line in ini.split("\r\n") if line.startswith("DISTANCE=")]
+        assert distances == sorted(distances) and len(distances) == 3
+        assert distances[-1] == pytest.approx(height * 10, abs=0.05)  # Content Manager's converter's own rule
+        assert distances[-1] < 0.5 * reach.SCENERY_M
 
 
 def test_leaves_are_greener_than_red_and_bark_is_not():
