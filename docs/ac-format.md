@@ -50,6 +50,7 @@ A job with `"layouts": "both"` produces:
 | `RAIL_*`, `BUILDING_ROOF_*`, `WATER_*` | visual only (no leading digit) |
 
 - Each physics mesh name matches exactly one KEY. There is deliberately no `WALL` KEY, because defining one is reported to make walls driveable.
+- **Terrain:** `1GRASS_T###` reaches 700 m either side of the road (`mesh_stage.TERRAIN_CORRIDOR_M`), and the world ends there. It's one Delaunay surface over lattices of 4 m to 60 m out, 8 m to 140 m, 16 m to 300 m, then 32 m. The DEM is read 100 m further (`profile_stage.CORRIDOR_M`). Trees and buildings stop at 250 m, so the ground beyond is bare. Until #34 it ended at 300 m, and power towers further out stood on nothing.
 - **Logic dummies:**
   - `AC_AB_START_L/R` and `AC_AB_FINISH_L/R` sit 0.5 m outside each road edge. L is left of the driving direction.
   - The start gate is 50 m from the layout's start. The finish gate leaves a run-off of real road after it: 250 m, or 15% of a short route, never under 50 m. With only 50 m, AC's AI crossed the finish, reached the end of its line, turned round and left the road (M3).

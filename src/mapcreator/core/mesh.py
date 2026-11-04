@@ -9,9 +9,10 @@ are no gaps for a car to fall through:
 - **Skirt:** points beyond the verge that sit on the DEM, so cuttings and
   embankments form by themselves. On the inside of tight bends the skirt is
   shortened before it can fold over itself.
-- **Terrain:** a Delaunay surface over nested 4 / 8 / 16 m lattices, out to
-  the corridor width. Its inner boundary is the skirt's outer edge, vertex
-  for vertex.
+- **Terrain:** a Delaunay surface over nested 4 / 8 / 16 m lattices, and 32 m
+  beyond 300 m, out to the corridor width. One triangulation spans every ring,
+  so they join without seams. Its inner boundary is the skirt's outer edge,
+  vertex for vertex.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ SKIRT_STEPS_M = (2.0, 5.0, 10.0)  # beyond the verge
 CHUNK_M = 200.0
 # Terrain lattice spacing by distance from the centreline: (up to metres, spacing).
 LATTICE = ((60.0, 4.0), (140.0, 8.0), (300.0, 16.0))
+OUTER_LATTICE_M = 32.0  # spacing beyond the last ring, out to the corridor's edge: distant hills, far towers
 LATTICE_BLOCK_M = 512.0  # the lattice is made in blocks this size, skipping those far from the road
 FOLD_FRACTION = 0.8  # skirt may reach at most this share of the local radius on the inside of a bend
 # Road distance over straight distance above which a nearby centreline point is another part of the route.
@@ -206,8 +208,9 @@ def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, road_uv_m: fl
     return out
 
 
-def _lattice(region, ring_xy: np.ndarray, centre_xy: np.ndarray) -> np.ndarray:
-    """Nested lattice points inside `region`, densest near the road, kept clear of the skirt edge.
+def _lattice(region, ring_xy: np.ndarray, centre_xy: np.ndarray, reach_m: float = LATTICE[-1][0]) -> np.ndarray:
+    """Nested lattice points inside `region`, densest near the road, kept clear of the skirt edge. Past the
+    last LATTICE ring, out to `reach_m`, the spacing is OUTER_LATTICE_M.
 
     Distances come from KD-trees over the densely sampled centreline and skirt edge.
     Exact shapely distances to a 13k-vertex line took over 10 minutes for C324.
@@ -219,7 +222,8 @@ def _lattice(region, ring_xy: np.ndarray, centre_xy: np.ndarray) -> np.ndarray:
     minx, miny, maxx, maxy = region.bounds
     pts = []
     lower = -1.0
-    for reach, sp in LATTICE:
+    rings = LATTICE + (((reach_m, OUTER_LATTICE_M),) if reach_m > LATTICE[-1][0] else ())
+    for reach, sp in rings:
         xs = np.arange(np.floor(minx / sp) * sp, maxx + sp, sp)
         ys = np.arange(np.floor(miny / sp) * sp, maxy + sp, sp)
         per = max(int(LATTICE_BLOCK_M // sp), 1)
@@ -276,7 +280,7 @@ def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame,
     centre_xy = np.column_stack([rb.e[:, centre_cols], rb.n[:, centre_cols]])
     region = corridor.difference(footprint)
 
-    lattice = _lattice(region, ring, centre_xy)
+    lattice = _lattice(region, ring, centre_xy, corridor_m)
     lattice_h = dem_sample(lattice[:, 0], lattice[:, 1])
     fill = np.nanmin(ring_h) if np.isfinite(ring_h).any() else 0.0
     lattice_h = np.where(np.isfinite(lattice_h), lattice_h, fill)
