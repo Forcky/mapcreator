@@ -71,7 +71,7 @@ A job with `"layouts": "both"` produces:
   - Runs shorter than 50 m join their neighbours here too, within one surface, so a short single-lane bridge keeps the road's centre line.
 - **Textures:** `u` runs 0 to 1 across the carriageway, so lines and wheel paths sit in the same place whatever the width. `road_marked` and `road_plain` repeat every 12 m along the road; the gravel textures every 24 m, at 512 x 2048 px (about 1 cm a pixel). The gravel has a pair of darker, compacted wheel paths per lane with fewer stones, loose ridges between and beside them, and a few potholes. The one-lane gravel adds a patchy grass strip about 0.3 m wide down the middle and green fringes at the edges, for CSP's Grass FX. The palette is the mean colours of the CC0 photo texture `gravel_ground_01` (Poly Haven), a grey-brown.
 - **Terrain:** `1GRASS_T###` reaches 700 m either side of the road, and the world ends there. It's one Delaunay surface over lattices of 4 m to 60 m out, 8 m to 140 m, 16 m to 300 m, then 32 m. Until #34 it ended at 300 m, and power towers further out stood on nothing.
-  - **Reach:** the distances beside the road are one set (`core.reach`). Trees, buildings and power lines stand within 600 m of the centreline (the scenery reach). The terrain reaches 100 m further, so nothing at the scenery's edge stands at the world's edge, and the DEM is read 100 m beyond that (800 m).
+  - **Reach:** the distances beside the road are one set (`core.reach`). Trees and buildings stand within 600 m of the centreline (the scenery reach). The terrain reaches 100 m further, so nothing at the scenery's edge stands at the world's edge, and the DEM is read 100 m beyond that (800 m). Power-line supports stand anywhere on the terrain, out to 695 m (see "Power lines").
   - Until the scenery reach, trees and buildings stopped at 250 m and the hills beyond them were bare.
 - **Logic dummies:**
   - `AC_AB_START_L/R` and `AC_AB_FINISH_L/R` sit 0.5 m outside each road edge. L is left of the driving direction.
@@ -218,9 +218,9 @@ For the AI line it also checks:
 - **Collision:** supports within 15 m of the road's edge get an invisible `1WALL_POWER_n` mesh: the pole, or the tower's four legs, up to 3-4.5 m.
   - No collider where it would come within 0.3 m of the road, or within 2.5 m of it in the 60 m at either end of the road, where the grid spots stand side by side.
   - The validator checks them as it does the trunk colliders: invisible, clear of the road, and at least 3 m from every spawn.
-- **Reach:** supports stand within the scenery reach, with their whole base within 600 m of the centreline (`core.reach.SCENERY_M`), like the trees and buildings. That's 100 m inside the terrain's edge.
+- **Reach:** supports stand only on the terrain mesh, with their whole base within 5 m of its edge: 695 m of the centreline, since the terrain reaches 700 m (`core.reach.POWER_M`; #34, it was 300 m). That's past the trees and buildings (600 m): towers are tall, few and cheap to draw, so they reach as far as the ground does (the maintainer's decision, 4 Nov).
   - Towers beyond the terrain stood in the sky, their bases floating past the ground's edge (in game, 4 Nov), so a span with a support beyond the reach isn't built.
-  - With the 300 m terrain, Grasstree Hill's two TasNetworks lines were left out. #34 widened the terrain to 700 m and let supports reach 695 m, which brought back 8 towers. At 600 m it keeps 7, 140-589 m out: the one 645 m out goes, with its span.
+  - With the 300 m terrain, Grasstree Hill's two TasNetworks lines were left out. #34 widened the terrain to 700 m, which brought back 8 towers, 140-645 m out.
 - **No wind:** CSP's `[WIND] DYNAMIC_CABLES` (undocumented; CSP's own Laguna Seca config uses it) does act on the wires: its log shows "Preparing cables". But it redraws them as tubes about 8 times thicker than the 3.5 cm mesh. Without it they draw as thin lines and look right (in game, 4 Nov), so `ext_config.ini` leaves it out.
 
 ## Roadside furniture (`core/furniture.py`)

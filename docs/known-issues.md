@@ -91,7 +91,7 @@ The AI line runs out-in-out over the whole road (`core/racing_line.py`, 4 Nov). 
 
 ## Scenery reach (600 m)
 
-Trees, buildings and power lines now stand within 600 m of the road (`core.reach`). Trees and buildings stopped at 250 m, and power-line supports at 695 m. None of it has been seen in game yet.
+Trees and buildings now stand within 600 m of the road (`core.reach`); they stopped at 250 m. Power-line supports still reach the terrain's edge less 5 m (695 m). None of it has been seen in game yet.
 
 - **To check in game** (CSP 0.2.11, GTX 1660 Ti, 1440p):
   - **Do far trees draw?** Past its last LOD (85-267 m out, by model), Tree FX draws each tree as a billboard. The billboard fades out at a distance that CSP's own code sets and doesn't document (`docs/ac-format.md`). If that's under 600 m, the far trees never show.
@@ -102,14 +102,13 @@ Trees, buildings and power lines now stand within 600 m of the road (`core.reach
   - The per-km cap counts only the trees within 250 m. It also never cuts below that 12%, so a forest dense enough to meet the cap thins out evenly to 600 m. Before, the Lyell Highway had no trees at all 150-250 m out.
   - Canopy-model builds keep every crown, so their count grows with the tree-covered area: about 2.4 times the 250 m count (Grasstree Hill: an estimated 84,000, against 34,850).
   - Buildings: Grasstree Hill 718 (was 253), Esperance 347 (was 246).
-  - Grasstree Hill keeps 7 of its 8 towers (see "Power lines").
   - Build: the terrain and the DEM read don't change. KN5s grow under 3% (buildings), zips 0.3-1.5 MB and `trees.txt` 32-44%. Build time and peak memory barely move (Lyell Highway: 104 → 109 s, 1.85 → 1.86 GiB, on a laptop).
 
 ## Power lines
 
 - **Answered in game (4 Nov, Grasstree Hill, with towers then allowed 700 m out):**
   - The wires sag sensibly and cross the road 22-57 m above it.
-  - Towers beyond the 300 m terrain stood in the sky. Supports are now built only on the terrain, and since #34 that reaches 700 m, so Grasstree Hill's two lines are back: 8 towers, the farthest 650 m out. Supports now stand within the 600 m scenery reach, with the trees, so that one goes and 7 stay.
+  - Towers beyond the 300 m terrain stood in the sky. Supports are now built only on the terrain, and since #34 that reaches 700 m, so Grasstree Hill's two lines are back: 8 towers, the farthest 650 m out.
   - CSP's `[WIND] DYNAMIC_CABLES` redrew the wires about 8 times thicker, so it isn't used.
 - **Still to check in game:**
   - towers turned along their line, seen from near;

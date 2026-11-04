@@ -1,6 +1,7 @@
 """Stage 4b: trees, buildings and power lines around the road, as a second scene the track stage merges.
 
-All three stand within the scenery reach of the centreline (`core.reach`, 600 m).
+Trees and buildings stand within the scenery reach of the centreline (`core.reach`, 600 m), and power-line
+supports anywhere on the terrain (695 m).
 Trees come from the region's individual-crown canopy model when one is
 configured (Tasmania's 2 m CHM mirror), and then every crown in the corridor is
 kept, at its own height. Otherwise they're made-up positions in ESA WorldCover
@@ -166,7 +167,7 @@ def _power(region, settings: Settings, xy: np.ndarray, half: float, dem, frame, 
     if region.power is None:
         return [], {"source": "none"}
     source = f"{region.power_attribution.dataset}, {region.power_attribution.holder}"
-    reach_m = reach.SCENERY_M  # with the trees and buildings, well inside the terrain's edge
+    reach_m = reach.POWER_M  # supports stand on the terrain mesh, past the trees
     bbox = shapely.LineString(xy).buffer(reach_m).bounds
     try:
         lines = region.power(bbox, settings)

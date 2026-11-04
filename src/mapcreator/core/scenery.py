@@ -1,6 +1,6 @@
 """Scenery: where the trees stand, and buildings as extruded footprints.
 
-Trees and buildings stand within the scenery reach (`core.reach`), as power-line supports do.
+Trees and buildings stand within the scenery reach (`core.reach`).
 
 Trees:
 - Chosen here (positions and heights; made-up ones thinned with distance from the road and, near it, to a

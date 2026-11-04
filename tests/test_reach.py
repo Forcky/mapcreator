@@ -13,14 +13,16 @@ from mapcreator.pipeline import mesh_stage, profile_stage, scenery_stage
 CENTRE = np.column_stack([np.linspace(500_000, 501_000, 1001), np.full(1001, 5_200_000.0)])
 
 
-def test_trees_buildings_and_power_share_one_reach_inside_the_terrain_and_the_dem():
+def test_trees_and_buildings_share_one_reach_inside_the_terrain_and_the_dem():
     assert reach.SCENERY_M == 600.0
     assert scenery.TREE_REACH_M == scenery.BUILDING_REACH_M == reach.SCENERY_M
     # Nothing at the scenery's edge stands at the world's edge, and every terrain point has DEM under it.
     assert mesh_stage.TERRAIN_CORRIDOR_M == reach.TERRAIN_M >= reach.SCENERY_M + 100.0
     assert profile_stage.CORRIDOR_M == reach.DEM_M >= reach.TERRAIN_M + 100.0
-    # At 600 m the terrain and the DEM read stay where they were (#34): only the scenery moves out.
-    assert (reach.TERRAIN_M, reach.DEM_M) == (700.0, 800.0)
+    # Power-line supports stand anywhere on the terrain, their whole base 5 m inside its edge: past the trees.
+    assert reach.POWER_M == reach.TERRAIN_M - 5.0
+    # At 600 m the terrain, power and the DEM read stay where they were (#34): only trees and buildings move out.
+    assert (reach.TERRAIN_M, reach.POWER_M, reach.DEM_M) == (700.0, 695.0, 800.0)
 
 
 def test_made_up_tree_bands_keep_the_near_road_as_it_was_and_thin_out_to_the_reach():
@@ -75,7 +77,7 @@ def test_buildings_stand_within_the_reach():
     assert [round(p.bounds[1] - 5_200_000) for p in kept] == [30, 560]
 
 
-def test_power_line_supports_reach_as_far_as_the_trees(tmp_path, monkeypatch):
+def test_power_line_supports_reach_the_terrains_edge_past_the_trees(tmp_path, monkeypatch):
     seen = {}
 
     class Stop(Exception):
@@ -94,6 +96,22 @@ def test_power_line_supports_reach_as_far_as_the_trees(tmp_path, monkeypatch):
     region = SimpleNamespace(power=fake_lines, power_attribution=attribution)
     with pytest.raises(Stop):
         scenery_stage._power(region, None, CENTRE, 3.0, None, None, tmp_path, [], None, None)
-    assert seen["reach"] == reach.SCENERY_M
+    assert seen["reach"] == reach.POWER_M == 695.0
     # The lines are asked for over the whole reach.
-    assert seen["bbox"][1] <= 5_200_000 - reach.SCENERY_M and seen["bbox"][3] >= 5_200_000 + reach.SCENERY_M
+    assert seen["bbox"][1] <= 5_200_000 - reach.POWER_M and seen["bbox"][3] >= 5_200_000 + reach.POWER_M
+
+
+def test_grasstree_hills_645_m_tower_stands():
+    """Grasstree Hill's farthest TasNetworks tower stands 645 m from the road (its other seven 140-589 m). Supports
+    stopping with the trees at 600 m would drop it and its span; at the terrain's edge less 5 m it stays."""
+    flat = lambda x, y: np.full(np.shape(x), 100.0)  # noqa: E731
+    line = power.Line(np.array([[500_500.0, 5_200_000 + y] for y in (-1200.0, -645.0, -140.0, 232.0, 589.0)]),
+                      power.TRANSMISSION, 220.0, 2, "gth")
+    p = power.plan([line], CENTRE, 3.2, reach_m=reach.POWER_M)
+    built, _ = power.meshes(p, flat, mesh_stage.frame_for(CENTRE, np.zeros(len(CENTRE))),
+                            np.array([s.distance_m - 3.2 for s in p.supports]), np.zeros(len(p.supports), bool))
+    assert sorted(round(s.distance_m) for s in p.supports) == [140, 232, 589, 645]  # not the one 1,200 m out
+    assert len(p.spans) == 3 and built
+    # With the trees' reach, the 645 m tower and its span would go.
+    narrow = power.plan([line], CENTRE, 3.2, reach_m=reach.SCENERY_M)
+    assert sorted(round(s.distance_m) for s in narrow.supports) == [140, 232, 589]
