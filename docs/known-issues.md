@@ -40,7 +40,8 @@ Answered at M4 (AI opponents; Grasstree Hill, both layouts, and Brinktop Road; 8
   - Reverse: all 8 finished within 6 s of each other.
   - Brinktop Road: all 8 finished. Two left the road briefly mid-race and rejoined.
 - **Run-off:** every car that reached the end came to rest on the road, 56–78 m before the end of the line, with no tyre off.
-  - Grasstree Hill: 6 cars forward and 8 reverse, with no damage. Up to four stood there at once, the closest 2 m apart side by side.
+  - Grasstree Hill, in practice: 6 cars forward and 8 reverse, with no damage. Up to four stood there at once, the closest 2 m apart side by side.
+  - Grasstree Hill, a later 8-car race (forward): six came to rest in the run-off before the reset. Two of them touched (1.3 each), as below.
   - Brinktop Road: 6 cars stood there at once, 3–6 m apart. One crept into the one ahead at about 1 km/h, with slight damage to both (1.3), so not quite no contact.
   - Why they creep: the cars behind the first one stop short of the 0 hint, where the pace is still 0.2, and AC's own car-following holds them there.
   - No pile-up.
