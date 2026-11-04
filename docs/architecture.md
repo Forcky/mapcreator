@@ -13,7 +13,7 @@ section   03_section   sealed or unsealed (OSM surface, short runs merged), widt
                        narrow → class default, narrower on gravel; +15% / +30%), camber from the DEM (limited by
                        width), crown
 mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, adaptive terrain corridor, guard rails, AC dummies
-scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), trunk colliders, buildings from footprints
+scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), typed by TASVEG in Tasmania, trunk colliders, buildings from footprints
 track     05_track     numpy KN5 writer, DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,
                        centreline.geojson (ODbL), the zip
 validate  06_validate  static checks (report.json); the in-game harness is for development only
