@@ -25,7 +25,8 @@ from scipy.ndimage import minimum_filter1d, uniform_filter1d
 from scipy.spatial import Delaunay, cKDTree
 
 from mapcreator.core.scene import MAX_VERTICES, LocalFrame, Mesh
-from mapcreator.core.textures import ROAD_TILE_M
+from mapcreator.core.section import STYLES, is_unsealed
+from mapcreator.core.textures import GRAVEL_TILE_M, ROAD_TILE_M
 
 VERGE_M = 2.0
 VERGE_FALL = 0.06
@@ -183,16 +184,43 @@ def _mesh(name, material, pos, tri, uv) -> Mesh:
                 uv.astype(np.float32), tri.astype(np.int64))
 
 
-def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, road_uv_m: float = ROAD_TILE_M,
+# The texture of each road material (`section.STYLES`).
+ROAD_TEXTURE = {"road": "road_marked", "road_plain": "road_plain", "gravel": "gravel_road",
+                "gravel_narrow": "gravel_road_narrow"}
+
+
+def road_chunks(style: np.ndarray, per: int) -> list[tuple[int, int]]:
+    """(first row, last row) of each road chunk: a new chunk wherever the style changes, and every `per` rows
+    within one style. Neighbouring chunks share their boundary row, so the road has no gap and no step there.
+
+    The quad between rows i-1 and i belongs to the chunk ending at row i, so a change of style at row i (style[i]
+    differs from style[i-1]) starts a chunk at row i. A road of one style gets the same chunks as before styles.
+    """
+    rows = len(style)
+    cuts = [0] + [i for i in range(1, rows - 1) if style[i] != style[i - 1]] + [rows - 1]
+    out = []
+    for a, b in zip(cuts, cuts[1:]):
+        out += [(r0, min(r0 + per, b)) for r0 in range(a, b, per)]
+    return out
+
+
+def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, style: np.ndarray | None = None,
+                  road_uv_m: float = ROAD_TILE_M, gravel_uv_m: float = GRAVEL_TILE_M,
                   grass_uv_m: float = 6.0) -> list[Mesh]:
-    """Road chunks named 1ROAD_###, verge/skirt chunks named 1GRASS_V###."""
+    """Road chunks named 1ROAD_### (sealed) or 1GRAVEL_### (unsealed), verge/skirt chunks named 1GRASS_V###.
+
+    `style` is the section's style code per station (`section.STYLES`); without it the road is all sealed and
+    marked. The chunk number ### runs on across both surfaces, so every name is unique.
+    """
     rows = len(s)
     step = s[1] - s[0] if rows > 1 else 1.0
     per = max(int(round(CHUNK_M / step)), 2)
+    style = np.zeros(rows, dtype=np.int8) if style is None else np.asarray(style)
     out: list[Mesh] = []
-    for k, r0 in enumerate(range(0, rows - 1, per)):
-        r1 = min(r0 + per, rows - 1) + 1  # include the shared boundary row
-        sl = slice(r0, r1)
+    for k, (r0, last) in enumerate(road_chunks(style, per)):
+        sl = slice(r0, last + 1)  # include the shared boundary row
+        material = STYLES[int(style[r0])]
+        gravel = bool(is_unsealed(style[r0]))
         for kind, cols in (("road", rb.road_cols), ("verge_l", rb.left_cols), ("verge_r", rb.right_cols)):
             e, n, h = rb.e[sl, cols], rb.n[sl, cols], rb.h[sl, cols]
             nr, nc = e.shape
@@ -200,8 +228,9 @@ def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, road_uv_m: fl
             tri = _grid_triangles(nr, nc)
             if kind == "road":
                 u = np.tile(np.linspace(0, 1, nc), nr)
-                v = np.repeat(s[sl] / road_uv_m, nc)
-                out.append(_mesh(f"1ROAD_{k:03d}", "road", pos, tri, np.column_stack([u, v])))
+                v = np.repeat(s[sl] / (gravel_uv_m if gravel else road_uv_m), nc)
+                name = f"{'1GRAVEL' if gravel else '1ROAD'}_{k:03d}"
+                out.append(_mesh(name, material, pos, tri, np.column_stack([u, v])))
             else:
                 uv = np.column_stack([pos[:, 0], pos[:, 2]]) / grass_uv_m
                 out.append(_mesh(f"1GRASS_V{k:03d}{kind[-1].upper()}", "grass", pos, tri, uv))

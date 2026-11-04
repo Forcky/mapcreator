@@ -1,0 +1,9 @@
+{
+  "track_id": "lower_swamp_road",
+  "waypoints": [
+    {"lon": 147.0427, "lat": -42.8298},
+    {"lon": 147.0040, "lat": -42.8598}
+  ],
+  "width": "as_mapped",
+  "layouts": "both"
+}

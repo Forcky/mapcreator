@@ -103,10 +103,11 @@ Taken from reading CM's source and CSP's docs (Nov 2026). None of it has been tr
   - `length` must carry a unit ("12.80 km"); CM ignores a bare number.
   - CM also warns when the preview, outline or map is missing. We ship all of them.
 - **`extension/ext_config.ini`:**
-  - CSP's Grass FX grows grass on our grass and terrain materials, with the road occluding it.
+  - CSP's Grass FX grows grass on our grass and terrain materials, with the road occluding it. On a one-lane gravel road it also grows on the grass strip.
   - Rain FX puddles and soaks the road.
+  - On a track with gravel, `[TYRES_FX]` sets the dust and tyre-dirt colours from our textures.
   - Vanilla AC ignores it.
-- **`surfaces.ini`:** GRASS carries `_EXT_SURFACE_TYPE=GRASS` for CSP.
+- **`surfaces.ini`:** GRASS carries `_EXT_SURFACE_TYPE=GRASS` for CSP. A track with unsealed road adds GRAVEL (`1GRAVEL_###` meshes) with `_EXT_SURFACE_TYPE=GRAVEL`; see `docs/ac-format.md`.
 - **Public install link:** `acmanager://install?url=<encoded zip URL>`. CM always asks the user to confirm.
 - **Download endpoint:**
   - `application/zip`

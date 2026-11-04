@@ -9,7 +9,8 @@ job.json (waypoints, width option, layouts)
    │
 route     01_route     snapped OSM centreline and its ways' tags (roads from the local OSM index)
 profile   02_profile   DEM sampling, smoothing with a grade-change limit and grade cap, bridge dips filled
-section   03_section   width (OSM width → lanes × lane width → class default; +15% / +30%), camber from the DEM, crown
+section   03_section   sealed or unsealed (OSM surface, short runs merged), width (OSM width → lanes × lane width →
+                       narrow → class default, narrower on gravel; +15% / +30%), camber from the DEM, crown
 mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, adaptive terrain corridor, guard rails, AC dummies
 scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), trunk colliders, buildings from footprints
 track     05_track     numpy KN5 writer, DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,

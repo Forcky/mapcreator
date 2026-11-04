@@ -17,7 +17,7 @@ A job with `"layouts": "both"` produces:
   ui/forward/{ui_track.json, preview.png, outline.png}
   ui/reverse/(same)
   ATTRIBUTION.txt
-  centreline.geojson             ODbL: the centreline, heights and widths the track was built from
+  centreline.geojson             ODbL: the centreline, heights, widths and surface runs the track was built from
 ```
 
 - **Single layout:** a job with `forward` or `reverse` gets `<track_id>.kn5` plus `data/`, `ai/`, `map.png` and `ui/` at the track root, with no `models_*.ini`.
@@ -41,15 +41,33 @@ A job with `"layouts": "both"` produces:
 
 ## Names
 
-| Mesh | Surface (`surfaces.ini` KEY) |
-|---|---|
-| `1ROAD_###` | ROAD |
-| `1GRASS_V###L/R` (verge and skirt) | GRASS |
-| `1GRASS_T###` (terrain) | GRASS |
-| `1WALL_RAIL_L/R###`, `1WALL_END_START/FINISH` and `1WALL_TRUNK_###` (invisible, `isRenderable` 0), and `1WALL_BUILDINGS` | solid barrier (no KEY: any physics mesh named WALL) |
-| `RAIL_*`, `BUILDING_ROOF_*`, `WATER_*` | visual only (no leading digit) |
+| Mesh | Surface (`surfaces.ini` KEY) | Material: texture |
+|---|---|---|
+| `1ROAD_###` (sealed road) | ROAD | `road`: `road_marked` (edge lines and a dashed centre line), or `road_plain`: `road_plain` (edge lines only) on a single-lane seal |
+| `1GRAVEL_###` (unsealed road) | GRAVEL | `gravel`: `gravel_road` (two lanes), or `gravel_narrow`: `gravel_road_narrow` (one lane, with a grass strip) |
+| `1GRASS_V###L/R` (verge and skirt) | GRASS | `grass` |
+| `1GRASS_T###` (terrain) | GRASS | `terrain`: `ground` |
+| `1WALL_RAIL_L/R###`, `1WALL_END_START/FINISH`, `1WALL_TRUNK_###` and `1WALL_POWER_n` (invisible, `isRenderable` 0), and `1WALL_BUILDINGS` | solid barrier (no KEY: any physics mesh named WALL) | |
+| `RAIL_*`, `BUILDING_ROOF_*`, `WATER_*`, `POWER_*`, `FURNITURE_*` | visual only (no leading digit) | |
 
-- Each physics mesh name matches exactly one KEY. There is deliberately no `WALL` KEY, because defining one is reported to make walls driveable.
+- Each physics mesh name matches exactly one KEY. There is deliberately no `WALL` KEY, because defining one is reported to make walls driveable. No KEY contains another (`GRAVEL` overlaps neither `ROAD` nor `GRASS`), and the validator checks both rules, and that the layout's `surfaces.ini` defines the KEY of every physics mesh.
+- **Road chunks:** the road is cut into chunks of 200 m, and also wherever its look changes (sealed or unsealed, one lane or two). Neighbouring chunks share their boundary row of vertices, so there's no gap and no step where the seal ends. The chunk number `###` runs on across `1ROAD` and `1GRAVEL`, and each chunk's verges carry the same number.
+- **Where the road is unsealed** comes from OSM's `surface` (`core/section.py`):
+  - sealed: `asphalt`, `paved`, `concrete` (and `concrete:*`), `chipseal`, `sealed`, `paving_stones`, `sett`, `metal`;
+  - unsealed: `unpaved`, `gravel`, `fine_gravel`, `compacted`, `pebblestone`, `dirt`, `earth`, `ground`, `mud`, `sand`, `rock`, `grass`, `woodchips`;
+  - anything else, or no tag, takes the class of the longer stretch beside it (with nothing tagged at all: unsealed on `highway=track`, sealed otherwise);
+  - then any stretch shorter than 50 m takes its longer neighbour's class, shortest first, so a 10 m culvert or an untagged bridge doesn't make a sliver. Bridges get no exception.
+- **Cross-section:** the carriageway carries a crown of 2.5% on a seal and 4.5% on gravel (NATSPEC AUS-SPEC 0052, unsealed rural roads: "more than 4%"). Width and crown both change gradually over 60 m.
+  - Width comes from the `width` tag (raised to 3 m if under it), else `lanes`, else `narrow=yes` (4.5 m), else the class default. `lanes=1` is 4.0 m on either surface.
+  - Sealed class defaults: twice the class lane width (secondary 6.4, tertiary 6.0, unclassified and residential 5.8 m).
+  - Unsealed class defaults: trunk and primary 6.5, secondary 6.0, tertiary 5.5, unclassified, residential and road 5.0, track 4.0 m; a tagged lane is 3.0 m. AUS-SPEC 0052 asks for at least a 6.0 m formation, verges included, for a single-lane unsealed road and 7.5 m for two lanes, and our road gets 2 m of grass verge either side. These are guideline minima, to be calibrated against measured roads.
+  - The job's width option (+15% or +30%) multiplies all of them.
+- **Markings:**
+  - A two-lane seal has edge lines and a dashed centre line (`road_marked`).
+  - A single-lane seal (`lanes=1` or `lane_markings=no`) has no centre line, and keeps its edge lines (`road_plain`). Most Tasmanian single-lane seals have neither.
+  - Gravel has no markings. A gravel run is one lane (`gravel_narrow`) with `lanes=1` or `narrow=yes`, or with no `lanes` tag when it's under 5.5 m wide as mapped (so unclassified and residential gravel at 5.0 m is one lane, and tertiary at 5.5 m is two).
+  - Runs shorter than 50 m join their neighbours here too, within one surface, so a short single-lane bridge keeps the road's centre line.
+- **Textures:** `u` runs 0 to 1 across the carriageway, so lines and wheel paths sit in the same place whatever the width. `road_marked` and `road_plain` repeat every 12 m along the road; the gravel textures every 24 m, at 512 x 2048 px (about 1 cm a pixel). The gravel has a pair of darker, compacted wheel paths per lane with fewer stones, loose ridges between and beside them, and a few potholes. The one-lane gravel adds a patchy grass strip about 0.3 m wide down the middle and green fringes at the edges, for CSP's Grass FX. The palette is the mean colours of the CC0 photo texture `gravel_ground_01` (Poly Haven), a grey-brown.
 - **Terrain:** `1GRASS_T###` reaches 700 m either side of the road (`mesh_stage.TERRAIN_CORRIDOR_M`), and the world ends there. It's one Delaunay surface over lattices of 4 m to 60 m out, 8 m to 140 m, 16 m to 300 m, then 32 m. The DEM is read 100 m further (`profile_stage.CORRIDOR_M`). Trees and buildings stop at 250 m, so the ground beyond is bare. Until #34 it ended at 300 m, and power towers further out stood on nothing.
 - **Logic dummies:**
   - `AC_AB_START_L/R` and `AC_AB_FINISH_L/R` sit 0.5 m outside each road edge. L is left of the driving direction.
@@ -58,15 +76,60 @@ A job with `"layouts": "both"` produces:
     - Spot 0 is on the centreline 8 m before the start gate.
     - Behind it come pairs 8 m apart, 2 m either side of the centreline, where both half-widths are at least 3 m. Otherwise single file.
     - Spots go no closer than 8 m to the road's start.
+    - So a road under 6.0 m wide at the start (every `lanes=1` road, and unsealed roads below secondary) gets 5 spots in single file, at 42, 34, 26, 18 and 10 m from its start, and `pitboxes` is 5: four AI opponents. Eight in single file would need the start gate at least 72 m in.
   - `AC_HOTLAP_START_0` sits 30 m before the start gate.
   - Spawns are 0.3 m above the road and face the driving direction. Confirmed in game at M3: the car lands on all four wheels, facing along the road.
 - **Pits:** `pitboxes` in `ui_track.json` must equal the number of `AC_PIT_n` dummies (up to 8). Content Manager offers that many cars less one as AI opponents, so with one pit box there were none (M3).
+- **Tags:** `ui_track.json` carries `point to point`, `real road`, the country and the region, plus `gravel` on a track with any unsealed road and `rally` when more than half of it is unsealed. The description says how much is unsealed ("5.2 km of 6.8 km unsealed."). How CSP decides a track is a rally track (for its Rally Stage mode, and for picking street tyres) isn't documented: it may be these tags or the surfaces. **To confirm in game.**
+
+## Surfaces (`data/surfaces.ini`)
+
+`ROAD` (friction 0.98) and `GRASS` (0.75, `grass.wav`, dirt 1, not a valid track, `_EXT_SURFACE_TYPE=GRASS`) on every track, and `GRAVEL` as `[SURFACE_2]` only on a track with unsealed road:
+
+```ini
+[SURFACE_2]
+KEY=GRAVEL
+FRICTION=0.88
+DAMPING=0.01
+WAV=gravel.wav
+WAV_PITCH=0
+FF_EFFECT=NULL
+DIRT_ADDITIVE=0.8
+IS_VALID_TRACK=1
+BLACK_FLAG_TIME=0
+SIN_HEIGHT=0.01
+SIN_LENGTH=0.5
+IS_PITLANE=0
+VIBRATION_GAIN=0.1
+VIBRATION_LENGTH=0.35
+_EXT_SURFACE_TYPE=GRAVEL
+_EXT_SURFACE_TYPE_MODIFIER=REGULAR
+_EXT_PERLIN_NOISE=1
+_EXT_PERLIN_OCTAVES=3
+_EXT_PERLIN_PERSISTENCE=0.5
+```
+
+- **One KEY for every unsealed `surface` value** in v1. `unpaved` and `gravel` are 92% of the unsealed length in the Derwent Valley and the Huon. A second, looser `DIRT` key for `dirt`, `earth`, `ground`, `mud` and `sand` can follow if testing shows the difference is worth it.
+- **Why these numbers.** Kunos's own loose surfaces are run-off, built to slow a car down: friction 0.7-0.8 with dirt 1 (Laguna Seca's and Zandvoort's `GRAVEL`, Black Cat County's `OFF`, as copied in third-party server repositories). People building gravel road stages settle on friction 0.87-0.90, damping 0-0.02 and dirt 0.8-1 (assettocorsamods.net threads "new CSP +Gravel" and "How to use surfaces in surfaces.ini", 2019-2024). This is a road to drive at pace, so it sits in the second range:
+  - Friction 0.88 is under the 0.89 above which one modder found gravel made the tyres squeal, and under 0.9, below which CSP 0.2.5's ParticlesFX makes "dusty tracks". Dirt on the tyres takes off about another 20% (one community skidpad test).
+  - Dirt additive 0.8: dirt builds up on the tyres, progressively. At 0.7 or more, CSP's SurfacesFX treats the surface as loose even without the type (CSP's surface-tweaks page).
+  - `gravel.wav` ships with AC (Black Cat County uses it). Never `grass.wav` on a road: CSP draws the dirt of a `grass.wav` surface as grass (CSP's dirt-on-tyres page).
+  - `SIN_HEIGHT` 0.01 m and `SIN_LENGTH` 0.5 (it's inverse: 2 m) make a 1 cm ripple, drawn by CSP as Perlin noise (`_EXT_PERLIN_NOISE=1`) instead of a regular washboard.
+  - Vibration sits between Black Cat County's `OFF` (0.05 / 0.35) and Laguna Seca's `GRAVEL` (0.5 / 0.6).
+  - It's a valid track surface: it's the road, not a cut.
+- **CSP's keys** (`_EXT_*`, cup.acstuff.club/docs/csp/tracks/surface-tweaks) say what the surface is for CSP's SurfacesFX, which a player turns on (offline only; off in CSP's shipped config). Vanilla AC ignores them, so the plain numbers above must make a good gravel road on their own.
+- **No `WAV_PITCH=extended-0`.** That switches on CSP's extended track physics, on which vanilla AC crashes by design, and none of it is needed here.
+- **All of it is to confirm in game** (`docs/known-issues.md`).
 
 ## Custom Shaders Patch (`extension/`)
 
 Vanilla AC ignores this folder. `ext_config.ini` holds:
 
 - **Grass FX and Rain FX:** grass grows on the grass and terrain materials, and the road gets puddles.
+  - The seal (`road`, `road_plain`) occludes grass, gets puddles and soaks.
+  - Gravel gets puddles too and is rough (no reflections, only darker when wet). One-lane gravel (`gravel_narrow`) is also a grass material, so Grass FX grows blades on its grass strip (CSP's default colour mask grows grass only on green, mid-dark pixels); two-lane gravel occludes grass instead.
+  - No tiling fix (`ksPerPixel_tilingfix`) on the gravel: it shifts the texture at random and would break the wheel paths.
+- **`[TYRES_FX]`**, only on a track with gravel: the colours of dust and of dirt on the tyres, as three pairs (`DIRT_COLOR_A/B` from the gravel texture, `GRASS_COLOR_A/B` from the grass, `SOIL_COLOR_A/B` from the terrain's bare earth). A is the texture's mean colour and B 0.55 of it. A track's own section switches CSP's generic one (`config/tracks/generic/generic.ini`) off entirely (CSP 0.2.4), so ours carries all three pairs and the generic's four gains (`DIRT_GAIN`, `DIRT_FADE_GAIN`, `GRASS_GAIN`, `GRASS_FADE_GAIN`) at 1.0.
 - **Water:** `[INCLUDE: common/materials_track.ini]` and `[Material_Water]` give the `water` material CSP's water shader, as `LAKE` or `SEA`. Vanilla AC shows a flat, glossy blue-green surface.
 - **Tree FX:** `[TREES]` with `LIST_0=trees/trees.txt` and `SURFACE_MATERIALS=terrain, grass`, so CSP stands each tree on the ground. These are the track's only trees: the KN5 has none, so vanilla AC shows none.
   - Tree FX trees have no physics, so the KN5 gets an invisible collider for each trunk a car can reach (`1WALL_TRUNK_###`, `scenery.trunk_colliders`). A trunk qualifies if it stands within 20 m of the road edge and is over 10 cm across.
@@ -101,12 +164,13 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
   - Several cars queue behind the first one stopped. That leaves them short of the 0 hint, where the pace is still 0.2, so only AC's car-following holds them, creeping at about 1 km/h. In two of the four multi-car runs that reached the run-off (Brinktop Road, and a later race on Grasstree Hill), one crept into the car ahead (slight damage to both, 1.3). A community tutorial on AI lines gives the same advice: a 0 hint near the end of a point-to-point line, which should end after the last timing gate (Overtake.gg, "Tutorial on making 2-way traffic (or other) AI lines and layouts").
   - Earlier: with a single hint of 0.5 and the line running to the road's end, the AI reached the end wall at about 45 km/h, and AC put it back at the start (3 Nov).
   - Kunos's own point-to-point track, `ks_drag`, sidesteps the problem: one straight AI line runs 2,469 m, past every layout's finish (`AC_OPEN_FINISH_L/R`, 204 m to 2,004 m along it), so even the 2,000 m layout leaves 465 m of line after its finish.
+- **No hints on gravel** yet: AC's AI sets its own pace from the surface it's on. If it overdrives the gravel in testing, a hint of about 0.8 over the unsealed stretches is the next step.
 - **Placement:** points every 1 m along the centreline, 0.4 m above the road. Points on the surface have crashed the game in another generator.
 - **Speed:** grip-limited, `v = sqrt(μ g R)` with μ = 1.05, capped at 130 km/h. It then gets a forward pass for acceleration and a backward pass for braking, both adjusted for grade. AC's AI finished the forward layout at M3, but it ignores this speed and set its own, up to 214 km/h in an Abarth 500.
 
 ## Validation
 
-`mapcreator validate` reads every file back and checks the rules above, including measured heights of spawns and AI points against the actual road triangles. The in-game checks (does it load, are the wheels on the ground, can the AI drive it) live in `harness/`.
+`mapcreator validate` reads every file back and checks the rules above, including measured heights of spawns and AI points against the actual road triangles. The road is every `1ROAD` and `1GRAVEL` mesh: spawns, the AI line, and the tree and power colliders' clearance are all measured against both. The in-game checks (does it load, are the wheels on the ground, can the AI drive it) live in `harness/`.
 
 ## Power lines (`core/power.py`)
 

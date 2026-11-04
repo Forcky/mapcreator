@@ -21,7 +21,8 @@ class RouteTooLong(osm_graph.RouteError):
     """A user-facing error: the route between the waypoints is longer than the job allows."""
 
 
-KEEP_TAGS = ("highway", "ref", "name", "lanes", "width", "surface", "oneway", "maxspeed", "bridge", "tunnel", "layer")
+KEEP_TAGS = ("highway", "ref", "name", "lanes", "width", "surface", "oneway", "maxspeed", "bridge", "tunnel", "layer",
+             "narrow", "lane_markings")
 
 
 def _bbox(job: Job, margin_deg: float) -> tuple[float, float, float, float]:

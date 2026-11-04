@@ -24,6 +24,9 @@ STAGE = "05_track"
 # Material values for the base surfaces follow a generator whose tracks pass an in-game load test.
 MATERIAL_PROPS = {
     "road": {"ksAmbient": 0.35, "ksDiffuse": 0.42, "ksSpecular": 0.06, "ksSpecularEXP": 28.0},
+    # Loose stone and fines: about as matte as the grass, a little less than the asphalt's sheen. road_plain and
+    # gravel_narrow take their base material's values (the name before the underscore).
+    "gravel": {"ksAmbient": 0.36, "ksDiffuse": 0.44, "ksSpecular": 0.02, "ksSpecularEXP": 15.0},
     "grass": {"ksAmbient": 0.36, "ksDiffuse": 0.44, "ksSpecular": 0.005, "ksSpecularEXP": 18.0},
     "terrain": {"ksAmbient": 0.36, "ksDiffuse": 0.44, "ksSpecular": 0.005, "ksSpecularEXP": 18.0},
     "walls": {"ksAmbient": 0.4, "ksDiffuse": 0.6, "ksSpecular": 0.05, "ksSpecularEXP": 10.0},
@@ -162,9 +165,14 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     tree_list = _write_tree_fx(work, ext)
 
     width = sec["half_left"] + sec["half_right"]
+    has_gravel = any(m.name.startswith("1GRAVEL") for m in scene.meshes)
+    unsealed_m = _unsealed_m(c["s"], sec)
+    surface_tags = package.surface_tags(unsealed_m, float(c["s"][-1] - c["s"][0]))
+    unsealed_note = (f" {unsealed_m / 1000:.1f} km of {(c['s'][-1] - c['s'][0]) / 1000:.1f} km unsealed."
+                     if unsealed_m > 0 else "")
     layouts = layouts_for(job.layouts.value)
     multi = len(layouts) > 1
-    summary = {"title": title, "layouts": {}}
+    summary = {"title": title, "unsealed_m": round(unsealed_m, 1), "layouts": {}}
     for lay in layouts:
         road = RoadModel.from_arrays(c["s"], c["xy"], c["z"], c["heading"], c["curvature"], c["grade"],
                                      sec["half_left"], sec["half_right"], sec["slope_left"], sec["slope_right"],
@@ -196,7 +204,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         map_png.save(layout_dir / "map.png")
         data = layout_dir / "data"
         _write_text(data / "map.ini", map_ini, encoding="ascii")
-        _write_text(data / "surfaces.ini", package.surfaces_ini(), encoding="ascii")
+        _write_text(data / "surfaces.ini", package.surfaces_ini(gravel=has_gravel), encoding="ascii")
         _write_text(data / "lighting.ini", package.lighting_ini(), encoding="ascii")
         _write_text(data / "groove.ini", package.groove_ini(), encoding="ascii")
         _write_text(data / "crew.ini", package.crew_ini(), encoding="ascii")
@@ -211,14 +219,14 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         lon, lat = lonlat.transform(road.e[mid], road.n[mid])
         country, city = region.country, region.state
         description = (
-            f"{title}, {direction}bound, generated from open data by mapcreator.{tight} "
+            f"{title}, {direction}bound, generated from open data by mapcreator.{unsealed_note}{tight} "
             + " ".join(a.line().rstrip(".") + "." for a in attributions)
             + " Requires Custom Shaders Patch (CSP)."
             + " Not affiliated with or endorsed by Kunos Simulazioni."
         )
         _write_text(ui_dir / "ui_track.json", package.ui_track_json(
             name=name, description=description,
-            tags=["point to point", "real road", country.lower(), region.name.lower()],
+            tags=["point to point", "real road", country.lower(), region.name.lower()] + surface_tags,
             lat=float(lat), lon=float(lon), country=country, city=city, length_m=road.length,
             width_m=(float(width.min()), float(width.max())), run="point-to-point", version=__version__,
             year=dt.date.today().year, priority=(1 if multi and not lay.reverse else None), pitboxes=pits),
@@ -242,7 +250,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     summary["tree_fx_trees"] = tree_list[1] if tree_list else 0
     _write_text(ext / "ext_config.ini", package.ext_config_ini(
         grass_materials=[n for n in ("grass", "terrain") if n in mat_index],
-        road_materials=["road"], version=__version__,
+        road_materials=[n for n in ("road", "road_plain") if n in mat_index], version=__version__,
+        gravel_materials=[n for n in ("gravel", "gravel_narrow") if n in mat_index],
+        grassy_gravel=[n for n in ("gravel_narrow",) if n in mat_index],
+        dirt_colours=textures.tyre_dirt_colours() if has_gravel else None,
         water_materials=["water"] if "water" in mat_index else [], water_type=water_type or "LAKE",
         tree_list=tree_list[0] if tree_list else None,
         tree_surfaces=[n for n in ("terrain", "grass") if n in mat_index]),
@@ -259,6 +270,23 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     summary["zip_mb"] = round(zip_path.stat().st_size / 1e6, 1)
     summary["kn5_mb"] = round(sum(p.stat().st_size for p in track_dir.glob("*.kn5")) / 1e6, 1)
     return summary
+
+
+def _unsealed(sec) -> np.ndarray:
+    """Whether each station is unsealed; all sealed for a section stage from before surfaces."""
+    return sec["unsealed"].astype(bool) if "unsealed" in sec else np.zeros(len(sec["s"]), dtype=bool)
+
+
+def _unsealed_m(s: np.ndarray, sec) -> float:
+    return float(np.diff(s)[_unsealed(sec)[:-1]].sum())
+
+
+def surface_runs(s: np.ndarray, unsealed: np.ndarray) -> list[dict]:
+    """Stretches of one surface class along the road, for centreline.geojson."""
+    cuts = [0, *np.flatnonzero(np.diff(unsealed.astype(np.int8))) + 1, len(s) - 1]
+    return [{"from_m": round(float(s[a]), 1), "to_m": round(float(s[b]), 1),
+             "surface_class": "unsealed" if unsealed[a] else "sealed"}
+            for a, b in zip(cuts, cuts[1:]) if b > a]
 
 
 def _write_tree_fx(work: WorkDir, ext) -> tuple[str, int] | None:
@@ -316,6 +344,8 @@ def _write_centreline(track_dir, job: Job, c, sec, region, lonlat, attributions)
             "station_m": [round(float(v), 1) for v in c["s"][idx]],
             "width_m": [round(float(v), 2) for v in width],
             "superelevation": [round(float(v), 4) for v in sec["superelevation"][idx]],
+            # Sealed or unsealed, from OSM's `surface` with untagged and short runs settled (core/section.py).
+            "surface_runs": surface_runs(c["s"], _unsealed(sec)),
             "height_datum": region.height_datum,
             "license": "ODbL-1.0",
             "attribution": "; ".join(a.line() for a in attributions),

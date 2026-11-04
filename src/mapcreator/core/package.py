@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -24,7 +25,32 @@ SURFACES = [
      # Custom Shaders Patch: tell SurfacesFX this is grass (ignored by vanilla AC).
      "_EXT_SURFACE_TYPE": "GRASS"},
 ]
-SURFACE_KEYS = tuple(s["KEY"] for s in SURFACES)
+# Unsealed road (1GRAVEL_### meshes), written only for a track that has some. AC's own loose surfaces (Kunos's
+# Laguna Seca and Zandvoort GRAVEL, Black Cat County's OFF: friction 0.7-0.8, dirt 1) are run-off built to slow a
+# car down. This is a road to drive at pace, in the range community gravel stages settle on (friction 0.87-0.90,
+# damping 0-0.02, dirt 0.8-1; assettocorsamods.net "new CSP +Gravel" and "How to use surfaces in surfaces.ini"):
+# - FRICTION 0.88: under 0.89, above which one modder found gravel made the tyres squeal, and under 0.9, below
+#   which CSP's ParticlesFX makes "dusty tracks" (CSP 0.2.5 changelog). Dirt on the tyres takes off roughly
+#   another 20% (one community skidpad test).
+# - DIRT_ADDITIVE 0.8: dirt builds up on the tyres; at least 0.7 makes CSP's SurfacesFX treat it as loose
+#   (cup.acstuff.club/docs/csp/tracks/surface-tweaks).
+# - WAV gravel.wav, which Kunos ships (Black Cat County's OFF uses it). Never grass.wav: CSP draws the dirt of a
+#   grass.wav surface as grass (docs/csp/tracks/dirt-on-tyres).
+# - A 1 cm ripple at a 2 m wavelength (SIN_LENGTH is inverse: 0.5 = 2 m), as CSP's Perlin noise instead of a sine.
+# - VIBRATION between Black Cat County's OFF (0.05 / 0.35) and Laguna Seca's GRAVEL (0.5 / 0.6).
+# - _EXT_* are CSP's (surface-tweaks); vanilla AC ignores them. No `WAV_PITCH=extended-0`: extended track physics
+#   isn't needed for these, and vanilla AC would crash on it.
+# All of it is to confirm in game.
+GRAVEL_SURFACE = {
+    "KEY": "GRAVEL", "FRICTION": "0.88", "DAMPING": "0.01", "WAV": "gravel.wav", "WAV_PITCH": "0",
+    "FF_EFFECT": "NULL", "DIRT_ADDITIVE": "0.8", "IS_VALID_TRACK": "1", "BLACK_FLAG_TIME": "0",
+    "SIN_HEIGHT": "0.01", "SIN_LENGTH": "0.5", "IS_PITLANE": "0", "VIBRATION_GAIN": "0.1", "VIBRATION_LENGTH": "0.35",
+    "_EXT_SURFACE_TYPE": "GRAVEL", "_EXT_SURFACE_TYPE_MODIFIER": "REGULAR", "_EXT_PERLIN_NOISE": "1",
+    "_EXT_PERLIN_OCTAVES": "3", "_EXT_PERLIN_PERSISTENCE": "0.5",
+}
+# Every KEY a track of ours can define. A physics mesh name must contain exactly one of these (or WALL).
+SURFACE_KEYS = tuple(s["KEY"] for s in SURFACES) + (GRAVEL_SURFACE["KEY"],)
+ROAD_KEYS = ("ROAD", "GRAVEL")  # the drivable road: spawns, the AI line and colliders are checked against both
 
 
 def ini(sections: list[tuple[str, dict]]) -> str:
@@ -36,8 +62,14 @@ def ini(sections: list[tuple[str, dict]]) -> str:
     return CRLF.join(lines)
 
 
-def surfaces_ini() -> str:
-    return ini([(f"SURFACE_{i}", s) for i, s in enumerate(SURFACES)])
+def surfaces_ini(gravel: bool = False) -> str:
+    """`data/surfaces.ini`: ROAD and GRASS, plus GRAVEL as SURFACE_2 for a track with unsealed road."""
+    return ini([(f"SURFACE_{i}", s) for i, s in enumerate(SURFACES + ([GRAVEL_SURFACE] if gravel else []))])
+
+
+def surface_keys(text: str) -> set[str]:
+    """The KEYs a `surfaces.ini` defines."""
+    return set(re.findall(r"^KEY=(\S+)\s*$", text, re.M))
 
 
 def models_ini(kn5_files: list[str]) -> str:
@@ -175,15 +207,29 @@ def hillshade(z: np.ndarray, cell: float) -> np.ndarray:
     return np.clip(rgb, 0, 255).astype(np.uint8)
 
 
+TYRES_FX_GAINS = {"DIRT_GAIN": "1.0", "DIRT_FADE_GAIN": "1.0", "GRASS_GAIN": "1.0", "GRASS_FADE_GAIN": "1.0"}
+
+
 def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], version: str,
+                   gravel_materials: list[str] = (), grassy_gravel: list[str] = (),
+                   dirt_colours: dict[str, str] | None = None,
                    water_materials: list[str] | None = None, water_type: str = "LAKE",
                    tree_list: str | None = None, tree_surfaces: list[str] | None = None) -> str:
     """Custom Shaders Patch track config (`extension/ext_config.ini`). Vanilla AC ignores it.
 
-    - Grass FX grows procedural grass on our grass materials. CSP's default
-      colour mask means it follows the green patches of the texture. The road
-      occludes it so none grows through the asphalt.
-    - Rain FX puddles and soaks the road and treats grass as rough.
+    - Grass FX grows procedural grass on our grass materials. CSP's default colour mask means it follows the
+      green patches of the texture. The sealed road occludes it so none grows through the asphalt.
+      - Gravel with a grass strip (`grassy_gravel`, single-lane) is a grass material too, so blades grow on the
+        strip; gravel tracks in CSP's own configs list their road materials there the same way (karelia). Other
+        gravel occludes, as the seal does.
+    - Rain FX puddles and soaks the seal and treats grass as rough. Gravel is road, so it gets puddles too
+      (PUDDLES_MATERIALS is "the key part for physics for generating puddles"), and it's rough: ROUGH_MATERIALS
+      "won't get any reflections", only darken when wet (cup.acstuff.club/docs/csp/tracks/rainfx).
+    - `[TYRES_FX]` (with `dirt_colours`, for a track with gravel) colours dust and dirty tyres. A track's own
+      section switches off CSP's generic one entirely (CSP 0.2.4 changelog), so it carries all three colour
+      pairs, and the generic's four gains at 1.0.
+    - No tiling fix (`ksPerPixel_tilingfix`) on the gravel: it offsets the texture at random and would break the
+      wheel paths that run along it.
     - Water surfaces get CSP's water shader (waves, reflections), as LAKE or SEA. The shader's template
       comes from CSP's own common/materials_track.ini.
     - Tree FX draws the 3D trees in `tree_list` (relative to the extension folder), standing them on
@@ -195,15 +241,28 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
              ("Material_Water", {"Materials": ", ".join(water_materials), "Type": water_type})] if water_materials else []
     trees = [("TREES", {"LIST_0": tree_list, **({"SURFACE_MATERIALS": ", ".join(tree_surfaces)} if tree_surfaces else {})})
              ] if tree_list else []
+    tyres = [("TYRES_FX", {**{k: f"'{v}'" for k, v in dirt_colours.items()}, **TYRES_FX_GAINS})] if dirt_colours else []
+    occluding = list(road_materials) + [m for m in gravel_materials if m not in grassy_gravel]
     text = ini(water + [
         ("ABOUT", {"AUTHOR": "mapcreator", "VERSION": version}),
-        ("GRASS_FX", {"GRASS_MATERIALS": ", ".join(grass_materials),
-                      "OCCLUDING_MATERIALS": ", ".join(road_materials)}),
-        ("RAIN_FX", {"PUDDLES_MATERIALS": ", ".join(road_materials),
+        ("GRASS_FX", {"GRASS_MATERIALS": ", ".join(list(grass_materials) + list(grassy_gravel)),
+                      "OCCLUDING_MATERIALS": ", ".join(occluding)}),
+        ("RAIN_FX", {"PUDDLES_MATERIALS": ", ".join(list(road_materials) + list(gravel_materials)),
                      "SOAKING_MATERIALS": ", ".join(road_materials),
-                     "ROUGH_MATERIALS": ", ".join(grass_materials)}),
-    ] + trees)
+                     "ROUGH_MATERIALS": ", ".join(list(grass_materials) + list(gravel_materials))}),
+    ] + tyres + trees)
     return text
+
+
+RALLY_SHARE = 0.5  # a track more than this share unsealed is tagged `rally` as well as `gravel`
+
+
+def surface_tags(unsealed_m: float, length_m: float) -> list[str]:
+    """`ui_track.json` tags for the road's surface: `gravel` with any unsealed road, and `rally` too when more
+    than half of it is unsealed."""
+    if unsealed_m <= 0:
+        return []
+    return ["gravel"] + (["rally"] if unsealed_m > RALLY_SHARE * length_m else [])
 
 
 def ui_track_json(*, name: str, description: str, tags: list[str], lat: float, lon: float, country: str,
