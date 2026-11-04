@@ -29,3 +29,14 @@ Answered at milestone M3 (Grasstree Hill, both layouts; CSP 0.2.11, Content Mana
 - **AI:** AC's AI drove the forward layout from the spawn to the finish. It ignores the 130 km/h cap in the line's speed data. The line ends 50 m past the finish gate, and the AI turns round there and leaves the road.
 - **Timing:** the A→B timer starts and stops at the gates. `race_out.json` records the run as a lap with its time. Laps the AI drove for the player are recorded as time −1 with a cut.
 - **Harness:** the probe app loads with its manifest, `ac.worldCoordinateToTrack` and `sim.isInMainMenu` work, and the CSP log is `custom_shaders_patch.log`.
+
+## Power lines
+
+- **To check in game:**
+  - how towers and wires look from the road;
+  - towers standing beyond the 300 m terrain mesh (up to 700 m out, so a crossing line keeps both its towers): their bases may show against the sky;
+  - whether `[WIND] DYNAMIC_CABLES` sways the wires;
+  - frame rate (Grasstree Hill: 6 towers and 1.9 km of line, about 11,000 vertices);
+  - a car stopping at a roadside pole.
+- **Tasmania has transmission lines only:** TasNetworks' distribution poles are restricted to emergency services, and OpenStreetMap maps none along Grasstree Hill Road, so roadside poles there are missing.
+- **Inferred supports:** an OSM line drawn with vertices further apart than a span can be gets evenly spaced supports along it, at a typical span. The line is real; those supports' exact positions aren't.

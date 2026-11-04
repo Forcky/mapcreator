@@ -1,10 +1,12 @@
-"""Stage 4b: trees and buildings around the road, as a second scene the track stage merges.
+"""Stage 4b: trees, buildings and power lines around the road, as a second scene the track stage merges.
 
 Trees come from the region's individual-crown canopy model when one is
 configured (Tasmania's 2 m CHM mirror), and then every crown in the corridor is
 kept, at its own height. Otherwise they're made-up positions in ESA WorldCover
 tree cover, thinned with distance and capped per km. Buildings come from the
-region's footprint layer. Everything here is visual only.
+region's footprint layer, and power lines from the region's power source
+(`core.power`): towers or poles, and wires. Building walls, and the supports a car
+can reach, are solid; the rest is visual only.
 
 Trees are 3D models in a Custom Shaders Patch Tree FX list (`treefx/`), which
 only CSP reads; the KN5 has no trees of its own. The track stage packs the list
@@ -14,6 +16,7 @@ and models into the track's extension folder.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from dataclasses import asdict
 
@@ -22,7 +25,7 @@ import shapely
 
 from mapcreator.config import Settings
 from mapcreator.core import mesh as base_mesh
-from mapcreator.core import scenery, sprites, treefx
+from mapcreator.core import power, scenery, sprites, treefx
 from mapcreator.core.scene import Material, Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import mesh_stage, profile_stage, section_stage
@@ -114,6 +117,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     meshes = scenery.building_meshes(buildings, dem.sample, frame, rng)
 
     out = work.stage(STAGE)
+    power_meshes, power_summary = _power(region, settings, xy, half, dem, frame, out, attributions)
+    meshes += power_meshes
     fx = _tree_fx(trees, ground, frame, rng, out)
     textures = {"walls": out / "walls.png"}
     sprites.weatherboard().save(textures["walls"])
@@ -122,6 +127,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         textures[f"roof_{colour}"] = out / f"roof_{colour}.png"
         sprites.corrugated(rgb).save(textures[f"roof_{colour}"])
         materials[f"roof_{colour}"] = Material(f"roof_{colour}", f"roof_{colour}")
+    for name in sorted({m.material for m in power_meshes}):
+        textures[name] = out / f"{name}.png"
+        sprites.plain(sprites.POWER_COLOURS[name]).save(textures[name])
+        materials[name] = Material(name, name)
 
     scene = Scene(frame=frame, meshes=meshes, materials=materials, textures={k: str(v) for k, v in textures.items()})
     scene.save(out)
@@ -132,10 +141,38 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "tree_fx_models": fx,
         "buildings": len(buildings),
         "buildings_source": buildings_note or "ok",
+        "power": power_summary,
         "meshes": len(meshes),
         "vertices": int(sum(len(m.positions) for m in meshes)),
         "triangles": int(sum(len(m.triangles) for m in meshes)),
     }
+
+
+def _power(region, settings: Settings, xy: np.ndarray, half: float, dem, frame, out,
+           attributions: list) -> tuple[list, dict]:
+    """Towers or poles and wires for the region's mapped power lines near the road. Lines from an ODbL source
+    are written to power.geojson, which ships with the track."""
+    geo = out / "power.geojson"
+    geo.unlink(missing_ok=True)
+    if region.power is None:
+        return [], {"source": "none"}
+    source = region.power_attribution.dataset
+    bbox = shapely.LineString(xy).buffer(power.SUPPORT_REACH_M).bounds
+    try:
+        lines = region.power(bbox, settings)
+    except Exception as e:  # noqa: BLE001 - any source failure costs the power lines, not the track
+        log.warning("power lines unavailable (%s: %s); building without them", type(e).__name__, e)
+        return [], {"source": f"{source} (unavailable)"}
+    p = power.plan(lines, xy, half)
+    for s in p.spans:  # supports can stand beyond the road's DEM corridor: load the ground under each span
+        dem.load_corridor(np.array([p.supports[s.a].xy, p.supports[s.b].xy]), 30.0)
+    built, info = power.meshes(p, dem.sample, frame, half)
+    if p.spans:
+        attributions.append(region.power_attribution)
+        if region.power_attribution.licence.startswith("ODbL"):
+            work_json = power.geojson(p, region.to_lonlat(), "ODbL-1.0", region.power_attribution.line())
+            geo.write_text(json.dumps(work_json), encoding="utf-8")
+    return built, {"source": source, **p.summary(), **info}
 
 
 def _tree_fx(trees: scenery.Trees, ground: np.ndarray, frame, rng: np.random.Generator, out) -> list[str]:

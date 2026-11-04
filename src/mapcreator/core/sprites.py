@@ -156,6 +156,21 @@ def bark_normal(size: tuple[int, int] = (256, 512), seed: int = 23, strength: fl
     return Image.fromarray(((n * 0.5 + 0.5) * 255).astype(np.uint8), "RGB")
 
 
+# Power lines: galvanised steel towers, timber poles and dark wires (`core.power`'s materials).
+POWER_COLOURS = {
+    "power_metal": (152, 156, 158),
+    "power_timber": (104, 86, 66),
+    "power_cable": (58, 60, 62),
+}
+
+
+def plain(colour: tuple[int, int, int], size: int = 64, seed: int = 31, noise: float = 6.0) -> Image.Image:
+    """A flat colour with a little noise, so a surface doesn't read as untextured."""
+    rng = np.random.default_rng(seed)
+    px = np.asarray(colour, dtype=float)[None, None, :] + rng.normal(0.0, noise, (size, size, 1))
+    return Image.fromarray(np.clip(px, 0, 255).astype(np.uint8), "RGB")
+
+
 def flat_normal(size: int = 64) -> Image.Image:
     return Image.new("RGB", (size, size), (128, 128, 255))
 

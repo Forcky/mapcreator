@@ -23,6 +23,8 @@ EPSG = 28355  # MGA zone 55, the fixture is near Hobart
 # Also: a tertiary road with a node missing from the extract, a footway and a service road
 # (not drivable), a road far away, an L-shaped road whose box covers QUERY without entering it,
 # a house between the roads, a shed far away, an unclosed "building" and a route relation.
+# Power: an 11 kV minor line drawn with vertices 400 m apart, a 220/110 kV double-circuit line, an
+# underground line (indexed, never built) and a power=cable way (not indexed).
 FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
 <osm version="0.6" generator="hand-written test fixture">
   <node id="1" lat="-42.8000000" lon="147.3000000"/>
@@ -50,6 +52,13 @@ FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
   <node id="50" lat="-42.8100000" lon="147.2900000"/>
   <node id="51" lat="-42.7900000" lon="147.2900000"/>
   <node id="52" lat="-42.7900000" lon="147.3200000"/>
+  <node id="60" lat="-42.7985000" lon="147.3000000"/>
+  <node id="61" lat="-42.7985000" lon="147.3050000"><tag k="power" v="pole"/></node>
+  <node id="62" lat="-42.7985000" lon="147.3100000"/>
+  <node id="63" lat="-42.8030000" lon="147.3000000"><tag k="power" v="tower"/></node>
+  <node id="64" lat="-42.8030000" lon="147.3045000"><tag k="power" v="tower"/></node>
+  <node id="65" lat="-42.8040000" lon="147.3000000"/>
+  <node id="66" lat="-42.8040000" lon="147.3050000"/>
   <way id="10">
     <nd ref="3"/><nd ref="2"/><nd ref="1"/>
     <tag k="highway" v="secondary"/><tag k="oneway" v="yes"/><tag k="name" v="Main Road"/>
@@ -90,6 +99,22 @@ FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
     <nd ref="28"/><nd ref="29"/><nd ref="30"/>
     <tag k="building" v="yes"/>
   </way>
+  <way id="40">
+    <nd ref="60"/><nd ref="61"/><nd ref="62"/>
+    <tag k="power" v="minor_line"/><tag k="voltage" v="11000"/><tag k="operator" v="Someone"/>
+  </way>
+  <way id="41">
+    <nd ref="63"/><nd ref="64"/>
+    <tag k="power" v="line"/><tag k="voltage" v="220000;110000"/><tag k="circuits" v="2"/>
+  </way>
+  <way id="42">
+    <nd ref="65"/><nd ref="66"/>
+    <tag k="power" v="line"/><tag k="location" v="underground"/><tag k="voltage" v="66000"/>
+  </way>
+  <way id="43">
+    <nd ref="65"/><nd ref="66"/>
+    <tag k="power" v="cable"/>
+  </way>
   <relation id="100">
     <member type="way" ref="10" role=""/><member type="way" ref="11" role=""/>
     <tag k="type" v="route"/><tag k="route" v="road"/>
@@ -122,10 +147,14 @@ def _ways_table(path) -> list[tuple]:
 
 def test_build_keeps_drivable_roads_and_closed_buildings(extract, tmp_path):
     counts = index.build_index(extract, tmp_path / "out.sqlite", reader="xml")
-    assert counts == {"roads": 5, "buildings": 2, "skipped": 3}  # footway, service, unclosed building
+    # Skipped: the footway, the service road, the unclosed building and the power=cable way.
+    assert counts == {"roads": 5, "buildings": 2, "power_lines": 3, "skipped": 4}
     rows = {r[0]: r for r in _ways_table(tmp_path / "out.sqlite")}
     assert {i for i, r in rows.items() if r[1] == "road"} == {10, 11, 12, 14, 15}
     assert {i for i, r in rows.items() if r[1] == "building"} == {30, 31}
+    assert {i for i, r in rows.items() if r[1] == "power"} == {40, 41, 42}
+    # Power lines keep what their model needs, not who runs them.
+    assert json.loads(rows[40][2]) == {"power": "minor_line", "voltage": "11000"}
     # Road node ids stay in way order with their coordinates; the node missing from the extract is dropped.
     assert np.frombuffer(rows[12][4], dtype="<i8").tolist() == [3, 7]
     assert np.frombuffer(rows[12][3], dtype="<f8").reshape(-1, 2).tolist() == [[147.31, -42.8], [147.315, -42.8]]
@@ -231,7 +260,7 @@ def test_pyosmium_builds_the_same_index_from_xml_and_pbf(extract, osm_index, tmp
 def test_command_line_builds_and_queries(extract, tmp_path, capsys):
     out = tmp_path / "cli.sqlite"
     assert index.main(["build", str(extract), str(out), "--reader", "xml"]) == 0
-    assert "indexed 5 roads and 2 buildings" in capsys.readouterr().out
+    assert "indexed 5 roads, 2 buildings and 3 power lines" in capsys.readouterr().out
     assert index.main(["query", str(out), *map(str, QUERY)]) == 0
     text = capsys.readouterr().out
     assert "roads: 3 ways, 7 nodes" in text and "buildings: 1 in EPSG:28355" in text
@@ -297,3 +326,36 @@ def test_the_national_fallback_takes_buildings_from_the_index(osm_index, tmp_pat
     assert region.buildings(box, _settings(tmp_path)) == []  # no index, no buildings (and no Overpass)
     assert region.buildings_attribution == OSM_BUILDINGS and OSM_BUILDINGS.licence == "ODbL 1.0"
     assert TASMANIA.buildings_attribution.holder == "© State of Tasmania"  # Tasmania keeps theLIST's footprints
+
+
+def test_power_lines_come_back_in_the_region_crs_with_their_voltage_and_circuits(osm_index):
+    from mapcreator.core import power
+
+    box = TO_XY.transform_bounds(*QUERY, densify_pts=21)
+    lines = {line.ref: line for line in index.power_lines(osm_index, box, EPSG)}
+    assert set(lines) == {"OSM way 40", "OSM way 41"}  # not the underground line
+    minor, hv = lines["OSM way 40"], lines["OSM way 41"]
+    assert (minor.kind, minor.voltage_kv, minor.circuits) == (power.DISTRIBUTION, 11.0, 1)
+    assert (hv.kind, hv.voltage_kv, hv.circuits) == (power.TRANSMISSION, 220.0, 2)
+    # The minor line's mapped vertices are about 410 m apart, more than a distribution span can be, so
+    # supports were added evenly between them; the mapped vertices stay, marked as not inferred.
+    gaps = np.hypot(*np.diff(minor.xy, axis=0).T)
+    assert gaps.max() <= power.MAX_SPAN_M[power.DISTRIBUTION]
+    assert (~minor.inferred).sum() == 3 and minor.inferred.sum() == len(minor.xy) - 3
+    x, y = TO_XY.transform(147.305, -42.7985)
+    assert np.hypot(*(minor.xy[~minor.inferred][1] - (x, y))) < 0.01
+    # The tower line's two vertices are 370 m apart: a transmission span, so nothing is added.
+    assert len(hv.xy) == 2 and not hv.inferred.any()
+
+
+def test_an_index_from_before_power_lines_still_routes_but_has_no_power(osm_index, tmp_path):
+    import shutil
+
+    old = tmp_path / "old.sqlite"
+    shutil.copyfile(osm_index, old)
+    with closing(sqlite3.connect(old)) as con:
+        con.execute("UPDATE meta SET value = '1' WHERE key = 'schema'")
+        con.commit()
+    assert [e["id"] for e in index.query(old, QUERY)["elements"] if e["type"] == "way"] == [10, 11, 12]
+    with pytest.raises(index.IndexUnavailable, match="before power lines"):
+        index.power_lines(old, TO_XY.transform_bounds(*QUERY, densify_pts=21), EPSG)

@@ -43,6 +43,15 @@ OSM_BUILDINGS = Attribution(
     licence_url="https://www.openstreetmap.org/copyright",
 )
 
+# Power lines from the local OSM index, built into towers, poles and wires. The lines used ship as power.geojson.
+OSM_POWER = Attribution(
+    dataset="Power lines",
+    holder="© OpenStreetMap contributors",
+    licence="ODbL 1.0",
+    licence_url="https://www.openstreetmap.org/copyright",
+    note="The power lines used ship as power.geojson under ODbL.",
+)
+
 TAS_DEM = Attribution(
     dataset='"Tasmania 2 metre DEM" from theLIST',
     holder="© State of Tasmania",

@@ -177,7 +177,8 @@ def hillshade(z: np.ndarray, cell: float) -> np.ndarray:
 
 def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], version: str,
                    water_materials: list[str] | None = None, water_type: str = "LAKE",
-                   tree_list: str | None = None, tree_surfaces: list[str] | None = None) -> str:
+                   tree_list: str | None = None, tree_surfaces: list[str] | None = None,
+                   cable_materials: list[str] | None = None) -> str:
     """Custom Shaders Patch track config (`extension/ext_config.ini`). Vanilla AC ignores it.
 
     - Grass FX grows procedural grass on our grass materials. CSP's default
@@ -188,11 +189,15 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
       comes from CSP's own common/materials_track.ini.
     - Tree FX draws the 3D trees in `tree_list` (relative to the extension folder), standing them on
       `tree_surfaces`. They are the track's only trees.
+    - Power line wires (`cable_materials`) sway in the wind. `[WIND] DYNAMIC_CABLES` isn't on CSP's documented
+      list; it's what CSP's own config for Kunos's Laguna Seca uses (acc-extension-config, Nov 2026).
     """
     water = [("INCLUDE: common/materials_track.ini", {}),
              ("Material_Water", {"Materials": ", ".join(water_materials), "Type": water_type})] if water_materials else []
     trees = [("TREES", {"LIST_0": tree_list, **({"SURFACE_MATERIALS": ", ".join(tree_surfaces)} if tree_surfaces else {})})
              ] if tree_list else []
+    wind = [("WIND", {"DYNAMIC_CABLES": ", ".join(f"material:{m}" for m in cable_materials),
+                      "DYNAMIC_CABLES_THRESHOLD": "0.1"})] if cable_materials else []
     text = ini(water + [
         ("ABOUT", {"AUTHOR": "mapcreator", "VERSION": version}),
         ("GRASS_FX", {"GRASS_MATERIALS": ", ".join(grass_materials),
@@ -200,7 +205,7 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
         ("RAIN_FX", {"PUDDLES_MATERIALS": ", ".join(road_materials),
                      "SOAKING_MATERIALS": ", ".join(road_materials),
                      "ROUGH_MATERIALS": ", ".join(grass_materials)}),
-    ] + trees)
+    ] + trees + wind)
     return text
 
 

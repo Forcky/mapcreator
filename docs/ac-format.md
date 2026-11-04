@@ -99,3 +99,17 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
 ## Validation
 
 `mapcreator validate` reads every file back and checks the rules above, including measured heights of spawns and AI points against the actual road triangles. The in-game checks (does it load, are the wheels on the ground, can the AI drive it) live in `harness/`.
+
+## Power lines (`core/power.py`)
+
+- **Meshes:** `POWER_TOWERS_n` (lattice towers, material `power_metal`), `POWER_POLES_n` (timber poles, `power_timber`) and `POWER_WIRES_n` (`power_cable`). They're visual only; they're split to stay under the 65,535-vertex limit.
+- **Supports:**
+  - A lattice tower stands on a transmission line of 66 kV and up. It is 26-50 m tall by voltage, with three levels of cross-arms carrying one circuit on each side and an earth wire at the peak.
+  - Anything lower gets an 11 m timber pole (14 m on lines tagged `power=line`) with a cross-arm and three insulators.
+  - Each support is turned to the bisector of the spans on either side of it.
+- **Wires:**
+  - A parabolic sag of span² / (8 C), with C 1,600 m for transmission and 700 m for distribution.
+  - Where the DEM rises under a span, the sag is cut back so the wire stays 8 m (transmission) or 5.5 m (distribution) above the ground. Spans that still can't clear it are counted as `low_spans`.
+- **Collision:** supports within 15 m of the road's edge get an invisible `1WALL_POWER_n` mesh: the pole, or the tower's four legs, up to 3-4.5 m.
+- **Reach:** supports stand up to 700 m from the centreline, and a span is built when it passes within 300 m. So a line crossing the road keeps its towers on both sides, even where one stands beyond the 300 m terrain mesh. The scenery stage loads the DEM under each span.
+- **Wind:** `ext_config.ini` gets `[WIND] DYNAMIC_CABLES=material:power_cable` and `DYNAMIC_CABLES_THRESHOLD=0.1`, so the wires sway. CSP's documented `[WIND]` keys don't include it; it's what CSP's own config for Kunos's Laguna Seca uses. **To confirm in game.**
