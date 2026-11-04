@@ -20,7 +20,7 @@ These need the in-game harness on a machine with Assetto Corsa (`docs/dev-handov
 - AI opponents on a road too narrow for pairs, where the grid goes single file: Lower Swamp Road (`examples/lower_swamp_road.json`, 4.0 m) is the first example that narrow (see "Gravel and narrow roads" below)
 - whether trees typed by TASVEG look right: tall wet eucalypts over tea-tree or rainforest understorey, tea-tree in scrub and buttongrass, myrtle in rainforest, pine in plantations. Some families still borrow other models until batch 2: plantation eucalypt (`euc_young`), she-oak (`wattle`), blackwood (`wattle`, then `myrtle` above 12 m), snow gum (`euc_spread`), banksia (`tea_tree`), the highland conifers (`pine`)
 - whether the bark atlas holds up close: a column goes once around a branch, so a thick trunk's bark is stretched across (about 2.6 times on a 1 m-wide trunk)
-- a few canopy-model crowns in paddocks and towns are far taller than any forest beside them (100 m and 65 m on the Huon Highway, where the tallest wet-forest crowns are 57-58 m). They're probably artefacts in the canopy model (a mast, a cliff edge); the 90 m cap keeps the first as a 90 m tree
+- a few canopy-model crowns in paddocks and towns are far taller than any forest beside them (100 m and 65 m on the Huon Highway, where the tallest wet-forest crowns are 57-58 m). They're probably artefacts in the canopy model (a mast, a cliff edge). Crowns outside forest codes are capped at 45 m, so they stand as 45 m trees rather than vanish (`species.height_caps`)
 
 Answered at milestone M3 (Grasstree Hill, both layouts; CSP 0.2.11, Content Manager's default starter):
 

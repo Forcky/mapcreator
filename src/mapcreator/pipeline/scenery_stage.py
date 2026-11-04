@@ -118,16 +118,18 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
                 log.warning("Meta/WRI canopy unavailable (%s: %s); trees from WorldCover alone", type(e).__name__, e)
                 source = "ESA WorldCover (Meta/WRI canopy unavailable)"
         cand = cand[is_tree]
-        if vmap is not None and len(cand):
-            # Made-up trees go where the vegetation map says there are none, and thin out in paddocks and towns.
-            keep = species.keep_made_up(cand, vmap, tree_region, rng, mask_agreed=source.endswith("Meta/WRI canopy"))
-            dropped, cand = int((~keep).sum()), cand[keep]
         trees = scenery.Trees(cand, scenery.heights_for_cover(len(cand), rng))
 
     if built is not None and len(trees):
         shapely.prepare(built)
         trees = trees.subset(~shapely.contains_xy(built, trees.xy[:, 0], trees.xy[:, 1]))
     trees = scenery.keep_trees(trees, xy, float(c["s"][-1]), rng, real_crowns=canopy is not None)
+    if vmap is not None and canopy is None and len(trees):
+        # Made-up trees go where the vegetation map says there are none, and thin out in paddocks and towns. After
+        # the per-km cap, so treeless country stays open and the total falls, rather than the cap refilling its
+        # budget with trees from elsewhere.
+        keep = species.keep_made_up(trees.xy, vmap, tree_region, rng, mask_agreed=source.endswith("Meta/WRI canopy"))
+        dropped, trees = int((~keep).sum()), trees.subset(keep)
     ground = dem.sample(trees.xy[:, 0], trees.xy[:, 1]) if len(trees) else np.zeros(0)
     ok = np.isfinite(ground)
     trees, ground = trees.subset(ok), ground[ok]
@@ -139,6 +141,12 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
                                          c, sec)
     meshes += power_meshes
     where = vmap.at(trees.xy) if vmap is not None else None
+    capped = 0
+    if vmap is not None:
+        # 90 m in forest, 45 m elsewhere: a paddock or town crown taller than that is an artefact.
+        cap = species.height_caps(vmap.codes(where))
+        capped = int((trees.height > cap).sum())
+        trees = scenery.Trees(trees.xy, np.minimum(trees.height, cap))
     families = species.families(trees.xy, trees.height, vmap, where) if vmap is not None else None
     if region.vegetation is None:
         vegetation = {"source": "none"}
@@ -148,7 +156,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     if vmap is not None:
         attributions.append(region.vegetation_attribution)
         codes = vmap.codes(where)
-        vegetation |= {"communities": len(vmap), "made_up_dropped": dropped, "families": species.counts(families)}
+        vegetation |= {"communities": len(vmap), "made_up_dropped": dropped,
+                       f"capped_at_{species.OTHER_HEIGHT_M:.0f}m": capped, "families": species.counts(families)}
         # Every tree's community code: the count by code is how to spot crowns the map calls treeless.
         work.write_json(STAGE, "vegetation.json", {**vegetation, "by_code": species.counts(codes)})
     fx, trunk_r = _tree_fx(trees, ground, frame, rng, out, families)

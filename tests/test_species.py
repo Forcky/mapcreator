@@ -84,6 +84,12 @@ def test_made_up_trees_go_from_treeless_country_and_thin_in_paddocks():
     assert keep.reshape(4, -1).sum(axis=1).tolist() == [0, 6, 6, 169]
 
 
+def test_crowns_are_capped_at_90_m_in_forest_and_45_m_elsewhere():
+    caps = species.height_caps(np.array(["WRE", "DOB", "RMT", "FPH", "FPS", "FAL", "FUR", "NAR", "SLS", "MBW", ""],
+                                        dtype=object))
+    assert caps.tolist() == [90.0] * 5 + [45.0] * 6
+
+
 def test_every_family_has_models_and_every_model_is_built():
     assert set(species.FAMILIES) == set(treefx.FAMILY_BANDS)
     for family, bands in treefx.FAMILY_BANDS.items():

@@ -38,7 +38,8 @@ STOREY_M = 3.0
 SINK_M = 0.4
 MAX_TREES_PER_KM = 2500  # made-up trees only: keeps their dense forest within a frame-rate budget
 # A canopy-model crown's height is kept within these. Tasmania's wet-forest E. regnans passes 90 m, so the cap
-# only stops artefacts, not tall trees (it was 45 m before vegetation maps typed the tall eucalypts).
+# only stops artefacts, not tall trees (it was 45 m before vegetation maps typed the tall eucalypts). Where the
+# region has a vegetation map, crowns outside forest are capped lower (`species.height_caps`).
 CROWN_HEIGHT_M = (4.0, 90.0)
 # Trunk colliders (`trunk_colliders`). The reach is from the road edge: in run-offs leaving the road at 5-30
 # degrees, 80-90% of first hits on a trunk were within 20 m of the edge (Grasstree Hill, Esperance Coast Road,

@@ -44,6 +44,11 @@ EMERGENT_SHRUB_M = 8.0  # a crown in treeless country lower than this is tea-tre
 # TASVEG's scattered trees are "< 5% crown cover": 0.05 x 10,000 m2 / (pi x 5 m x 5 m) is 6.4 trees a
 # hectare with 10 m crowns.
 PADDOCK_TREES_PER_HA = 6.0
+# Canopy-model heights are capped by where a crown stands: forest (eucalypt, rainforest, plantation) has real
+# 50-60 m trees, while a crown far taller than that in a paddock or town is an artefact (a mast, a cliff edge;
+# 100 m and 65 m on the Huon Highway).
+FOREST_HEIGHT_M, OTHER_HEIGHT_M = 90.0, 45.0
+PLANTATIONS = frozenset("FPS FPH FPU".split())
 
 # Woody communities, by TASVEG code (research/TREE_SPECIES.md section 6a). Bark follows each code's dominant
 # species: smooth gums against stringybarks, peppermints and the rough-butted ashes.
@@ -110,6 +115,14 @@ def _woody_family(code: str) -> str:
     if code in MIXED:
         return WET
     return {"D": DRY_SMOOTH, "W": WET, "R": RAINFOREST, "N": WATTLE, "S": TEA_TREE}.get(code[:1], DRY_SMOOTH)
+
+
+def height_caps(codes: np.ndarray) -> np.ndarray:
+    """The tallest a crown may be, by the community code it stands in: FOREST_HEIGHT_M in eucalypt forest,
+    rainforest and plantations, OTHER_HEIGHT_M anywhere else (paddocks, towns, scrub, treeless, unmapped)."""
+    codes = np.asarray(codes, dtype=object)
+    forest = np.array([len(c) == 3 and (c[0] in "DWR" or c in PLANTATIONS) for c in codes], dtype=bool)
+    return np.where(forest, FOREST_HEIGHT_M, OTHER_HEIGHT_M)
 
 
 def notable_family(c: Community) -> str | None:
