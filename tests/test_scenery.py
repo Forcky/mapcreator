@@ -45,6 +45,62 @@ def test_real_crowns_are_all_kept_and_made_up_trees_are_thinned():
     assert len(made_up) == scenery.MAX_TREES_PER_KM  # tree cover only: thinned, then capped for 1 km
 
 
+def _edge(xy):
+    heading, half = np.zeros(len(CENTRE)), np.full(len(CENTRE), 3.0)
+    edge, station = scenery.edge_distance(xy, CENTRE, heading, half, half)
+    return edge, station.astype(float)  # CENTRE has a point every metre, so station index = metres
+
+
+def test_trunks_a_car_can_reach_get_invisible_prisms_of_their_own_width():
+    xy = np.array([[500_100, 5_200_008.0],    # 5 m off the left edge
+                   [500_200, 5_199_978.0],    # 19 m off the right edge
+                   [500_300, 5_200_028.0],    # 25 m off: out of reach
+                   [500_400, 5_200_008.0],    # 4 cm across: a sapling a car would flatten
+                   [500_500, 5_199_990.0]])   # 7 m off the right edge, in the next 400 m
+    radius = np.array([0.4, 0.25, 0.5, 0.02, 0.3])
+    ground = np.array([20.0, 21.0, 22.0, 23.0, 24.0])
+    edge, station = _edge(xy)
+    assert edge == pytest.approx([5, 19, 25, 5, 7])
+    meshes = scenery.trunk_colliders(xy, ground, radius, edge, station, FRAME)
+    assert [m.name for m in meshes] == ["1WALL_TRUNK_000", "1WALL_TRUNK_001"]
+    sides = scenery.TRUNK_SIDES
+    kept = {0: [0, 1], 1: [4]}
+    for k, m in enumerate(meshes):
+        m.validate()
+        assert not m.renderable and m.material == "walls"
+        assert len(m.positions) == 2 * sides * len(kept[k]) and len(m.triangles) == 2 * sides * len(kept[k])
+        e, n, h = FRAME.from_ac(m.positions.astype(float))
+        for t, tree in enumerate(kept[k]):
+            ring = slice(2 * sides * t, 2 * sides * (t + 1))
+            # Corners on the trunk's circle, from 1 m under its ground to 3 m above.
+            assert np.hypot(e[ring] - xy[tree, 0], n[ring] - xy[tree, 1]) == pytest.approx(radius[tree], abs=1e-3)
+            assert h[ring].min() == pytest.approx(ground[tree] + scenery.TRUNK_COLLIDER[0], abs=1e-3)
+            assert h[ring].max() == pytest.approx(ground[tree] + scenery.TRUNK_COLLIDER[1], abs=1e-3)
+        # Every face points out of its trunk, and the normals are horizontal.
+        p, tri = m.positions.astype(float), m.triangles
+        face = np.cross(p[tri[:, 1]] - p[tri[:, 0]], p[tri[:, 2]] - p[tri[:, 0]])
+        centre = np.repeat(p.reshape(-1, 2 * sides, 3).mean(axis=1), 2 * sides, axis=0)
+        assert ((face * (p[tri].mean(axis=1) - centre[tri[:, 0]])).sum(axis=1) > 0).all()
+        assert np.allclose(m.normals[:, 1], 0) and np.allclose(np.linalg.norm(m.normals, axis=1), 1, atol=1e-5)
+
+
+def test_a_dense_forest_is_split_under_the_vertex_limit():
+    rng = np.random.default_rng(4)
+    n = 5000  # all in the first 400 m, more than one mesh holds
+    xy = np.column_stack([rng.uniform(500_000, 500_399, n), 5_200_000 + rng.choice([-1, 1], n) * rng.uniform(5, 23, n)])
+    edge, station = _edge(xy)
+    meshes = scenery.trunk_colliders(xy, np.full(n, 20.0), np.full(n, 0.3), edge, station, FRAME)
+    assert [m.name for m in meshes] == ["1WALL_TRUNK_000_0", "1WALL_TRUNK_000_1"]
+    for m in meshes:
+        m.validate()  # raises over 65,535 vertices
+    assert sum(len(m.positions) for m in meshes) == 2 * scenery.TRUNK_SIDES * int((edge <= scenery.TRUNK_REACH_M).sum())
+
+
+def test_no_trees_no_colliders():
+    edge, station = _edge(np.zeros((0, 2)))
+    assert scenery.trunk_colliders(np.zeros((0, 2)), np.zeros(0), np.zeros(0), edge, station, FRAME) == []
+
+
 def test_buildings_get_walls_and_roofs_and_skip_the_road():
     house = shapely.box(500_300, 5_200_030, 500_312, 5_200_040)  # 12 x 10 m: gable roof
     shed = shapely.Polygon([(500_400, 5_200_050), (500_430, 5_200_050), (500_430, 5_200_060),

@@ -16,6 +16,7 @@ These need the in-game harness on a machine with Assetto Corsa (`docs/dev-handov
 - in the Tree FX model files: the meaning of the trailer's `4`, and whether `size` scales exactly as assumed (model height × size)
 - CSP rewrites each tree `.bin` the first time it loads it: the same entries, re-packed in another order and about 9 KB larger. Harmless so far, but it suggests our zip differs from the layout CSP's own writer uses.
 - what race.ini's `[AUTOSPAWN]` does
+- whether the tree trunk colliders (#15) stop a car at the bark: their radius assumes Tree FX scales a model by `size` all round and by `width` horizontally on top. And what 200-560 colliders per km cost in frame rate.
 - AI opponents on a road too narrow for pairs, where the grid goes single file: none of the example roads is that narrow
 
 Answered at milestone M3 (Grasstree Hill, both layouts; CSP 0.2.11, Content Manager's default starter):

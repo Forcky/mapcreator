@@ -46,7 +46,7 @@ A job with `"layouts": "both"` produces:
 | `1ROAD_###` | ROAD |
 | `1GRASS_V###L/R` (verge and skirt) | GRASS |
 | `1GRASS_T###` (terrain) | GRASS |
-| `1WALL_RAIL_L/R###` and `1WALL_END_START/FINISH` (invisible, `isRenderable` 0), and `1WALL_BUILDINGS` | solid barrier (no KEY: any physics mesh named WALL) |
+| `1WALL_RAIL_L/R###`, `1WALL_END_START/FINISH` and `1WALL_TRUNK_###` (invisible, `isRenderable` 0), and `1WALL_BUILDINGS` | solid barrier (no KEY: any physics mesh named WALL) |
 | `RAIL_*`, `BUILDING_ROOF_*`, `WATER_*` | visual only (no leading digit) |
 
 - Each physics mesh name matches exactly one KEY. There is deliberately no `WALL` KEY, because defining one is reported to make walls driveable.
@@ -68,6 +68,9 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
 - **Grass FX and Rain FX:** grass grows on the grass and terrain materials, and the road gets puddles.
 - **Water:** `[INCLUDE: common/materials_track.ini]` and `[Material_Water]` give the `water` material CSP's water shader, as `LAKE` or `SEA`. Vanilla AC shows a flat, glossy blue-green surface.
 - **Tree FX:** `[TREES]` with `LIST_0=trees/trees.txt` and `SURFACE_MATERIALS=terrain, grass`, so CSP stands each tree on the ground. These are the track's only trees: the KN5 has none, so vanilla AC shows none.
+  - Tree FX trees have no physics, so the KN5 gets an invisible collider for each trunk a car can reach (`1WALL_TRUNK_###`, `scenery.trunk_colliders`). A trunk qualifies if it stands within 20 m of the road edge and is over 10 cm across.
+  - Each collider is an eight-sided prism with its corners on the drawn trunk's circle, from 1 m below the ground to 3 m above it. Its radius is the model's trunk trailer in metres, times the tree's `size` and `width`.
+  - The faces are wound outwards, as the house walls are. The prisms are grouped into a mesh per 400 m of road, under the vertex limit, at about 200-560 trunks per km.
 
 `extension/trees/`:
 

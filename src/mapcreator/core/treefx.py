@@ -346,7 +346,6 @@ def mesh_file(lod: dict[str, Geometry], tex_names: list[str], tex_hashes: list[i
         b = name.encode("utf-8")
         out.write(struct.pack("<Ii", h, len(b)) + b)
     scale = np.array([half_w, height, half_w])
-    base = []
     for material, g in lod.items():
         if not len(g.tri):
             continue
@@ -364,13 +363,31 @@ def mesh_file(lod: dict[str, Geometry], tex_names: list[str], tex_hashes: list[i
         v["tangent"][:, :3] = np.clip(t * 127.5 + 127.5, 0, 255).astype(np.uint8)
         v["extra"] = (255, 255, 255, 0)
         out.write(struct.pack("<i", len(v)) + v.tobytes())
-        m = v["pos"].astype(float)
-        base.append(m[(m[:, 1] < 0.002) & (np.abs(m[:, 0]) < 0.2) & (np.abs(m[:, 2]) < 0.2)])
-    base = np.vstack(base) if base else np.zeros((0, 3))
-    if len(base):
-        width = min(base[:, 0].max(), base[:, 2].max(), -base[:, 0].min(), -base[:, 2].min())
+    width = _base_width(lod, height, half_w)
+    if width is not None:
         out.write(struct.pack("<iif", -1, 4, width))
     return out.getvalue()
+
+
+def _base_width(lod: dict[str, Geometry], height: float, half_w: float) -> float | None:
+    """The trunk's half-width at its base, normalised by the model's half-width: the `.mesh` trailer."""
+    scale = np.array([half_w, height, half_w])
+    base = []
+    for g in lod.values():
+        if len(g.tri):
+            m = (g.pos / scale).astype(np.float32).astype(float)  # as stored in the vertices
+            base.append(m[(m[:, 1] < 0.002) & (np.abs(m[:, 0]) < 0.2) & (np.abs(m[:, 2]) < 0.2)])
+    base = np.vstack(base) if base else np.zeros((0, 3))
+    if not len(base):
+        return None
+    return float(min(base[:, 0].max(), base[:, 2].max(), -base[:, 0].min(), -base[:, 2].min()))
+
+
+def trunk_radius(model: TreeModel) -> float:
+    """The trunk's half-width at its base in the model's own metres, as its densest LOD's trailer gives it.
+    Tree FX scales it by each tree's `size` and `width`."""
+    height, half_w = model.box
+    return (_base_width(model.lods[0], height, half_w) or 0.0) * half_w
 
 
 def tree_ini(height: float, half_w: float, mesh_names: list[str]) -> str:
