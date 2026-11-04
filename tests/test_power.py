@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from pyproj import Transformer
 
-from mapcreator.core import package, power
+from mapcreator.core import power
 from mapcreator.core.scene import MAX_VERTICES, LocalFrame
 from mapcreator.providers.tas_list import power as tas_power
 
@@ -35,6 +35,11 @@ def test_voltages_parse_from_osm_tags_and_line_names(value, kv):
     assert power.parse_kv(value) == kv
 
 
+def edges(p):
+    """Each support's distance beyond the edge of ROAD (a straight road along y = 0, HALF either side)."""
+    return np.array([s.distance_m for s in p.supports]) - HALF
+
+
 def test_a_sparsely_drawn_line_gets_supports_at_span_length_and_says_so():
     line = power.densify(power.Line(np.array([[0.0, 0.0], [400.0, 0.0], [450.0, 0.0]]), power.DISTRIBUTION))
     gaps = np.hypot(*np.diff(line.xy, axis=0).T)
@@ -42,12 +47,44 @@ def test_a_sparsely_drawn_line_gets_supports_at_span_length_and_says_so():
     assert line.inferred.tolist() == [False] + [True] * (len(line.xy) - 3) + [False, False]
     hv = power.densify(power.Line(np.array([[0.0, 0.0], [400.0, 0.0]]), power.TRANSMISSION))
     assert len(hv.xy) == 2  # a transmission span can be 400 m
+    # Between two mapped poles a long gap is a real span (rural spans reach about 240 m): nothing is added.
+    mapped = power.densify(power.Line(np.array([[0.0, 0.0], [300.0, 0.0], [700.0, 0.0]]), power.DISTRIBUTION,
+                                      designs=["pole", "pole", ""]))
+    assert mapped.xy[:2].tolist() == [[0.0, 0.0], [300.0, 0.0]] and mapped.inferred.sum() == 4
+
+
+@pytest.mark.parametrize("kind,kv,designs,spacing,expected", [
+    (power.TRANSMISSION, 66.0, ["pole"] * 5, 85.0, "pole"),  # mapped poles on a 66 kV line: poles, not towers
+    (power.TRANSMISSION, 66.0, [""] * 5, 85.0, "pole"),  # nothing mapped, but spaced like poles
+    (power.TRANSMISSION, 66.0, [""] * 5, 300.0, "tower"),
+    (power.TRANSMISSION, 220.0, ["tower", "tower", "pole", "", ""], 300.0, "tower"),  # the mapped majority
+    (power.TRANSMISSION, 33.0, [""] * 5, 300.0, "pole"),
+    (power.DISTRIBUTION, 11.0, [""] * 5, 300.0, "pole"),
+])
+def test_a_line_s_supports_follow_the_mapped_design_then_its_voltage_and_spacing(kind, kv, designs, spacing, expected):
+    x = np.arange(5) * spacing
+    assert power.line_design(power.Line(np.column_stack([x, np.full(5, 50.0)]), kind, kv, designs=designs)) == expected
+
+
+def test_each_support_keeps_its_own_mapped_design_and_wires_attach_to_what_stands():
+    x = np.array([100.0, 400.0, 700.0])
+    line = power.Line(np.column_stack([x, np.full(3, 40.0)]), power.TRANSMISSION, 110.0, 2,
+                      designs=["tower", "pole", "tower"])
+    p = power.plan([line], ROAD, HALF)
+    assert [s.design for s in p.supports] == ["tower", "pole", "tower"]
+    assert [s.template for s in p.supports] == ["tower_110", "pole_tall", "tower_110"]
+    meshes, _ = power.meshes(p, flat(), FRAME, edges(p))
+    wires = np.vstack([m.positions for m in meshes if m.name.startswith("POWER_WIRES")]).astype(float)
+    # Both spans are tower to pole: the pole carries one circuit (3 conductors), so no earth wire either.
+    at_pole = wires[np.abs(wires[:, 0] - 400.0) < 0.5]
+    assert len(np.unique(np.round(at_pole[:, [1, 2]] / 0.5), axis=0)) == 3
+    assert wires[:, 1].max() < 100.0 + 0.86 * 32.0  # below the towers' top arms: no earth wire from the peak
 
 
 def test_the_plan_keeps_spans_in_view_and_merges_shared_supports():
     branch = power.Line(np.array([[500.0, 200.0], [900.0, 250.0]]), power.TRANSMISSION, 110.0, 1, "branch")
     p = power.plan([crossing(), branch], ROAD, HALF)
-    # The crossing's outer towers are 800 m away, beyond SUPPORT_REACH_M; its middle span crosses the road.
+    # The crossing's outer towers are 800 m away, off the terrain (SUPPORT_REACH_M); its middle span crosses the road.
     assert [(p.supports[s.a].xy[1], p.supports[s.b].xy[1], s.ref) for s in p.spans if s.ref == "hv"] == [(-200.0, 200.0, "hv")]
     shared = [s for s in p.supports if tuple(s.xy) == (500.0, 200.0)]
     assert len(shared) == 1 and shared[0].template == "tower_220"  # the bigger tower stands where lines meet
@@ -64,7 +101,7 @@ def test_a_support_on_the_road_is_dropped_with_its_spans():
 
 def test_meshes_stand_on_the_ground_with_wires_clear_of_it_and_colliders_by_the_road():
     p = power.plan([crossing(), roadside()], ROAD, HALF)
-    meshes, info = power.meshes(p, flat(), FRAME, HALF)
+    meshes, info = power.meshes(p, flat(), FRAME, edges(p))
     by = {}
     for m in meshes:
         by.setdefault(m.name.rsplit("_", 1)[0], []).append(m)
@@ -81,7 +118,7 @@ def test_meshes_stand_on_the_ground_with_wires_clear_of_it_and_colliders_by_the_
     over_road = wires[np.abs(wires[:, 2]) < 5.0]
     assert over_road[:, 1].min() >= 100.0 + power.CLEARANCE_M[power.TRANSMISSION] - 0.1
     # Every roadside pole is within reach of a car (9 m off the centreline); the towers 200 m away aren't.
-    assert info == {"colliders": 14, "low_spans": 0, "unplaced_supports": 0}
+    assert info == {"colliders": 14, "colliders_skipped": 0, "low_spans": 0, "unplaced_supports": 0}
     # Outward-facing: each triangle's normal agrees with its vertices' normals.
     for m in meshes:
         p0, p1, p2 = (m.positions[m.triangles[:, k]].astype(float) for k in range(3))
@@ -98,7 +135,7 @@ def test_wires_sag_less_where_the_ground_rises_under_the_span_and_report_when_th
         return lambda x, y: 100.0 + height * np.exp(-((np.asarray(x) - 335.0) / 8.0) ** 2)
 
     for height, low in ((4.0, 0), (9.0, 1)):
-        meshes, info = power.meshes(p, hump(height), FRAME, HALF)
+        meshes, info = power.meshes(p, hump(height), FRAME, edges(p))
         assert info["low_spans"] == low
         wires = np.vstack([m.positions for m in meshes if m.name.startswith("POWER_WIRES")])
         mid = wires[np.abs(wires[:, 0] - 335.0) < 6.0]  # samples are 10 m apart
@@ -137,8 +174,20 @@ def test_tasnetworks_route_lines_give_the_spans_and_circuit_lines_their_voltage(
                                                                      "TasNetworks: Here - There")
 
 
-def test_csp_sways_the_wires():
-    text = package.ext_config_ini(grass_materials=["grass"], road_materials=["road"], version="t",
-                                  cable_materials=["power_cable"])
-    assert "[WIND]\r\nDYNAMIC_CABLES=material:power_cable\r\nDYNAMIC_CABLES_THRESHOLD=0.1" in text
-    assert "WIND" not in package.ext_config_ini(grass_materials=["grass"], road_materials=["road"], version="t")
+def test_no_collider_at_the_road_edge_by_the_grid_where_cars_stand_side_by_side():
+    line = power.Line(np.array([[20.0, 6.0], [90.0, 6.0], [160.0, 6.0], [230.0, 6.0]]), power.DISTRIBUTION)
+    p = power.plan([line], ROAD, HALF)
+    near_grid = np.array([s.xy[0] < power.GRID_ZONE_M for s in p.supports])
+    meshes, info = power.meshes(p, flat(), FRAME, edges(p), near_grid)
+    # 2.8 m beyond the edge, the pole's collider would reach within 2.5 m of it: fine mid-road, not by the grid.
+    assert (info["colliders"], info["colliders_skipped"]) == (3, 1)
+    cols = np.vstack([m.positions for m in meshes if m.name.startswith(power.POWER_COLLIDER)])
+    assert cols[:, 0].min() > power.GRID_ZONE_M
+
+
+def test_a_tower_whose_base_would_stand_off_the_terrain_is_left_out_with_its_spans():
+    # Towers at 290 m and 120 m: the 220 kV tower's corner legs reach 6.5 m further, past SUPPORT_REACH_M (295 m).
+    line = power.Line(np.array([[500.0, 290.0], [500.0, 120.0], [500.0, -120.0]]), power.TRANSMISSION, 220.0)
+    p = power.plan([line], ROAD, HALF)
+    assert [tuple(s.xy) for s in p.supports] == [(500.0, 120.0), (500.0, -120.0)]
+    assert len(p.spans) == 1

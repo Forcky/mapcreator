@@ -60,6 +60,10 @@ from mapcreator.providers.osm.overpass import DRIVABLE
 SCHEMA_VERSION = "2"
 READABLE_SCHEMAS = ("1", "2")
 POWER_LINES = frozenset({"line", "minor_line"})
+# A power line's vertices that are mapped supports, stored per vertex in its tags as one letter each:
+# T for power=tower (or portal), P for power=pole, - for anything else.
+SUPPORTS_TAG = "mapcreator:supports"
+_SUPPORT_CODE = {"tower": "T", "portal": "T", "pole": "P"}
 ROAD_CLASSES = frozenset(DRIVABLE.split("|"))
 # pyosmium's node location store. flex_mem keeps every node location in memory, a few GB for a
 # national extract; `sparse_file_array,<file>` keeps them in a file instead, for small machines.
@@ -204,7 +208,7 @@ def _building_tags(tags: dict[str, str]) -> dict[str, str]:
 def _power_tags(tags: dict[str, str]) -> dict[str, str]:
     """What a power line's model needs: its kind, voltage, circuits and whether it's overhead."""
     return {k: v for k, v in tags.items()
-            if k in ("power", "voltage", "circuits", "cables", "wires", "location", "line", "frequency")}
+            if k in ("power", "voltage", "circuits", "cables", "wires", "location", "line", "frequency", SUPPORTS_TAG)}
 
 
 def _insert(con: sqlite3.Connection, kind: str, rows: list[tuple]) -> None:
@@ -269,6 +273,11 @@ def _read_osmium(src: Path, locations: str) -> tuple[Iterator[_Way | None], dict
           .with_filter(osmium.filter.EntityFilter(osmium.osm.WAY))
           .with_filter(osmium.filter.KeyFilter("highway", "building", "power")))
     header = {"reader": f"pyosmium {osmium.version.pyosmium_release}", "osm_timestamp": timestamp}
+    # Which nodes are towers and poles, for the power lines' supports: a pass over tagged nodes only (about 650,000
+    # for Australia), before the ways.
+    supports = {n.id: _SUPPORT_CODE[n.tags.get("power")]
+                for n in osmium.FileProcessor(str(src), osmium.osm.NODE)
+                .with_filter(osmium.filter.TagFilter(*(("power", v) for v in _SUPPORT_CODE)))}
     wkb = osmium.geom.WKBFactory()
     every_node = osmium.geom.use_nodes.ALL  # keep repeated locations, so coordinates line up with node ids
 
@@ -286,7 +295,7 @@ def _read_osmium(src: Path, locations: str) -> tuple[Iterator[_Way | None], dict
                 continue
             try:
                 coords = _wkb_coords(wkb.create_linestring(w, every_node))
-                refs = [n.ref for n in w.nodes] if kind == "road" else None
+                refs = [n.ref for n in w.nodes] if kind in ("road", "power") else None
                 complete = True
             except Exception:  # pyosmium raises InvalidLocationError, or a geometry error for one node
                 refs, points = [], []
@@ -297,9 +306,12 @@ def _read_osmium(src: Path, locations: str) -> tuple[Iterator[_Way | None], dict
                         points.append((loc.lon, loc.lat))
                 complete = len(refs) == len(w.nodes)
                 coords = np.array(points, dtype="<f8").reshape(-1, 2)
-                refs = refs if kind == "road" else None
+                refs = refs if kind in ("road", "power") else None
             # Reading tags costs microseconds each, and most footprints are tagged building=yes alone.
             tag_dict = {"building": building} if kind == "building" and len(tags) == 1 else dict(tags)
+            if kind == "power":
+                tag_dict[SUPPORTS_TAG] = "".join(supports.get(r, "-") for r in refs)
+                refs = None
             yield _Way(w.id, kind, tag_dict, coords, refs, complete)
 
     return ways(), header
@@ -335,6 +347,7 @@ def _read_xml(src: Path) -> Iterator[_Way | None]:
     Yields None for a highway, building or power way that isn't kept, like the pyosmium reader.
     """
     nodes: dict[int, tuple[float, float]] = {}
+    supports: dict[int, str] = {}
     with _open_xml(src) as f:
         events = ET.iterparse(f, events=("start", "end"))
         _, root = next(events)
@@ -345,6 +358,9 @@ def _read_xml(src: Path) -> Iterator[_Way | None]:
                 lon, lat = el.get("lon"), el.get("lat")
                 if lon is not None and lat is not None:
                     nodes[int(el.get("id"))] = (_fixed(lon), _fixed(lat))
+                for tag in el.iter("tag"):
+                    if tag.get("k") == "power" and tag.get("v") in _SUPPORT_CODE:
+                        supports[int(el.get("id"))] = _SUPPORT_CODE[tag.get("v")]
             elif el.tag == "way":
                 tags = {t.get("k"): t.get("v") for t in el.iter("tag")}
                 if "highway" in tags or "building" in tags or "power" in tags:
@@ -356,6 +372,8 @@ def _read_xml(src: Path) -> Iterator[_Way | None]:
                     else:
                         refs = [r for r in all_refs if r in nodes]
                         coords = np.array([nodes[r] for r in refs], dtype="<f8").reshape(-1, 2)
+                        if kind == "power":
+                            tags[SUPPORTS_TAG] = "".join(supports.get(r, "-") for r in refs)
                         yield _Way(int(el.get("id")), kind, tags, coords, refs if kind == "road" else None,
                                    len(refs) == len(all_refs))
             root.clear()  # keep memory flat: each top-level element is finished with
@@ -460,7 +478,8 @@ def buildings(index_path: str | os.PathLike, bbox: tuple[float, float, float, fl
 def power_lines(index_path: str | os.PathLike, bbox: tuple[float, float, float, float], epsg: int) -> list:
     """Overhead power lines crossing `bbox` (minx, miny, maxx, maxy in EPSG:`epsg`, like `buildings`), as
     `core.power.Line`s in that CRS. Underground and underwater lines and busbars are left out. Every vertex is a
-    support; where a mapper drew a line sparsely, `power.densify` adds evenly spaced supports along it."""
+    support. Vertices mapped as power=tower or power=pole carry that design; where a mapper drew a line
+    sparsely, `power.densify` adds evenly spaced supports between vertices that aren't both mapped supports."""
     from mapcreator.core import power
 
     minx, miny, maxx, maxy = _check_bbox(bbox)
@@ -484,8 +503,11 @@ def power_lines(index_path: str | os.PathLike, bbox: tuple[float, float, float, 
             circuits = int(tags.get("circuits") or 0) or max(int(tags.get("cables") or 3) // 3, 1)
         except ValueError:
             circuits = 1
+        codes = tags.get(SUPPORTS_TAG, "")
+        designs = ([{"T": "tower", "P": "pole"}.get(ch, "") for ch in codes] if len(codes) == len(x)
+                   else [""] * len(x))
         out.append(power.densify(power.Line(np.column_stack([x, y]), kind, power.parse_kv(tags.get("voltage")),
-                                            circuits, f"OSM way {way_id}")))
+                                            circuits, f"OSM way {way_id}", designs=designs)))
     return out
 
 

@@ -153,8 +153,9 @@ def test_build_keeps_drivable_roads_and_closed_buildings(extract, tmp_path):
     assert {i for i, r in rows.items() if r[1] == "road"} == {10, 11, 12, 14, 15}
     assert {i for i, r in rows.items() if r[1] == "building"} == {30, 31}
     assert {i for i, r in rows.items() if r[1] == "power"} == {40, 41, 42}
-    # Power lines keep what their model needs, not who runs them.
-    assert json.loads(rows[40][2]) == {"power": "minor_line", "voltage": "11000"}
+    # Power lines keep what their model needs, not who runs them, and which vertices are mapped supports.
+    assert json.loads(rows[40][2]) == {"power": "minor_line", "voltage": "11000", "mapcreator:supports": "-P-"}
+    assert json.loads(rows[41][2])["mapcreator:supports"] == "TT"
     # Road node ids stay in way order with their coordinates; the node missing from the extract is dropped.
     assert np.frombuffer(rows[12][4], dtype="<i8").tolist() == [3, 7]
     assert np.frombuffer(rows[12][3], dtype="<f8").reshape(-1, 2).tolist() == [[147.31, -42.8], [147.315, -42.8]]
@@ -251,7 +252,8 @@ def test_pyosmium_builds_the_same_index_from_xml_and_pbf(extract, osm_index, tmp
     expected = _ways_table(osm_index)
     for source in (extract, pbf):
         out = tmp_path / (source.name + ".sqlite")
-        assert index.build_index(source, out, reader="osmium") == {"roads": 5, "buildings": 2, "skipped": 3}
+        assert index.build_index(source, out, reader="osmium") == {"roads": 5, "buildings": 2, "power_lines": 3,
+                                                                  "skipped": 4}
         assert _ways_table(out) == expected
         assert index.metadata(out)["reader"].startswith("pyosmium ")
     assert index.metadata(tmp_path / "fixture.osm.pbf.sqlite")["osm_timestamp"] == "2026-11-01T20:21:02Z"
@@ -344,8 +346,9 @@ def test_power_lines_come_back_in_the_region_crs_with_their_voltage_and_circuits
     assert (~minor.inferred).sum() == 3 and minor.inferred.sum() == len(minor.xy) - 3
     x, y = TO_XY.transform(147.305, -42.7985)
     assert np.hypot(*(minor.xy[~minor.inferred][1] - (x, y))) < 0.01
+    assert minor.designs[~minor.inferred].tolist() == ["", "pole", ""]
     # The tower line's two vertices are 370 m apart: a transmission span, so nothing is added.
-    assert len(hv.xy) == 2 and not hv.inferred.any()
+    assert len(hv.xy) == 2 and not hv.inferred.any() and hv.designs.tolist() == ["tower", "tower"]
 
 
 def test_an_index_from_before_power_lines_still_routes_but_has_no_power(osm_index, tmp_path):

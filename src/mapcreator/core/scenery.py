@@ -4,7 +4,8 @@ Trees:
 - Chosen here (positions and heights, thinned with distance from the road and to a per-km budget).
 - Drawn by Custom Shaders Patch Tree FX as 3D models (see `treefx`). The KN5 has no trees of its own,
   so players without CSP see none.
-- Visual only: cars pass through them. Trunk colliders can come later.
+- Tree FX has no physics. So each trunk a car can reach gets an invisible collider in the KN5
+  (`trunk_colliders`): an eight-sided prism the size of the drawn trunk, in `1WALL_TRUNK_*` meshes.
 
 Building walls are a physics `1WALL_*` mesh, so cars stop at houses.
 
@@ -35,6 +36,15 @@ BUILDING_REACH_M = 250.0
 STOREY_M = 3.0
 SINK_M = 0.4
 MAX_TREES_PER_KM = 2500  # made-up trees only: keeps their dense forest within a frame-rate budget
+# Trunk colliders (`trunk_colliders`). The reach is from the road edge: in run-offs leaving the road at 5-30
+# degrees, 80-90% of first hits on a trunk were within 20 m of the edge (Grasstree Hill, Esperance Coast Road,
+# Dandenong Tourist Rd; 4 Nov 2026), and each 5 m beyond added about a quarter more colliders for 5-7% more.
+TRUNK_REACH_M = 20.0
+MIN_TRUNK_M = 0.10  # diameter: road-safety guidance counts a tree as a fixed-object hazard above 100 mm (FHWA)
+TRUNK_SIDES = 8
+TRUNK_COLLIDER = (-1.0, 3.0)  # metres from the tree's ground: below any terrain mesh there, above a bonnet
+TRUNK_CHUNK_M = 400.0  # trunks are grouped into meshes by where they stand along the road, like the terrain
+TRUNK_MESH = "1WALL_TRUNK"
 
 
 @dataclass
@@ -116,6 +126,69 @@ def cap_trees(trees: Trees, centre_xy: np.ndarray, length_m: float, rng: np.rand
     keep = np.zeros(len(trees), dtype=bool)
     keep[order[:budget]] = True
     return trees.subset(keep)
+
+
+# -- trunk colliders ---------------------------------------------------------
+
+def edge_distance(xy: np.ndarray, centre_xy: np.ndarray, heading: np.ndarray, half_left: np.ndarray,
+                  half_right: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Each point's distance beyond the nearer road edge (negative on the road), and its nearest station."""
+    if not len(xy):
+        return np.zeros(0), np.zeros(0, dtype=np.int64)
+    d, i = cKDTree(centre_xy).query(xy, workers=-1)
+    nrm = np.column_stack([-np.sin(heading[i]), np.cos(heading[i])])
+    left = ((xy - centre_xy[i]) * nrm).sum(axis=1) > 0
+    return d - np.where(left, half_left[i], half_right[i]), i
+
+
+def trunk_colliders(xy: np.ndarray, ground: np.ndarray, radius: np.ndarray, edge_m: np.ndarray,
+                    station_m: np.ndarray, frame: LocalFrame) -> list[Mesh]:
+    """Invisible walls for the trunks a car can reach: within TRUNK_REACH_M of the road edge, MIN_TRUNK_M thick
+    or more.
+
+    Each trunk is a TRUNK_SIDES-sided prism with its corners on the drawn trunk's circle (`radius`), from
+    TRUNK_COLLIDER below to above the ground. Faces are wound outwards, as the house walls are (they stop cars
+    one-sided); there are no caps, since a car meets a trunk from the side. Trunks are grouped by station into
+    `1WALL_TRUNK_###` meshes, split under the vertex limit. The name makes them solid, like the other
+    invisible walls.
+    """
+    keep = (edge_m <= TRUNK_REACH_M) & (2 * radius >= MIN_TRUNK_M) & np.isfinite(ground)
+    xy, ground, radius = xy[keep], ground[keep], radius[keep]
+    chunk = (np.asarray(station_m)[keep] // TRUNK_CHUNK_M).astype(int)
+    per_mesh = MAX_VERTICES // (2 * TRUNK_SIDES)
+    out = []
+    for k in np.unique(chunk):
+        idx = np.flatnonzero(chunk == k)
+        starts = range(0, len(idx), per_mesh)
+        for p, start in enumerate(starts):
+            sel = idx[start:start + per_mesh]
+            name = f"{TRUNK_MESH}_{k:03d}" + (f"_{p}" if len(starts) > 1 else "")
+            out.append(_prisms(name, xy[sel], ground[sel], radius[sel], frame))
+    return out
+
+
+def _prisms(name: str, xy: np.ndarray, ground: np.ndarray, radius: np.ndarray, frame: LocalFrame) -> Mesh:
+    n, s = len(xy), TRUNK_SIDES
+    theta = np.arange(s) * 2 * np.pi / s
+    ring = np.column_stack([np.cos(theta), np.sin(theta)])  # east, north
+    corner = xy[:, None, :] + radius[:, None, None] * ring[None]
+    lo = np.repeat((ground + TRUNK_COLLIDER[0])[:, None], s, axis=1)
+    hi = np.repeat((ground + TRUNK_COLLIDER[1])[:, None], s, axis=1)
+    # Per trunk: the bottom ring, then the top ring.
+    pos = np.concatenate([frame.to_ac(corner[..., 0], corner[..., 1], lo),
+                          frame.to_ac(corner[..., 0], corner[..., 1], hi)], axis=1).reshape(-1, 3)
+    out_dir = np.column_stack([ring[:, 0], np.zeros(s), -ring[:, 1]])  # horizontal, in AC axes
+    nrm = np.tile(np.vstack([out_dir, out_dir]), (n, 1))
+    uv = np.tile(np.column_stack([np.r_[theta, theta] / (2 * np.pi), np.r_[np.ones(s), np.zeros(s)]]), (n, 1))
+    j = np.arange(s)
+    j1 = (j + 1) % s
+    sides = np.concatenate([np.column_stack([j, j1, s + j1]), np.column_stack([j, s + j1, s + j])])
+    tri = (sides[None] + (np.arange(n) * 2 * s)[:, None, None]).reshape(-1, 3).astype(np.int64)
+    p0, p1, p2 = pos[tri[:, 0]], pos[tri[:, 1]], pos[tri[:, 2]]
+    flip = (np.cross(p1 - p0, p2 - p0) * nrm[tri].mean(axis=1)).sum(axis=1) < 0
+    tri[flip] = tri[flip][:, [0, 2, 1]]
+    return Mesh(name, "walls", pos.astype(np.float32), nrm.astype(np.float32), uv.astype(np.float32), tri,
+                renderable=False)
 
 
 # -- buildings ---------------------------------------------------------------

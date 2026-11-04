@@ -245,8 +245,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         road_materials=["road"], version=__version__,
         water_materials=["water"] if "water" in mat_index else [], water_type=water_type or "LAKE",
         tree_list=tree_list[0] if tree_list else None,
-        tree_surfaces=[n for n in ("terrain", "grass") if n in mat_index],
-        cable_materials=[n for n in ("power_cable",) if n in mat_index]),
+        tree_surfaces=[n for n in ("terrain", "grass") if n in mat_index]),
         encoding="ascii")
     _write_centreline(track_dir, job, c, sec, region, lonlat, attributions)
 

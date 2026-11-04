@@ -2,19 +2,24 @@
 
 A provider hands over `Line`s: polylines in the region's CRS. On an overhead power line
 every vertex is a support, because the wires run straight from one support to the next.
-`plan` picks the spans in view of the road and merges supports that lines share, and
+`plan` picks the spans whose supports stand on the track's ground (the terrain mesh)
+and merges supports that lines share, and
 `meshes` builds:
-- a lattice tower (transmission, 66 kV and up) or a timber pole (anything lower) at each
-  support, turned to the line;
+- a lattice tower or a timber pole at each support, turned to the line: the design the
+  data gives the support (OSM's `power=tower` or `power=pole` on the node), else the line's
+  (its mapped supports' majority, else poles for anything under 66 kV or spaced under 200 m,
+  towers otherwise);
 - the wires: the phase conductors of each circuit, plus an earth wire over a tower line,
   sagging between supports but kept clear of the ground;
 - invisible `1WALL_POWER` colliders on the supports a car can reach from the road.
 
 Only mapped lines get supports: where no line is mapped there are none. A mapped line
 whose vertices are further apart than a span can be (sparsely drawn) gets evenly spaced
-supports along it (`densify`), and the build reports how many.
+supports along it (`densify`), except between two supports the data maps (a long real
+span), and the build reports how many.
 
-Wires sway in the wind under Custom Shaders Patch through their material (`CABLE`).
+The wires are plain thin tubes. CSP's `[WIND] DYNAMIC_CABLES` would sway them, but it redraws
+them about 8 times thicker (in game, 4 Nov), so it isn't used.
 """
 
 from __future__ import annotations
@@ -30,14 +35,22 @@ from mapcreator.core.scene import MAX_VERTICES, Z_SIGN, LocalFrame, Mesh
 TRANSMISSION, DISTRIBUTION = "transmission", "distribution"
 METAL, TIMBER, CABLE = "power_metal", "power_timber", "power_cable"
 
-SUPPORT_REACH_M = 700.0  # supports stand within this distance of the centreline; the stage loads the DEM under them
-VIEW_M = 300.0  # a span is kept if it comes this close to the centreline (the terrain mesh's reach), so a line
-# crossing the road keeps its towers on both sides even when one stands beyond the terrain
+# A support's whole base stands within this distance of the centreline: on the terrain mesh, which reaches 300 m
+# (`mesh_stage.TERRAIN_CORRIDOR_M`). Towers further out stood in the sky, their bases floating past the ground's
+# edge (in game, 4 Nov), so a span with a support beyond it isn't built.
+SUPPORT_REACH_M = 295.0
 ON_ROAD_MARGIN_M = 0.5  # a support closer to the centreline than the road's half-width plus this is misplaced
 COLLIDE_BEYOND_EDGE_M = 15.0  # supports within this distance of the road's edge get a collider
+COLLIDER_CLEAR_OF_EDGE_M = 0.3  # ...unless it would reach this close to the road (a misplaced support)
+GRID_ZONE_M = 60.0  # within this distance of either road end stand the grid spots and hot-lap spawn (`layout`)
+GRID_CLEAR_EDGE_M = 2.5  # there, a collider stays this far beyond the road edge, clear of the side-by-side spots
+POWER_COLLIDER = "1WALL_POWER"
 MERGE_M = 1.0  # supports of different lines closer than this are one support
-MAX_SPAN_M = {TRANSMISSION: 650.0, DISTRIBUTION: 120.0}  # `densify`: longer gaps between vertices get supports
-TYPICAL_SPAN_M = {TRANSMISSION: 380.0, DISTRIBUTION: 75.0}
+# `densify`: longer gaps between vertices get supports, unless both ends are mapped supports. Rural distribution
+# spans reach about 240 m (an OSM minor line in Gippsland with every pole mapped: median 121 m, longest 236 m).
+MAX_SPAN_M = {TRANSMISSION: 650.0, DISTRIBUTION: 250.0}
+TYPICAL_SPAN_M = {TRANSMISSION: 380.0, DISTRIBUTION: 90.0}
+POLE_SPACING_M = 200.0  # a transmission line with no mapped designs whose vertices are closer than this is on poles
 CATENARY_M = {TRANSMISSION: 1600.0, DISTRIBUTION: 700.0}  # sag = span^2 / (8 C)
 CLEARANCE_M = {TRANSMISSION: 8.0, DISTRIBUTION: 5.5}  # the lowest wire stays this far above the ground
 MIN_SAG_M = 0.3
@@ -54,27 +67,50 @@ class Line:
     circuits: int = 1
     ref: str = ""  # the source's id or name, for the summary and power.geojson
     inferred: np.ndarray | None = None  # (n,) True where `densify` placed a support the data doesn't have
+    designs: np.ndarray | None = None  # (n,) "tower", "pole", or "" where the data doesn't say
 
     def __post_init__(self) -> None:
         self.xy = np.asarray(self.xy, dtype=float).reshape(-1, 2)
         if self.inferred is None:
             self.inferred = np.zeros(len(self.xy), dtype=bool)
+        if self.designs is None:
+            self.designs = np.full(len(self.xy), "", dtype=object)
+        self.designs = np.asarray(self.designs, dtype=object)
 
 
 def densify(line: Line) -> Line:
-    """Add evenly spaced supports where the line's vertices are further apart than a span can be."""
+    """Add evenly spaced supports where the line's vertices are further apart than a span can be, unless both
+    ends are supports the data maps: then the gap is a real (long) span."""
     limit, typical = MAX_SPAN_M[line.kind], TYPICAL_SPAN_M[line.kind]
-    pts, inferred = [line.xy[:1]], [line.inferred[:1]]
-    for a, b, flag in zip(line.xy[:-1], line.xy[1:], line.inferred[1:]):
+    pts, inferred, designs = [line.xy[:1]], [line.inferred[:1]], [line.designs[:1]]
+    for i in range(len(line.xy) - 1):
+        a, b = line.xy[i], line.xy[i + 1]
         gap = float(np.hypot(*(b - a)))
-        if gap > limit:
+        if gap > limit and not (line.designs[i] and line.designs[i + 1]):
             k = int(np.ceil(gap / typical))
             t = np.arange(1, k)[:, None] / k
             pts.append(a + t * (b - a))
             inferred.append(np.ones(k - 1, dtype=bool))
+            designs.append(np.full(k - 1, "", dtype=object))
         pts.append(b[None])
-        inferred.append(np.array([flag]))
-    return Line(np.vstack(pts), line.kind, line.voltage_kv, line.circuits, line.ref, np.concatenate(inferred))
+        inferred.append(line.inferred[i + 1:i + 2])
+        designs.append(line.designs[i + 1:i + 2])
+    return Line(np.vstack(pts), line.kind, line.voltage_kv, line.circuits, line.ref, np.concatenate(inferred),
+                np.concatenate(designs))
+
+
+def line_design(line: Line) -> str:
+    """The design for a line's supports where the data doesn't give one: its mapped supports' majority, else poles
+    below 66 kV, on distribution, or where the line's own vertices are closer than POLE_SPACING_M; else towers."""
+    mapped = [d for d in line.designs if d]
+    if mapped:
+        return max(("tower", "pole"), key=mapped.count)
+    if line.kind == DISTRIBUTION or (line.voltage_kv or DEFAULT_KV) < 66:
+        return "pole"
+    own = line.xy[~line.inferred]
+    if len(own) > 1 and float(np.median(np.hypot(*np.diff(own, axis=0).T))) < POLE_SPACING_M:
+        return "pole"
+    return "tower"
 
 
 def parse_kv(value: str | None) -> float | None:
@@ -112,9 +148,7 @@ class Span:
     a: int  # support indices
     b: int
     kind: str
-    template: str  # the line's own support design, which sets where its wires attach
-    phases: int  # conductors (3 per circuit)
-    earth: bool
+    phases: int  # conductors (3 per circuit); the supports' designs may carry fewer
     ref: str
 
 
@@ -137,26 +171,30 @@ class Plan:
         }
 
 
-def template_for(kind: str, voltage_kv: float | None) -> str:
-    if kind == TRANSMISSION:
-        kv = voltage_kv or DEFAULT_KV
-        if kv >= 300:
-            return "tower_330"
-        if kv >= 200:
-            return "tower_220"
-        if kv >= 100:
-            return "tower_110"
-        if kv >= 66:
-            return "tower_66"
-        return "pole_tall"
-    return "pole"
+def template_for(design: str, kind: str, voltage_kv: float | None) -> str:
+    """The template for a support of `design` ("tower" or "pole") on a line of this kind and voltage."""
+    if design == "pole":
+        return "pole_tall" if kind == TRANSMISSION else "pole"
+    kv = voltage_kv or DEFAULT_KV
+    if kv >= 300:
+        return "tower_330"
+    if kv >= 200:
+        return "tower_220"
+    if kv >= 100:
+        return "tower_110"
+    return "tower_66"
 
 
-def plan(lines: list[Line], centre_xy: np.ndarray, road_half_m: float, *, reach_m: float = SUPPORT_REACH_M,
-         view_m: float = VIEW_M) -> Plan:
-    """The supports and spans to build: spans with both supports within `reach_m` of the centreline that come
-    within `view_m` of it. Supports that lines share are merged, and so are duplicate spans."""
-    centre = shapely.LineString(centre_xy)
+def footprint_m(template: str) -> float:
+    """How far a support's base reaches from its centre: a tower's corner legs, or a pole's radius."""
+    t = TEMPLATES[template]
+    return t.base_half_m * np.sqrt(2.0) if template.startswith("tower") else t.base_half_m
+
+
+def plan(lines: list[Line], centre_xy: np.ndarray, road_half_m: float, *,
+         reach_m: float = SUPPORT_REACH_M) -> Plan:
+    """The supports and spans to build: spans whose supports' bases stand within `reach_m` of the centreline and
+    off the road. Supports that lines share are merged, and so are duplicate spans."""
     tree = cKDTree(_densified(centre_xy, 2.0))
     out = Plan()
     keys: dict[tuple[int, int], int] = {}
@@ -165,16 +203,16 @@ def plan(lines: list[Line], centre_xy: np.ndarray, road_half_m: float, *, reach_
     for line in lines:
         if len(line.xy) < 2:
             continue
+        default = line_design(line)
+        designs = [d or default for d in line.designs]
+        templates = [template_for(d, line.kind, line.voltage_kv) for d in designs]
         d, _ = tree.query(line.xy)
-        misplaced = d < road_half_m + ON_ROAD_MARGIN_M
-        ok = (d <= reach_m) & ~misplaced
-        segs = shapely.linestrings(np.stack([line.xy[:-1], line.xy[1:]], axis=1))
-        near = shapely.distance(segs, centre) <= view_m
-        keep = ok[:-1] & ok[1:] & near & (np.hypot(*np.diff(line.xy, axis=0).T) > 0.5)
+        # A support whose base would reach onto the road is misplaced (a mapping error): drop it and its spans.
+        base = np.array([footprint_m(t) for t in templates])
+        misplaced = d < road_half_m + ON_ROAD_MARGIN_M + base
+        ok = (d + base <= reach_m) & ~misplaced
+        keep = ok[:-1] & ok[1:] & (np.hypot(*np.diff(line.xy, axis=0).T) > 0.5)
         out.misplaced += int(misplaced.sum())
-        template = template_for(line.kind, line.voltage_kv)
-        design = "tower" if template.startswith("tower") else "pole"
-        circuits = max(1, min(int(line.circuits or 1), 2 if design == "tower" else 1))
         for k in np.flatnonzero(keep):
             ends = []
             direction = line.xy[k + 1] - line.xy[k]
@@ -184,15 +222,16 @@ def plan(lines: list[Line], centre_xy: np.ndarray, road_half_m: float, *, reach_
                 i = keys.get(key)
                 if i is None:
                     i = keys[key] = len(out.supports)
-                    out.supports.append(Support(line.xy[v].copy(), design, template, np.zeros(2), float(d[v]),
-                                                bool(line.inferred[v])))
+                    out.supports.append(Support(line.xy[v].copy(), designs[v], templates[v], np.zeros(2),
+                                                float(d[v]), bool(line.inferred[v])))
                 s = out.supports[i]
-                if rank[template] > rank[s.template]:  # the bigger support stands where lines share one
-                    s.template, s.design = template, design
+                if rank[templates[v]] > rank[s.template]:  # the bigger support stands where lines share one
+                    s.template, s.design = templates[v], designs[v]
                 s.along += direction if float(s.along @ direction) >= 0 else -direction
                 ends.append(i)
             span_key = (min(ends), max(ends))
-            span = Span(ends[0], ends[1], line.kind, template, 3 * circuits, design == "tower", line.ref)
+            circuits = max(1, min(int(line.circuits or 1), 2))
+            span = Span(ends[0], ends[1], line.kind, 3 * circuits, line.ref)
             if span_key not in spans or span.phases > spans[span_key].phases:
                 spans[span_key] = span
     for s in out.supports:
@@ -222,6 +261,11 @@ class Template:
     attach: np.ndarray  # (k, 3): phases of circuit 1 (right), then circuit 2 (left), then the earth wire if any
     base_half_m: float  # half the base's width, for its collider
     material: str
+    earth: bool  # the last attachment is an earth wire
+
+    @property
+    def phases(self) -> int:
+        return len(self.attach) - (1 if self.earth else 0)
 
 
 def _tower(height: float, arm: float, insulator: float) -> Template:
@@ -263,7 +307,7 @@ def _tower(height: float, arm: float, insulator: float) -> Template:
             member(tip, hang, 0.12)  # insulator string
             out.append(hang)
     attach = np.array(attach_r + attach_l + [apex])
-    return Template(np.array(p0), np.array(p1), np.array(r), 4, attach, b, METAL)
+    return Template(np.array(p0), np.array(p1), np.array(r), 4, attach, b, METAL, earth=True)
 
 
 def _pole(height: float) -> Template:
@@ -279,7 +323,7 @@ def _pole(height: float) -> Template:
         p1.append(top)
         r.append(0.05)
         attach.append(top)
-    return Template(np.array(p0), np.array(p1), np.array(r), 8, np.array(attach), 0.14, TIMBER)
+    return Template(np.array(p0), np.array(p1), np.array(r), 8, np.array(attach), 0.14, TIMBER, earth=False)
 
 
 TEMPLATES: dict[str, Template] = {  # smallest first: where lines share a support, the bigger one stands
@@ -310,8 +354,14 @@ class _Pose:
         return np.column_stack([e, n, self.ground + local[:, 1]])
 
 
-def meshes(p: Plan, dem_sample, frame: LocalFrame, road_half_m: float) -> tuple[list[Mesh], dict]:
-    """The supports, wires and colliders of a plan, and a summary (supports that couldn't stand, low spans)."""
+def meshes(p: Plan, dem_sample, frame: LocalFrame, edge_m: np.ndarray,
+           near_grid: np.ndarray | None = None) -> tuple[list[Mesh], dict]:
+    """The supports, wires and colliders of a plan, and a summary (supports that couldn't stand, low spans).
+
+    `edge_m` is each support's distance beyond the road's edge, and `near_grid` whether it's within GRID_ZONE_M
+    of either end of the road, where the grid spots stand."""
+    edge_m = np.asarray(edge_m, dtype=float)
+    near_grid = np.zeros(len(p.supports), dtype=bool) if near_grid is None else np.asarray(near_grid, dtype=bool)
     xy = np.array([s.xy for s in p.supports]) if p.supports else np.zeros((0, 2))
     ground = np.asarray(dem_sample(xy[:, 0], xy[:, 1]), dtype=float) if len(xy) else np.zeros(0)
     poses: dict[int, _Pose] = {}
@@ -323,12 +373,16 @@ def meshes(p: Plan, dem_sample, frame: LocalFrame, road_half_m: float) -> tuple[
     def add(material: str, renderable: bool, geometry) -> None:
         parts.setdefault((material, renderable), []).append(geometry)
 
-    colliders = 0
+    colliders = skipped = 0
     for i, pose in poses.items():
         s = p.supports[i]
         t = TEMPLATES[s.template]
         add(t.material, True, _prisms(pose.place(t.p0), pose.place(t.p1), t.radius, t.sides))
-        if s.distance_m <= road_half_m + COLLIDE_BEYOND_EDGE_M:
+        clear = edge_m[i] - footprint_m(s.template) - 0.5  # from the collider's outer edge to the road's
+        if edge_m[i] <= COLLIDE_BEYOND_EDGE_M:
+            if clear < COLLIDER_CLEAR_OF_EDGE_M or (near_grid[i] and clear < GRID_CLEAR_EDGE_M):
+                skipped += 1
+                continue
             colliders += 1
             if s.design == "tower":
                 legs = np.array([(1, 1), (1, -1), (-1, -1), (-1, 1)], dtype=float) * t.base_half_m
@@ -341,11 +395,12 @@ def meshes(p: Plan, dem_sample, frame: LocalFrame, road_half_m: float) -> tuple[
     for span in p.spans:
         if span.a not in poses or span.b not in poses:
             continue
-        t = TEMPLATES[span.template]
-        which = list(range(min(span.phases, 6 if span.template.startswith("tower") else 3)))
-        if span.earth:
-            which.append(len(t.attach) - 1)
-        a_pts, b_pts = poses[span.a].place(t.attach[which]), poses[span.b].place(t.attach[which])
+        ta, tb = TEMPLATES[p.supports[span.a].template], TEMPLATES[p.supports[span.b].template]
+        n = min(span.phases, ta.phases, tb.phases)
+        a_pts, b_pts = poses[span.a].place(ta.attach[:n]), poses[span.b].place(tb.attach[:n])
+        if ta.earth and tb.earth:
+            a_pts = np.vstack([a_pts, poses[span.a].place(ta.attach[-1])])
+            b_pts = np.vstack([b_pts, poses[span.b].place(tb.attach[-1])])
         radius = WIRE_RADIUS_M[span.kind]
         tubes, ok = [], True
         for a, b in zip(a_pts, b_pts):
@@ -358,9 +413,10 @@ def meshes(p: Plan, dem_sample, frame: LocalFrame, road_half_m: float) -> tuple[
     out: list[Mesh] = []
     names = {METAL: "POWER_TOWERS", TIMBER: "POWER_POLES", CABLE: "POWER_WIRES"}
     for (material, renderable), geoms in parts.items():
-        name = names[material] if renderable else "1WALL_POWER"
+        name = names[material] if renderable else POWER_COLLIDER
         out.extend(_meshes(name, material, renderable, geoms, frame))
-    return out, {"colliders": colliders, "low_spans": low, "unplaced_supports": len(p.supports) - len(poses)}
+    return out, {"colliders": colliders, "colliders_skipped": skipped, "low_spans": low,
+                 "unplaced_supports": len(p.supports) - len(poses)}
 
 
 def _wire(a: np.ndarray, b: np.ndarray, kind: str, dem_sample) -> tuple[np.ndarray, bool]:

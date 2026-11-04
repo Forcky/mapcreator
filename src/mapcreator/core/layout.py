@@ -20,7 +20,11 @@ road's end, the track stage ramps the AI down over the run-off
 (`ai_line.runoff_hints`), and the mesh stage closes both ends of the road with
 invisible walls (`roadside.end_walls`). With one flat hint of half pace and the
 line running to the end, the AI still reached the end wall at about 45 km/h,
-and AC put it back at the start (in game, 3 Nov).
+and AC put it back at the start (in game, 3 Nov). With the pace ramping to 0.05
+it crawled past the end of its line and off the road, and on a straight run-off
+it barely slowed at all: a hint scales AC's corner speed, so only 0 stops a car
+on a straight. With the last pace 0, the AI stops on the road 60 m before the
+end of its line, in both layouts (in game, 4 Nov).
 """
 
 from __future__ import annotations
@@ -36,8 +40,11 @@ RUNOFF_M = 250.0  # road left after the finish gate, to brake and stop on
 RUNOFF_SHARE = 0.15  # at most this share of a short route
 AI_END_SHORT_M = 40.0  # the AI line stops this far before the road's end, short of the end wall
 # The AI's pace from the finish on, as (metres before the end of its line, pace): it eases off after the finish
-# and is all but stopped by the end of its line.
-AI_RUNOFF_RAMP = ((150.0, 0.5), (60.0, 0.2), (0.0, 0.05))
+# and stops for good 60 m before the end of its line. A hint scales the speed AC allows for the line's curvature,
+# not the car's speed, so on a straight run-off 0.5 and 0.2 change little and only 0 stops the car: with a last
+# pace of 0.05 the AI held about 100 km/h down Grasstree Hill's straight reverse run-off and left the road past
+# the end of its line; with 0 it stopped on the road in both layouts (in game, 4 Nov).
+AI_RUNOFF_RAMP = ((150.0, 0.5), (60.0, 0.2), (0.0, 0.0))
 SPAWN_BEFORE_GATE_M = 8.0
 HOTLAP_BEFORE_GATE_M = 30.0
 SPAWN_HEIGHT_M = 0.3
