@@ -72,3 +72,12 @@ Answered at M4 (AI opponents; Grasstree Hill, both layouts, and Brinktop Road; 8
   - speed signs readable;
   - frame rate (Grasstree Hill: about 450 guide posts and 300 CAMs, about 25,000 vertices; each KN5 grows 2 MB).
 - **Speed limits come only from OSM.** Many rural ways have no `maxspeed` (only 24% of Grasstree Hill Road has one), so those stretches get no signs. CAMs assume 100 km/h there. Tasmania's State Road speed limits (theLIST, CC BY) cover state roads fully, but using them with an OSM centreline would combine two road datasets for the same feature.
+
+## Elevation
+
+- **A mapped line beside the road reads the cutting, not the road** (the Esperance Coast Road dip, 4 Nov).
+  - Cause: OSM's line ran 9-14 m up a 25-59% batter for 360 m, so its heights were up to 5.3 m high. That made a 79 m sag, about 1 g at the AI's speed, and a 22% pinch the road doesn't have.
+  - Fix: the profile stage now finds such stretches on LiDAR ground and takes the height of the flat road strip beside the line (`profile.road_strip_heights`), or profiles them as coarse where there's no strip.
+  - Esperance after the fix: tightest vertical radius 73 m → 184 m, steepest 10 m grade 22.4% → 13%.
+  - The line itself stays where OSM draws it. Realigning OSM way 23248489 there would fix it at the source.
+- **The validator warns** (it never fails a build) where a crest or sag would pull more than 0.5 g at the AI's planned speed.
