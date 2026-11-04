@@ -55,6 +55,10 @@ POLE_SPACING_M = 200.0  # a transmission line with no mapped designs whose verti
 CATENARY_M = {TRANSMISSION: 1600.0, DISTRIBUTION: 700.0}  # sag = span^2 / (8 C)
 CLEARANCE_M = {TRANSMISSION: 8.0, DISTRIBUTION: 5.5}  # the lowest wire stays this far above the ground
 MIN_SAG_M = 0.3
+# Every leg and pole goes this far below the ground at its own foot. On a slope the downhill legs would otherwise
+# stop short of it, and the terrain mesh can sit a few metres off the DEM where its cells are coarse: with
+# 32 m cells, tower bases were within -2.7 to +1.0 m of the ground under them (#34).
+LEG_SINK_M = 2.5
 WIRE_STEP_M = 10.0
 WIRE_RADIUS_M = {TRANSMISSION: 0.035, DISTRIBUTION: 0.02}
 DEFAULT_KV = 110.0  # a transmission line of unknown voltage
@@ -378,7 +382,7 @@ def meshes(p: Plan, dem_sample, frame: LocalFrame, edge_m: np.ndarray,
     for i, pose in poses.items():
         s = p.supports[i]
         t = TEMPLATES[s.template]
-        add(t.material, True, _prisms(pose.place(t.p0), pose.place(t.p1), t.radius, t.sides))
+        add(t.material, True, _prisms(pose.place(_sunk(t, pose, dem_sample)), pose.place(t.p1), t.radius, t.sides))
         clear = edge_m[i] - footprint_m(s.template) - 0.5  # from the collider's outer edge to the road's
         if edge_m[i] <= COLLIDE_BEYOND_EDGE_M:
             if clear < COLLIDER_CLEAR_OF_EDGE_M or (near_grid[i] and clear < GRID_CLEAR_EDGE_M):
@@ -418,6 +422,19 @@ def meshes(p: Plan, dem_sample, frame: LocalFrame, edge_m: np.ndarray,
         out.extend(_meshes(name, material, renderable, geoms, frame))
     return out, {"colliders": colliders, "colliders_skipped": skipped, "low_spans": low,
                  "unplaced_supports": len(p.supports) - len(poses)}
+
+
+def _sunk(t: Template, pose: _Pose, dem_sample) -> np.ndarray:
+    """The template's member starts, with every member that starts below ground (legs, a pole) reaching
+    LEG_SINK_M below the ground at its own foot."""
+    p0 = t.p0.copy()
+    feet = p0[:, 1] < 0
+    if feet.any():
+        at = pose.place(p0[feet])
+        ground = np.asarray(dem_sample(at[:, 0], at[:, 1]), dtype=float)
+        ground = np.where(np.isfinite(ground), ground, pose.ground)
+        p0[feet, 1] = np.minimum(p0[feet, 1], ground - pose.ground - LEG_SINK_M)
+    return p0
 
 
 def _wire(a: np.ndarray, b: np.ndarray, kind: str, dem_sample) -> tuple[np.ndarray, bool]:

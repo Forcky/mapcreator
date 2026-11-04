@@ -111,7 +111,7 @@ def test_meshes_stand_on_the_ground_with_wires_clear_of_it_and_colliders_by_the_
     assert all(not m.renderable for m in by["1WALL_POWER"]) and all(m.renderable for m in by["POWER_WIRES"])
     towers = np.vstack([m.positions for m in by["POWER_TOWERS"]])
     assert towers[:, 1].max() == pytest.approx(100.0 + 42.0, abs=0.2)  # a 220 kV tower's earth peak
-    assert towers[:, 1].min() == pytest.approx(99.0, abs=0.2)  # its legs go a metre into the ground
+    assert towers[:, 1].min() == pytest.approx(100.0 - power.LEG_SINK_M, abs=0.2)  # its legs go into the ground
     wires = np.vstack([m.positions for m in by["POWER_WIRES"]])
     assert wires[:, 1].min() >= 100.0 + power.CLEARANCE_M[power.DISTRIBUTION] - 0.1
     # The crossing's wires stay high over the road: 6 phases and an earth wire, sagging between its towers.
@@ -191,3 +191,16 @@ def test_a_tower_whose_base_would_stand_off_the_terrain_is_left_out_with_its_spa
     p = power.plan([line], ROAD, HALF)
     assert [tuple(s.xy) for s in p.supports] == [(500.0, 120.0), (500.0, -120.0)]
     assert len(p.spans) == 1
+
+
+def test_on_a_slope_every_leg_and_pole_reaches_below_the_ground_at_its_own_foot():
+    def slope(x, y):  # rising 30% to the north
+        return 100.0 + 0.3 * np.asarray(y, dtype=float)
+
+    pose = power._Pose(500.0, 50.0, float(slope(500.0, 50.0)), np.array([1.0, 0.0]), np.array([0.0, 1.0]))
+    t = power.TEMPLATES["tower_220"]
+    feet = pose.place(power._sunk(t, pose, slope)[t.p0[:, 1] < 0])
+    assert (feet[:, 2] <= slope(feet[:, 0], feet[:, 1]) - power.LEG_SINK_M + 1e-6).all()
+    # The downhill legs reach further down than the tower's own footing: its base is 9 m wide on a 30% slope.
+    assert feet[:, 2].min() < pose.ground - power.LEG_SINK_M - 1.0
+    assert power._sunk(power.TEMPLATES["pole"], pose, slope)[0, 1] <= -power.LEG_SINK_M
