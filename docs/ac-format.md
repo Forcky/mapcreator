@@ -93,7 +93,7 @@ A job with `"layouts": "both"` produces:
 ```ini
 [SURFACE_2]
 KEY=GRAVEL
-FRICTION=0.88
+FRICTION=0.80
 DAMPING=0.01
 WAV=gravel.wav
 WAV_PITCH=0
@@ -114,8 +114,10 @@ _EXT_PERLIN_PERSISTENCE=0.5
 ```
 
 - **One KEY for every unsealed `surface` value** in v1. `unpaved` and `gravel` are 92% of the unsealed length in the Derwent Valley and the Huon. A second, looser `DIRT` key for `dirt`, `earth`, `ground`, `mud` and `sand` can follow if testing shows the difference is worth it.
-- **Why these numbers.** Kunos's own loose surfaces are run-off, built to slow a car down: friction 0.7-0.8 with dirt 1 (Laguna Seca's and Zandvoort's `GRAVEL`, Black Cat County's `OFF`, as copied in third-party server repositories). People building gravel road stages settle on friction 0.87-0.90, damping 0-0.02 and dirt 0.8-1 (assettocorsamods.net threads "new CSP +Gravel" and "How to use surfaces in surfaces.ini", 2019-2024). This is a road to drive at pace, so it sits in the second range:
-  - Friction 0.88 is under the 0.89 above which one modder found gravel made the tyres squeal, and under 0.9, below which CSP 0.2.5's ParticlesFX makes "dusty tracks". Dirt on the tyres takes off about another 20% (one community skidpad test).
+- **Why these numbers.** Kunos's own loose surfaces are run-off, built to slow a car down: friction 0.7-0.8 with dirt 1 (Laguna Seca's and Zandvoort's `GRAVEL`, Black Cat County's `OFF`, as copied in third-party server repositories). People building gravel road stages settle on friction 0.87-0.90, damping 0-0.02 and dirt 0.8-1 (assettocorsamods.net threads "new CSP +Gravel" and "How to use surfaces in surfaces.ini", 2019-2024). This is a road to drive at pace, so its damping and dirt sit in the second range. Its friction no longer does:
+  - **Friction 0.80**, the maintainer's choice (5 Nov 2026), not yet tried by hand. It started at 0.88, in the community range, but in game (5 Nov) AC's AI read that as only 10% less grip than the seal's 0.98: wheel slip as on a seal, about 106 km/h on average over Hartz Road's two-lane gravel (up to 140), and a median of 93-96 km/h on Lower Swamp Road's one lane (up to 156).
+  - 0.80 is the top of the range of Kunos's own loose surfaces. Like 0.88, it's under the 0.89 above which one modder found gravel made the tyres squeal, and under 0.9, below which CSP 0.2.5's ParticlesFX makes "dusty tracks". Dirt on the tyres takes off about another 20% (one community skidpad test).
+  - The AI also gets a pace hint of 0.8 over unsealed road (see the AI line's hints below). Only an AI re-test is planned for now (`docs/known-issues.md`); how 0.80 feels at the wheel is still to judge.
   - Dirt additive 0.8: dirt builds up on the tyres, progressively. At 0.7 or more, CSP's SurfacesFX treats the surface as loose even without the type (CSP's surface-tweaks page).
   - `gravel.wav` ships with AC (Black Cat County uses it). Never `grass.wav` on a road: CSP draws the dirt of a `grass.wav` surface as grass (CSP's dirt-on-tyres page).
   - `SIN_HEIGHT` 0.01 m and `SIN_LENGTH` 0.5 (it's inverse: 2 m) make a 1 cm ripple, drawn by CSP as Perlin noise (`_EXT_PERLIN_NOISE=1`) instead of a regular washboard.
@@ -168,7 +170,7 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
   - Radius, direction, speed, gas, brake, grade and forward are all the racing line's own, not the centreline's.
 - **Grid:** `hasGrid = 0`; the game builds and caches the grid itself.
 - **End:** the AI line stops 40 m before the road's end (`AI_END_SHORT_M`), short of the invisible end wall.
-- **Hints (`data/ai_hints.ini`):** AC's AI sets its own speed (M3), so hints are the way to slow it. Three `[HINT_n]` sections run from the finish gate to the end of the line, as fractions of the spline: pace 0.5, then 0.2 from 150 m before the line's end, then **0** for its last 60 m.
+- **Hints (`data/ai_hints.ini`):** AC's AI sets its own speed (M3), so hints are the way to slow it. Three `[HINT_n]` sections run from the finish gate to the end of the line, as fractions of the spline: pace 0.5, then 0.2 from 150 m before the line's end, then **0** for its last 60 m. On a track with unsealed road, the gravel's hints come before them (below). The sections are numbered from `HINT_0` in order along the line.
   - The fractions are of the line's own length, measured from the points written. The racing line is shorter than the road (Grasstree Hill: 12,737 m against 12,772 m), so a place on the road falls at a later fraction of it than of the centreline.
   - A hint's VALUE scales the speed AC works out from the line's curvature, not the car's speed. Measured in game (4 Nov): AC's own normalised position matches our line exactly in both layouts, and the hints fall where we put them. Yet down Grasstree Hill's straight reverse run-off (radius 287-1,000 m) 0.2 and 0.05 left the AI at about 100 km/h, while forward, where the run-off bends (radius 19-210 m), the same hints slowed it to 12-15 km/h.
   - Kunos's shipped hints fit that reading: they're all short ranges around corners, 0.6 to 0.92 (`ks_laguna_seca`'s Corkscrew, `ks_black_cat_county`, `ks_nurburgring`), and none sits on a straight or near 0. There's no Kunos or CSP documentation of the file.
@@ -176,7 +178,11 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
   - Several cars queue behind the first one stopped. That leaves them short of the 0 hint, where the pace is still 0.2, so only AC's car-following holds them, creeping at about 1 km/h. In two of the four multi-car runs that reached the run-off (Brinktop Road, and a later race on Grasstree Hill), one crept into the car ahead (slight damage to both, 1.3). A community tutorial on AI lines gives the same advice: a 0 hint near the end of a point-to-point line, which should end after the last timing gate (Overtake.gg, "Tutorial on making 2-way traffic (or other) AI lines and layouts").
   - Earlier: with a single hint of 0.5 and the line running to the road's end, the AI reached the end wall at about 45 km/h, and AC put it back at the start (3 Nov).
   - Kunos's own point-to-point track, `ks_drag`, sidesteps the problem: one straight AI line runs 2,469 m, past every layout's finish (`AC_OPEN_FINISH_L/R`, 204 m to 2,004 m along it), so even the 2,000 m layout leaves 465 m of line after its finish.
-- **No hints on gravel** yet: AC's AI sets its own pace from the surface it's on. If it overdrives the gravel in testing, a hint of about 0.8 over the unsealed stretches is the next step.
+- **Hints on gravel:** one `[HINT_n]` of pace **0.8** (`layout.AI_GRAVEL_PACE`) over each unsealed run before the finish, by the maintainer's decision of 5 Nov 2026. With no hint, and GRAVEL at friction 0.88, AC's AI overdrove the gravel in game (5 Nov), at about tarmac pace (Surfaces above). On Lower Swamp Road in reverse, all 5 cars jumped the crest the validator warns about, about 1.8 km in (a 175 m vertical radius), and took about 70 damage each.
+  - The runs are the stretches the `1GRAVEL_###` meshes cover (the section stage's `unsealed`, cut where the surface changes), in each layout's own driving order. The hints are in the same fractions of the line's own length as the run-off's.
+  - Each is cut at the finish gate: from there the run-off ramp sets the pace, so the two never overlap, and a run wholly after the finish gets none. Unsealed stretches under 50 m have already joined their neighbours (`section.settle`), so there's no separate minimum.
+  - A sealed track's `ai_hints.ini` is exactly as before: the run-off ramp alone.
+  - **It may not slow the AI on a straight.** A hint scales the speed AC allows for the line's curvature (above): on the straight reverse run-off, 0.2 and 0.05 did nothing, and only 0 stopped a car. So 0.8 should slow the AI into gravel bends, but may do little on a straight, or over a straight crest like Lower Swamp Road's. GRAVEL's lower friction is the other lever. To check in game (`docs/known-issues.md`).
 - **The line is a racing line** across the road's full width (`core/racing_line.py`), by the maintainer's decision of 4 Nov 2026: out-in-out through the bends, as on a closed road, not kept to the left lane.
   - It's a minimum-curvature line after Heilmeier et al., "Minimum curvature trajectory planning and control for an autonomous race car" (Vehicle System Dynamics 58(10), 2020, doi:10.1080/00423114.2019.1631455), re-implemented from the paper. TUM's implementation is LGPL-3.0 and wasn't used.
   - Offsets from the centreline at stations 2 m apart, chosen to minimise the line's summed squared curvature, linearised around the line found and solved again, three times.

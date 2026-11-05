@@ -165,6 +165,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     tree_list = _write_tree_fx(work, ext)
 
     width = sec["half_left"] + sec["half_right"]
+    unsealed = _unsealed(sec)
     has_gravel = any(m.name.startswith("1GRAVEL") for m in scene.meshes)
     unsealed_m = _unsealed_m(c["s"], sec)
     surface_tags = package.surface_tags(unsealed_m, float(c["s"][-1] - c["s"][0]))
@@ -209,11 +210,12 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         _write_text(data / "lighting.ini", package.lighting_ini(), encoding="ascii")
         _write_text(data / "groove.ini", package.groove_ini(), encoding="ascii")
         _write_text(data / "crew.ini", package.crew_ini(), encoding="ascii")
-        # Ramp the AI down over the run-off after the finish, to all but stopped where its line ends. The hints are
-        # fractions of the racing line's own length, which is shorter than the road's.
-        _write_text(data / "ai_hints.ini",
-                    package.ai_hints_ini(ai_line.runoff_hints(road.length, finish_distance(road.length), line=line)),
-                    encoding="ascii")
+        # The AI at AI_GRAVEL_PACE over unsealed road up to the finish, then ramped down over the run-off after it,
+        # to all but stopped where its line ends. The hints are fractions of the racing line's own length, which is
+        # shorter than the road's. A sealed track gets the run-off ramp alone, as before.
+        hints = ai_line.pace_hints(road.length, finish_distance(road.length), line=line,
+                                   unsealed=unsealed_runs(c["s"], unsealed, reverse=lay.reverse))
+        _write_text(data / "ai_hints.ini", package.ai_hints_ini(hints), encoding="ascii")
 
         direction = package.compass(float(np.arctan2(road.n[-1] - road.n[0], road.e[-1] - road.e[0])))
         name = f"{title} ({direction})" if multi else title
@@ -285,12 +287,28 @@ def _unsealed_m(s: np.ndarray, sec) -> float:
     return float(np.diff(s)[_unsealed(sec)[:-1]].sum())
 
 
+def _surface_stretches(unsealed: np.ndarray) -> list[tuple[int, int]]:
+    """(first, last) station of each stretch of one surface class. A change at station i starts a stretch there,
+    as it starts a new chunk of road mesh (`mesh.road_chunks`), so the 1GRAVEL_### meshes cover exactly the
+    unsealed stretches."""
+    cuts = [0, *np.flatnonzero(np.diff(unsealed.astype(np.int8))) + 1, len(unsealed) - 1]
+    return [(a, b) for a, b in zip(cuts, cuts[1:]) if b > a]
+
+
 def surface_runs(s: np.ndarray, unsealed: np.ndarray) -> list[dict]:
     """Stretches of one surface class along the road, for centreline.geojson."""
-    cuts = [0, *np.flatnonzero(np.diff(unsealed.astype(np.int8))) + 1, len(s) - 1]
     return [{"from_m": round(float(s[a]), 1), "to_m": round(float(s[b]), 1),
-             "surface_class": "unsealed" if unsealed[a] else "sealed"}
-            for a, b in zip(cuts, cuts[1:]) if b > a]
+             "surface_class": "unsealed" if unsealed[a] else "sealed"} for a, b in _surface_stretches(unsealed)]
+
+
+def unsealed_runs(s: np.ndarray, unsealed: np.ndarray, *, reverse: bool = False) -> list[tuple[float, float]]:
+    """The unsealed stretches as (from, to) metres from a layout's start, in driving order, for its pace hints.
+    The reverse layout runs from the centreline's far end, as its RoadModel does."""
+    runs = [(float(s[a] - s[0]), float(s[b] - s[0])) for a, b in _surface_stretches(unsealed) if unsealed[a]]
+    if not reverse:
+        return runs
+    total = float(s[-1] - s[0])
+    return [(total - b, total - a) for a, b in reversed(runs)]
 
 
 def _write_tree_fx(work: WorkDir, ext) -> tuple[str, int] | None:

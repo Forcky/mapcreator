@@ -6,7 +6,7 @@ import json
 import numpy as np
 import pytest
 
-from mapcreator.core import layout, mesh, package, textures
+from mapcreator.core import ai_line, layout, mesh, package, textures
 from mapcreator.core import section as sec
 from mapcreator.core.layout import RoadModel, grid
 from mapcreator.core.scene import LocalFrame
@@ -198,8 +198,9 @@ def test_surfaces_ini_adds_gravel_only_when_asked():
     text = package.surfaces_ini(gravel=True)
     assert "\n" not in text.replace("\r\n", "")
     gravel = _sections(text)["SURFACE_2"]
+    # Friction 0.80, the maintainer's choice: at 0.88 the AI drove the gravel at near-tarmac pace (in game, 5 Nov).
     assert gravel == {
-        "KEY": "GRAVEL", "FRICTION": "0.88", "DAMPING": "0.01", "WAV": "gravel.wav", "WAV_PITCH": "0",
+        "KEY": "GRAVEL", "FRICTION": "0.80", "DAMPING": "0.01", "WAV": "gravel.wav", "WAV_PITCH": "0",
         "FF_EFFECT": "NULL", "DIRT_ADDITIVE": "0.8", "IS_VALID_TRACK": "1", "BLACK_FLAG_TIME": "0",
         "SIN_HEIGHT": "0.01", "SIN_LENGTH": "0.5", "IS_PITLANE": "0", "VIBRATION_GAIN": "0.1",
         "VIBRATION_LENGTH": "0.35", "_EXT_SURFACE_TYPE": "GRAVEL", "_EXT_SURFACE_TYPE_MODIFIER": "REGULAR",
@@ -260,6 +261,92 @@ def test_centreline_surface_runs():
                     {"from_m": 600.0, "to_m": 1000.0, "surface_class": "unsealed"}]
     assert track_stage.surface_runs(s, np.zeros(len(s), bool)) == [
         {"from_m": 0.0, "to_m": 1000.0, "surface_class": "sealed"}]
+
+
+# --- AI pace on gravel -----------------------------------------------------------------------------------------
+
+def _line(length: float, n: int, arc) -> ai_line.AiLine:
+    """A stand-in AI line from END_INSET_M to AI_END_SHORT_M before the end, `arc(station)` metres along itself:
+    not `ai_line.build`, so the racing line's own changes can't move these fractions."""
+    station = np.linspace(ai_line.END_INSET_M, length - layout.AI_END_SHORT_M, n)
+    along = arc(station)
+    return ai_line.AiLine(pos=np.zeros((n, 3)), length=along - along[0], extra=np.zeros((n, ai_line.EXTRA_FIELDS)),
+                          station=station)
+
+
+def test_unsealed_runs_are_the_gravel_meshes_in_driving_order():
+    s = 100.0 + np.arange(0.0, 3001.0)  # the centreline needn't start at 0
+    unsealed = ((s >= 700) & (s < 1500)) | (s >= 2200)
+    assert track_stage.unsealed_runs(s, unsealed) == [(600.0, 1400.0), (2100.0, 3000.0)]
+    # The reverse layout starts at the far end: its first gravel is the forward layout's last.
+    assert track_stage.unsealed_runs(s, unsealed, reverse=True) == [(0.0, 900.0), (1600.0, 2400.0)]
+    assert track_stage.unsealed_runs(s, np.zeros(len(s), bool)) == []
+    # The same stations the 1GRAVEL_### chunks cover.
+    style = np.where(unsealed, 2, 0).astype(np.int8)
+    rows = sorted({r for a, b in mesh.road_chunks(style, 200) if sec.is_unsealed(style[a]) for r in range(a, b + 1)})
+    starts = [r for r in rows if r - 1 not in rows]
+    ends = [r for r in rows if r + 1 not in rows]
+    assert [(s[a] - s[0], s[b] - s[0]) for a, b in zip(starts, ends)] == track_stage.unsealed_runs(s, unsealed)
+
+
+def test_gravel_gets_a_pace_hint_up_to_the_finish():
+    length = 6000.0
+    finish = layout.finish_distance(length)
+    assert finish == 5750.0
+    # The racing line cuts the bends of the first 3 km, so it's shorter than the road there.
+    line = _line(length, 1200, lambda d: np.where(d < 3000, 0.97 * d, 0.97 * 3000 + (d - 3000)))
+    # Gravel from the start, a run in the middle, one across the finish and one wholly after it.
+    runs = [(0.0, 400.0), (1000.0, 2500.0), (3200.0, 5800.0), (5870.0, 6000.0)]
+    hints = ai_line.pace_hints(length, finish, unsealed=runs, line=line)
+
+    def frac(d):  # a fraction of the line's own length, as the run-off hints use
+        return float(np.interp(d, line.station, line.length) / line.length[-1])
+
+    pace = layout.AI_GRAVEL_PACE
+    assert pace == 0.8
+    gravel, runoff = hints[:3], hints[3:]
+    expected = [(0.0, frac(400), pace), (frac(1000), frac(2500), pace), (frac(3200), frac(finish), pace)]
+    assert np.array(gravel) == pytest.approx(np.array(expected))
+    assert frac(1000) != pytest.approx((1000 - ai_line.END_INSET_M) / (length - layout.AI_END_SHORT_M - 1.5))
+    # The run-off ramp is untouched and wins after the finish: the gravel stops where it starts, and the run after
+    # the finish gets no hint.
+    assert runoff == ai_line.runoff_hints(length, finish, line=line)
+    assert gravel[-1][1] == runoff[0][0] == pytest.approx(frac(finish))
+    assert all(a[1] <= b[0] and a[0] < a[1] for a, b in zip(hints, hints[1:]))
+    text = package.ai_hints_ini(hints)
+    ini = _sections(text)
+    assert list(ini) == [f"HINT_{i}" for i in range(6)]
+    assert [v["VALUE"] for v in ini.values()] == ["0.8", "0.8", "0.8", "0.5", "0.2", "0"]
+    starts = [float(v["START"]) for v in ini.values()]
+    assert starts == sorted(starts) and ini["HINT_2"]["END"] == ini["HINT_3"]["START"]
+    # The reverse layout's runs, in its own driving order, give the same kind of hints.
+    s = np.arange(0.0, length + 1)
+    unsealed = ((s >= 1000) & (s < 2500)) | (s >= 5600)
+    back = track_stage.unsealed_runs(s, unsealed, reverse=True)
+    assert back == [(0.0, 400.0), (3500.0, 5000.0)]
+    back_hints = ai_line.pace_hints(length, finish, unsealed=back, line=line)
+    assert [p for *_, p in back_hints] == [pace, pace, 0.5, 0.2, 0.0]
+    assert all(a[1] <= b[0] for a, b in zip(back_hints, back_hints[1:]))
+
+
+# Written by main before gravel had hints (520b5c9), for the same lines and road.
+SEALED_HINTS = {
+    "line": "[HINT_0]\r\nSTART=0.9103\r\nEND=0.9359\r\nVALUE=0.5\r\n\r\n[HINT_1]\r\nSTART=0.9359\r\nEND=0.9743\r\n"
+            "VALUE=0.2\r\n\r\n[HINT_2]\r\nSTART=0.9743\r\nEND=1.0000\r\nVALUE=0\r\n",
+    "road": "[HINT_0]\r\nSTART=0.9110\r\nEND=0.9364\r\nVALUE=0.5\r\n\r\n[HINT_1]\r\nSTART=0.9364\r\nEND=0.9746\r\n"
+            "VALUE=0.2\r\n\r\n[HINT_2]\r\nSTART=0.9746\r\nEND=1.0000\r\nVALUE=0\r\n",
+}
+
+
+@pytest.mark.parametrize("which", ["line", "road"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_a_sealed_track_writes_the_same_ai_hints_as_before(which, reverse):
+    length = 2400.0
+    line = _line(length, 470, lambda d: 0.995 * d - 1.5 * np.sin(d / 150.0)) if which == "line" else None
+    s = np.arange(0.0, length + 1)
+    runs = track_stage.unsealed_runs(s, np.zeros(len(s), bool), reverse=reverse)
+    hints = ai_line.pace_hints(length, layout.finish_distance(length), unsealed=runs, line=line)
+    assert package.ai_hints_ini(hints) == SEALED_HINTS[which]
 
 
 # --- Textures --------------------------------------------------------------------------------------------------

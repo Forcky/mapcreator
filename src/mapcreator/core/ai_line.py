@@ -31,7 +31,7 @@ from scipy.interpolate import CubicSpline
 from scipy.ndimage import gaussian_filter1d
 
 from mapcreator.core import racing_line
-from mapcreator.core.layout import AI_END_SHORT_M, AI_RUNOFF_RAMP, RoadModel, finish_distance
+from mapcreator.core.layout import AI_END_SHORT_M, AI_GRAVEL_PACE, AI_RUNOFF_RAMP, RoadModel, finish_distance
 from mapcreator.core.scene import LocalFrame
 
 LIFT_M = 0.4
@@ -90,15 +90,10 @@ def speed_profile(d: np.ndarray, curvature: np.ndarray, grade: np.ndarray) -> np
     return v
 
 
-def runoff_hints(length: float, finish: float, *, end_short_m: float = AI_END_SHORT_M,
-                 ramp=AI_RUNOFF_RAMP, line: AiLine | None = None) -> list[tuple[float, float, float]]:
-    """The AI's pace after the finish, as (start, end, pace) sections in fractions of its spline (0 at the start
-    of the line, 1 at its end) for a layout of `length` metres with the finish at `finish`. Contiguous, from the
-    finish to the end of the line, the pace falling section by section. A run-off too short for a section skips
-    it.
-
-    Given the `line`, the fractions are of its own length: a racing line is shorter than the road, so a place on
-    the road falls at a later fraction of it."""
+def spline_fraction(length: float, *, end_short_m: float = AI_END_SHORT_M, line: AiLine | None = None):
+    """Distance along a layout of `length` metres to a fraction of its AI spline (0 at the start of the line, 1 at
+    its end): the space every hint is written in. Given the `line`, the fractions are of its own length: a racing
+    line is shorter than the road, so a place on the road falls at a later fraction of it."""
     first, last = END_INSET_M, length - end_short_m
     span = max(last - first, 1.0)
 
@@ -107,6 +102,45 @@ def runoff_hints(length: float, finish: float, *, end_short_m: float = AI_END_SH
             return (d - first) / span
         return float(np.interp(d, line.station, line.length) / max(line.length[-1], 1.0))
 
+    return frac
+
+
+def gravel_hints(unsealed, length: float, finish: float, *, end_short_m: float = AI_END_SHORT_M,
+                 pace: float = AI_GRAVEL_PACE, line: AiLine | None = None) -> list[tuple[float, float, float]]:
+    """The AI's pace over unsealed road, as one (start, end, pace) section per run, in the run-off hints'
+    fractions (`spline_fraction`). `unsealed` is the runs as (from, to) metres along the layout, apart from each
+    other. Each is cut to the AI line's start and to the finish: from the finish on, the run-off ramp sets the
+    pace (`runoff_hints`), so the two never overlap, and a run that's all after the finish gets none. A run under
+    `section.MIN_SURFACE_RUN_M` was already merged into its neighbours (`section.settle`); only the cut at the
+    finish can leave one shorter."""
+    frac = spline_fraction(length, end_short_m=end_short_m, line=line)
+    out = []
+    for a, b in sorted(unsealed):
+        a, b = max(a, END_INSET_M), min(b, finish)
+        if b > a:
+            out.append((frac(a), frac(b), pace))
+    return out
+
+
+def pace_hints(length: float, finish: float, *, unsealed=(), end_short_m: float = AI_END_SHORT_M,
+               line: AiLine | None = None) -> list[tuple[float, float, float]]:
+    """Every hint for a layout, in order along its spline: AI_GRAVEL_PACE over its unsealed runs up to the finish
+    (`gravel_hints`), then the ramp over the run-off (`runoff_hints`). With no unsealed road, the run-off ramp
+    alone, exactly as before gravel had hints."""
+    return (gravel_hints(unsealed, length, finish, end_short_m=end_short_m, line=line)
+            + runoff_hints(length, finish, end_short_m=end_short_m, line=line))
+
+
+def runoff_hints(length: float, finish: float, *, end_short_m: float = AI_END_SHORT_M,
+                 ramp=AI_RUNOFF_RAMP, line: AiLine | None = None) -> list[tuple[float, float, float]]:
+    """The AI's pace after the finish, as (start, end, pace) sections in fractions of its spline (0 at the start
+    of the line, 1 at its end) for a layout of `length` metres with the finish at `finish`. Contiguous, from the
+    finish to the end of the line, the pace falling section by section. A run-off too short for a section skips
+    it.
+
+    Given the `line`, the fractions are of its own length (`spline_fraction`)."""
+    frac = spline_fraction(length, end_short_m=end_short_m, line=line)
+    last = length - end_short_m
     out, start = [], finish
     for before_end, pace in ramp:
         end = max(start, last - before_end)
