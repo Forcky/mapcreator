@@ -490,7 +490,10 @@ def tree_ini(height: float, half_w: float, mesh_names: list[str]) -> str:
     sections = [
         ("BASIC", {"HEIGHT": f"{height:.3f}", "WIDTH": f"{2 * half_w:.3f}", "CACHE_RESOLUTION": "256,512",
                    "VERTICAL_OFFSET": "0"}),
-        ("SHADING", {"SPECULAR": "0.6", "SUBSCATTERING": "1.0", "REFLECTIVITY": "0.6", "BRIGHTNESS": "1.0",
+        # Under headlights at night the trees blew out white (mapcreator#45, the gaming PC's test). Only BRIGHTNESS
+        # moved it; with the rest lowered too, white pixels in the beam fell from 1.34% to 0.55% (Huon, euc_wet),
+        # 3.21% to 2.04% (Lyell, tea-tree) and 1.43% to 0.20% (Dalgarth, pine). Was 0.6, 1.0, 0.6, 1.0.
+        ("SHADING", {"SPECULAR": "0.2", "SUBSCATTERING": "0.3", "REFLECTIVITY": "0.2", "BRIGHTNESS": "0.6",
                      "USE_AO_CHANNEL": "0"}),
         ("NORMALS", {"BOOST": "0.9", "SPHERE": "1.0"}),
         ("LEAVES", {"MULT": "20.0", "OFFSET": "0.0"}),
