@@ -131,8 +131,29 @@ def test_a_chicane_is_straightened():
 
 
 def test_the_edge_margin_grows_with_speed():
-    kmh = np.array([0, 40, 60, 90, 120, 130, 200])
-    assert racing_line.edge_margin(kmh / 3.6) == pytest.approx([1.2, 1.2, 1.2, 1.85, 2.5, 2.5, 2.5])
+    kmh = np.array([0, 40, 60, 90, 120, 130, 160, 200, 250])
+    assert racing_line.edge_margin(kmh / 3.6) == pytest.approx([1.2, 1.2, 1.2, 1.85, 2.5, 2.6, 2.9, 3.3, 3.3])
+
+
+def _fast_kink() -> np.ndarray:
+    """#52 (Brinktop Road at 9.95-10.0 km, taken at 190-200 km/h), as curvature every metre: 800 m straight, a
+    300 m-radius kink left then right, 80 m each, 600 m straight."""
+    return bends((800, 0), (80, 300), (80, -300), (600, 0))
+
+
+def test_a_fast_kink_keeps_the_margin_for_the_speed_the_cars_reach():
+    # The planned speed stops at V_MAX (about 130 km/h), but AC's AI took this kink at 190-200 km/h and ran 2.5-3.4 m
+    # outside a line 2.5 m from the edge: 5 of 8 cars put wheels off. The margin follows the speed the cars may
+    # reach (here 200 km/h: 3.3 m), so on a 6.4 m road the line stays on the centreline through the kink...
+    line = ai_line.build(road_from(_fast_kink(), half=3.2), FRAME)
+    kink = (line.station > 760) & (line.station < 1000)
+    assert line.extra[kink, 0].min() * 3.6 > 125  # planned at the cap
+    assert np.abs(line.offset[kink]).max() <= 0.02
+    # ...and on a 9 m road it keeps 3.3 m from each edge, where before #52 it kept 2.5 m and used 2 m either side.
+    wide = ai_line.build(road_from(_fast_kink(), half=4.5), FRAME)
+    kink = (wide.station > 760) & (wide.station < 1000)
+    assert clearance(wide)[kink].min() >= racing_line.EDGE_MARGIN_TOP_M - 0.05
+    assert np.abs(wide.offset[kink]).max() > 0.8  # still out-in-out, in the 1.2 m left
 
 
 def _grip_used(line) -> np.ndarray:

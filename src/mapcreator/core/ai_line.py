@@ -16,9 +16,9 @@ included. The game casts a ray down from each point to find the surface, and poi
 it in an open-source generator's testing. Speeds are m/s from a grip-limited profile on the line's own
 curvature, with forward (acceleration) and backward (braking) passes, so the AI brakes before bends instead
 of in them, and braking shares the grip with cornering, so it slows before a bend tightens; the profile is
-worked out every metre and read at each point. The racing line's margin from the edges is set from these
-speeds (`racing_line.edge_margin`), so the line is solved again once they're known. sideLeft and sideRight are the
-distances from the line to each road edge: Content Manager draws the road's outline from them
+worked out every metre and read at each point. The racing line's margin from the edges is set from the same
+profile without the V_MAX cap (`racing_line.edge_margin`), since AC's AI doesn't keep to our speeds, so the
+line is solved again once they're known. sideLeft and sideRight are the distances from the line to each road edge: Content Manager draws the road's outline from them
 (AcTools.Render's AiLaneObject).
 """
 
@@ -80,8 +80,9 @@ def road_radius(road: RoadModel, *, end_short_m: float = END_INSET_M) -> tuple[n
     return d, radius_of(np.interp(d, road.d, road.curvature))
 
 
-def speed_profile(d: np.ndarray, curvature: np.ndarray, grade: np.ndarray) -> np.ndarray:
-    """Speeds (m/s) at distances `d`, PROFILE_M apart, along a line of the given curvature and grade.
+def speed_profile(d: np.ndarray, curvature: np.ndarray, grade: np.ndarray, v_max: float = V_MAX) -> np.ndarray:
+    """Speeds (m/s) at distances `d`, PROFILE_M apart, along a line of the given curvature and grade, never over
+    `v_max`.
 
     Grip-limited in the bends, then a forward pass for acceleration and a backward pass for braking. Braking
     shares the tyres' grip with cornering (a friction ellipse: MU G turning, 8 m/s^2 braking): turning at
@@ -92,7 +93,7 @@ def speed_profile(d: np.ndarray, curvature: np.ndarray, grade: np.ndarray) -> np
     radius = radius_of(curvature)
     grip = MU * G
     # Plain lists: these loops index one element at a time, which numpy arrays make several times slower.
-    v = np.minimum(np.sqrt(grip * radius), V_MAX).tolist()
+    v = np.minimum(np.sqrt(grip * radius), v_max).tolist()
     ds, r, gr = np.diff(d).tolist(), radius.tolist(), np.asarray(grade, dtype=float).tolist()
     for i in range(1, len(v)):  # traction-limited acceleration, harder uphill
         a = max(4.5 - G * gr[i], 0.8)
@@ -159,6 +160,12 @@ class _Traced:
         self.grade_p = gaussian_filter1d(grade_p, SMOOTH_M / PROFILE_M)
         self.v_p = speed_profile(self.arc_p, self.curv_p, self.grade_p)
 
+    def margin_speeds(self) -> np.ndarray:
+        """The speeds the cars may reach, every PROFILE_M, for the edge margins (#52): the same profile, but up to
+        MARGIN_TOP_KMH instead of V_MAX. AC's AI works out its own speeds and doesn't stop at V_MAX (in game it ran
+        up to 220 km/h against our 130); above MARGIN_TOP_KMH the margin no longer grows."""
+        return speed_profile(self.arc_p, self.curv_p, self.grade_p, v_max=racing_line.MARGIN_TOP_KMH / 3.6)
+
     def at(self, d: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Points on the line at stations `d` (east/north about the road's first point), and their offsets from
         the centreline."""
@@ -181,8 +188,8 @@ class _Traced:
                                                          -np.interp(d, road.d, road.slope_right) * a))
 
 
-# The racing line keeps a margin from the edges for its planned speed (racing_line.edge_margin), and the speed
-# depends on the line. So the margins are first set from the centreline's speeds, the line solved, its own speeds
+# The racing line keeps a margin from the edges for its speed (racing_line.edge_margin), and the speed depends
+# on the line. So the margins are first set from the centreline's speeds, the line solved, its own speeds
 # worked out and the margins set again from them, and the line solved again from where it was: up to MARGIN_ROUNDS
 # times, until no margin needs to grow by more than MARGIN_TOL_M. The last round only widens margins. On Grasstree
 # Hill, Brinktop Road and Lower Swamp Road that takes both rounds, and the line written then comes within 2 cm of
@@ -200,7 +207,7 @@ def _racing(road: RoadModel, centre: CubicSpline, first: float, last: float) -> 
                                    margin=margin, start=start)
 
     def margins(traced: _Traced) -> np.ndarray:
-        return np.interp(road.d, traced.d_p, racing_line.edge_margin(traced.v_p))
+        return np.interp(road.d, traced.d_p, racing_line.edge_margin(traced.margin_speeds()))
 
     # The racing line is a little faster than the centreline, so this is a first guess, a little narrow.
     margin = margins(_Traced(road, centre, None, first, last))

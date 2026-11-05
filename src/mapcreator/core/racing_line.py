@@ -28,10 +28,10 @@ Where this differs from the paper:
   bounds widen from 0 over `BLEND_M`, so the line leaves and rejoins the centreline smoothly.
 - On a straight, any straight line has no curvature at all. A light pull toward the centre
   (`CENTRE_PULL_M`) picks the middle there, and lets the line drift out only in the run-up to a bend.
-- The margin from the road's edges grows with the planned speed (`edge_margin`, #50). AC's AI tracks the
-  line less closely the faster it goes: at 127 km/h it ran 1.0-1.3 m outside it (in game, 4-5 Nov), so a
-  line 1.2 m from the edge put two wheels off before the turn-in. The speed depends on the line, so the
-  caller solves, works out the speeds and the margins, and solves again (`ai_line.build`).
+- The margin from the road's edges grows with the speed (`edge_margin`, #50). AC's AI tracks the line less
+  closely the faster it goes: at 127 km/h it ran 1.0-1.3 m outside it (in game, 4-5 Nov), so a line 1.2 m
+  from the edge put two wheels off before the turn-in, and at 190-200 km/h 2.5-3.4 m. The speed depends on
+  the line, so the caller solves, works out the speeds and the margins, and solves again (`ai_line.build`).
 - On the inside of a tight bend the line stays within `INSIDE_FRACTION` of the bend's radius of the
   centreline, so its points never cross the bend's centre.
 - It needs no QP library. The curvature limits go into an augmented Lagrangian (multipliers updated
@@ -52,11 +52,17 @@ STEP_M = 2.0  # between optimisation stations
 # From the road's edge to the line: half a car's width (0.85 m for a car 1.7 m wide) plus 0.35 m for error. The
 # least margin, at or below MARGIN_SLOW_KMH (the maintainer's choice, #44).
 EDGE_MARGIN_M = 1.2
-# At MARGIN_FAST_KMH and above: the same 1.2 m plus the 1.3 m AC's AI ran outside the line at 127 km/h on
-# Grasstree Hill (#50, the most of its measured 1.0-1.3 m). Between the two the margin rises in a straight line.
+# At MARGIN_FAST_KMH: the same 1.2 m plus the 1.3 m AC's AI ran outside the line at 127 km/h on Grasstree Hill
+# (#50, the most of its measured 1.0-1.3 m).
 EDGE_MARGIN_FAST_M = 2.5
+# At MARGIN_TOP_KMH and above (the maintainer's choice, #52). On Brinktop Road's kink at 190-200 km/h the AI ran
+# 2.5-3.4 m outside a line 2.5 m from the edge, and 5 of 8 cars put wheels off (in game, 5 Nov). Room for all of
+# that (1.2 m plus 3.4 m) is more than a two-lane road has. 3.3 m holds the line on the centreline of a 6.4 m
+# road there, which is where the cars drove anyway, and leaves a wider road some room.
+EDGE_MARGIN_TOP_M = 3.3
 MARGIN_SLOW_KMH = 60.0
 MARGIN_FAST_KMH = 120.0
+MARGIN_TOP_KMH = 200.0
 HOLD_START_M = 60.0  # the line stays on the centreline this far from the layout's start (grid, start gate)
 HOLD_BEFORE_FINISH_M = 30.0  # and from this far before the finish gate to its end (finish gate, run-off)
 BLEND_M = 50.0  # over which the bounds widen from the centreline to the road's full width
@@ -89,10 +95,12 @@ class Offsets:
 
 
 def edge_margin(speed: np.ndarray | float) -> np.ndarray:
-    """The margin (m) from each road edge to the line at a planned speed (m/s): EDGE_MARGIN_M at or below
-    MARGIN_SLOW_KMH, rising in a straight line to EDGE_MARGIN_FAST_M at MARGIN_FAST_KMH, and that above it."""
-    x = (np.asarray(speed, dtype=float) * 3.6 - MARGIN_SLOW_KMH) / (MARGIN_FAST_KMH - MARGIN_SLOW_KMH)
-    return EDGE_MARGIN_M + (EDGE_MARGIN_FAST_M - EDGE_MARGIN_M) * np.clip(x, 0.0, 1.0)
+    """The margin (m) from each road edge to the line at a speed (m/s): EDGE_MARGIN_M at or below MARGIN_SLOW_KMH,
+    rising in straight lines to EDGE_MARGIN_FAST_M at MARGIN_FAST_KMH and EDGE_MARGIN_TOP_M at MARGIN_TOP_KMH, and
+    that above it. The line is built with the speed the cars may reach there (`ai_line._Traced.margin_speeds`),
+    not the planned speed, which stops at ai_line.V_MAX: the cars don't."""
+    return np.interp(np.asarray(speed, dtype=float) * 3.6, [MARGIN_SLOW_KMH, MARGIN_FAST_KMH, MARGIN_TOP_KMH],
+                     [EDGE_MARGIN_M, EDGE_MARGIN_FAST_M, EDGE_MARGIN_TOP_M])
 
 
 def _smoothstep(x: np.ndarray) -> np.ndarray:
