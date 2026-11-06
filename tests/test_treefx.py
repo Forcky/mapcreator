@@ -235,3 +235,34 @@ def test_ext_config_lists_the_trees():
     assert "MESH_ADJUSTMENT" not in text
     bare = package.ext_config_ini(grass_materials=["grass"], road_materials=["road"], version="t")
     assert "TREES" not in bare
+
+
+def _fold(counts: dict[str, int], heights: dict[str, float]):
+    names = list(treefx.MODEL_NAMES)
+    model = np.concatenate([np.full(n, names.index(m)) for m, n in counts.items()])
+    height = np.concatenate([np.full(n, heights.get(m, 20.0)) for m, n in counts.items()])
+    out, folded = treefx.fold_rare(model, height, names)
+    return {m: int((out == names.index(m)).sum()) for m in names if (out == names.index(m)).any()}, folded
+
+
+def test_a_rarely_drawn_model_folds_into_a_similar_one_that_stays():
+    # Lady Wakehurst Drive's three rare models: 5 smooth gums of each outline go to the rough-barked outlines (no
+    # smooth model stays), and 7 wattles to tea-tree. 123 young eucalypts are over 0.2% of 31,000, so they stay.
+    left, folded = _fold({"euc_wet": 21_000, "myrtle": 4_900, "euc_tall_rough": 3_600, "tea_tree": 1_400,
+                          "euc_spread_rough": 450, "euc_young": 123, "wattle": 7, "euc_spread": 5, "euc_tall": 5},
+                         {"tea_tree": 6.0, "wattle": 6.0, "euc_young": 10.0, "euc_wet": 45.0})
+    assert folded == {"euc_tall": "euc_tall_rough", "euc_spread": "euc_spread_rough", "wattle": "tea_tree"}
+    assert left["euc_tall_rough"] == 3_605 and left["euc_spread_rough"] == 455 and left["tea_tree"] == 1_407
+    assert len(left) == 6 and sum(left.values()) == 31_490
+
+
+def test_folding_keeps_pines_scales_and_small_tracks_in_mind():
+    # A pine never folds; a rare model whose only similar ones would scale its trees past the clip stays.
+    left, folded = _fold({"euc_tall": 5_000, "wattle": 4_000, "pine": 3, "myrtle": 4}, {"myrtle": 25.0})
+    assert folded == {} and left["pine"] == 3 and left["myrtle"] == 4  # 25 m myrtles as 7.5 m wattles: 3.3x
+    # On a small track the floor applies: fewer than FOLD_MIN trees fold, FOLD_MIN don't.
+    assert _fold({"euc_tall": 300, "euc_spread": treefx.FOLD_MIN - 1}, {})[1] == {"euc_spread": "euc_tall"}
+    assert _fold({"euc_tall": 300, "euc_spread": treefx.FOLD_MIN}, {})[1] == {}
+    # The same trees fold the same way every time.
+    assert _fold({"euc_tall": 300, "euc_spread": 2, "euc_young": 2}, {}) == \
+        _fold({"euc_tall": 300, "euc_spread": 2, "euc_young": 2}, {})

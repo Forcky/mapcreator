@@ -7,7 +7,8 @@ file under the track's `extension/` folder. These are a track's only trees: the 
 The models are generated here (dry and wet-forest eucalypts, a wattle, a tea-tree, a myrtle and a pine), so
 there's no licensing question. They share one bark atlas and one leaf atlas (`sprites`), so every model's
 textures are the same bytes. CSP ships no tree models of its own. Which model draws a tree comes from its height, and where there's
-a vegetation map from its family too (`FAMILY_BANDS`, `core.species`).
+a vegetation map from its family too (`FAMILY_BANDS`, `core.species`). A model only a handful of a track's trees
+would draw costs as much as any other, so it folds into a similar one (`fold_rare`).
 
 Model format, re-implemented from the description of Content Manager's tree converter (the reference
 writer, MS-PL); no code copied:
@@ -259,6 +260,23 @@ FAMILY_BANDS = {
     "plantation_euc": ((25.0, {"euc_young": 1.0}), (np.inf, {"euc_tall": 1.0})),
     "willow": ((np.inf, {"euc_spread": 1.0}),),
     "mallee": ((np.inf, {"euc_young": 1.0}),),  # a low eucalypt until mallee has its own multi-stemmed model
+}
+SIZE_CLIP = (0.3, 3.0)  # a tree's scale against its model's own height (trees.txt `size`)
+# Every model a track ships costs draw calls and memory, about 0.3% of frame rate each (the gaming PC's 4 against
+# 12 models), whether it draws thousands of trees or five. So a model drawn by fewer than FOLD_SHARE of a track's
+# trees (and fewer than FOLD_MIN on any track) draws them as the first of FOLD_INTO that stays: the family's
+# other outline first, then the same outline with the other bark. Nothing looks like a pine, so it never folds.
+FOLD_SHARE, FOLD_MIN = 0.002, 10
+FOLD_INTO = {
+    "euc_tall": ("euc_spread", "euc_tall_rough", "euc_spread_rough", "euc_wet", "euc_young"),
+    "euc_spread": ("euc_tall", "euc_spread_rough", "euc_tall_rough", "euc_young"),
+    "euc_tall_rough": ("euc_spread_rough", "euc_tall", "euc_wet", "euc_spread"),
+    "euc_spread_rough": ("euc_tall_rough", "euc_spread", "euc_tall", "euc_young"),
+    "euc_young": ("euc_spread", "euc_spread_rough", "euc_tall", "euc_tall_rough", "wattle"),
+    "euc_wet": ("euc_tall_rough", "euc_tall"),
+    "wattle": ("tea_tree", "euc_young", "myrtle"),
+    "tea_tree": ("wattle", "euc_young"),
+    "myrtle": ("euc_spread", "euc_spread_rough", "wattle"),
 }
 
 
@@ -565,6 +583,26 @@ def assign_families(height: np.ndarray, families: np.ndarray, names: list[str],
         mine = families == family
         out[mine] = assign(height[mine], names, rng, FAMILY_BANDS[family])
     return out
+
+
+def fold_rare(model: np.ndarray, height: np.ndarray, names: list[str]) -> tuple[np.ndarray, dict[str, str]]:
+    """`model` (indices into `names`) with each rarely drawn model's trees moved to the first model in its
+    FOLD_INTO that stays, where that keeps every one of them within SIZE_CLIP; and which folded into which.
+    It goes by counts alone, so the same trees always fold the same way."""
+    model, height = np.asarray(model, dtype=np.int64).copy(), np.asarray(height, dtype=float)
+    counts = np.bincount(model, minlength=len(names))
+    rare = max(FOLD_MIN, FOLD_SHARE * len(model))
+    stays = {names[i] for i in np.flatnonzero(counts >= rare)}
+    folded = {}
+    for i in np.flatnonzero((counts > 0) & (counts < rare)):
+        mine = model == i
+        for target in FOLD_INTO.get(names[i], ()):
+            size = height[mine] / KINDS[VARIANTS[target][0] if target in VARIANTS else target].height
+            if target in stays and SIZE_CLIP[0] <= size.min() and size.max() <= SIZE_CLIP[1]:
+                model[mine] = names.index(target)
+                folded[names[i]] = target
+                break
+    return model, folded
 
 
 def trees_txt(names: list[str], model: np.ndarray, pos: np.ndarray, angle: np.ndarray, size: np.ndarray,
