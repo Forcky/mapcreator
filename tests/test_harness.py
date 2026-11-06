@@ -122,6 +122,23 @@ def test_probe_points_keep_a_car_length_off_both_ends(tmp_path, monkeypatch):
     assert s == [5.0, 105.0, 205.0]
 
 
+def test_probe_points_can_face_out_to_either_side(tmp_path, monkeypatch):
+    import json
+
+    import numpy as np
+
+    (tmp_path / "track" / "ai").mkdir(parents=True)
+    _straight_line(tmp_path / "track")  # forward is +x, east
+    monkeypatch.setattr(ac_harness, "ac_docs", lambda: tmp_path / "docs")
+    points = tmp_path / "docs" / "mapcreator_probe" / "points.json"
+    # AC's z runs south, so north (the left of a car heading east) is -z.
+    for yaw, facing in ((0.0, [1, 0, 0]), (90.0, [0, 0, -1]), (-90.0, [0, 0, 1])):
+        ac_harness.probe_points(tmp_path / "track", "", 100.0, False, 0, yaw)
+        data = json.loads(points.read_text())
+        assert data["yaw_deg"] == yaw
+        assert all(np.allclose(p["dir"], facing, atol=1e-4) for p in data["points"])
+
+
 def _straight_line(track: Path, n: int = 301) -> None:
     """A straight AI line along +x, a point every metre, 3 m of road either side."""
     import numpy as np
