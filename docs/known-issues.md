@@ -97,7 +97,7 @@ The AI line runs out-in-out over the whole road (`core/racing_line.py`, 4 Nov). 
 Trees and buildings now stand within 600 m of the road (`core.reach`); they stopped at 250 m. Power-line supports still reach the terrain's edge less 5 m (695 m). None of it has been seen in game yet.
 
 - **To check in game** (CSP 0.2.11, GTX 1660 Ti, 1440p):
-  - **Do far trees draw?** Past its last LOD (85-267 m out, by model), Tree FX draws each tree as a billboard. The billboard fades out at a distance that CSP's own code sets and doesn't document (`docs/ac-format.md`). If that's under 600 m, the far trees never show.
+  - **Do far trees draw?** Past its last LOD (84-270 m out, by model), Tree FX draws each tree as a billboard. The billboard fades out at a distance that CSP's own code sets and doesn't document (`docs/ac-format.md`). If that's under 600 m, the far trees never show.
   - **What do they cost?** Compare frame rates against a 250 m build, at the same probe points, both along the road and looking out to the side (`probe-points --yaw 90` and `--yaw -90`). Near the road, the cost was mostly the trees within 40 m. What a billboard 250-600 m out costs isn't known.
   - CSP's tree loading time, with 2.4 times as many trees in a canopy-model build.
 - **What it adds** (laptop builds, made-up WorldCover trees with the Meta/WRI mask):
