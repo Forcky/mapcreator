@@ -4,8 +4,10 @@ Tree FX (CSP 0.1.79 and later) draws instanced 3D trees with LODs and distant bi
 file under the track's `extension/` folder. These are a track's only trees: the KN5 has none, so vanilla AC
 (without CSP) shows none.
 
-The models are generated here (eucalypts and a wattle), so there's no licensing question. CSP ships no tree
-models of its own.
+The models are generated here (dry and wet-forest eucalypts, a wattle, a tea-tree, a myrtle and a pine), so
+there's no licensing question. They share one bark atlas and one leaf atlas (`sprites`), so every model's
+textures are the same bytes. CSP ships no tree models of its own. Which model draws a tree comes from its height, and where there's
+a vegetation map from its family too (`FAMILY_BANDS`, `core.species`).
 
 Model format, re-implemented from the description of Content Manager's tree converter (the reference
 writer, MS-PL); no code copied:
@@ -38,16 +40,22 @@ from __future__ import annotations
 import io
 import struct
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from functools import lru_cache
 
 import numpy as np
 
-from mapcreator.core import package, sprites, textures
+from mapcreator.core import package, reach, sprites, textures
 from mapcreator.core.kn5 import tangents
 
 UP = np.array([0.0, 1.0, 0.0])
+# Every model's last LOD ends within this, so past it every tree draws as a billboard (`tree_ini`), as the 600 m
+# reach was measured in game with. Ten heights put it at 84-267 m for most models, but at 273 m for the myrtle, 301 m
+# for the pine and 457 m for the wet-forest eucalypt; their LODs shrink in step instead (the maintainer's decision, 6 Nov 2026).
+LOD_REACH_M = 0.45 * reach.SCENERY_M
 ZIP_DATE = (2020, 1, 1, 0, 0, 0)  # fixed, so the same model gives the same bytes
-BARK_TILE_M = (1.2, 2.4)  # bark texture repeat, around and along a branch
+BARK_TILE_M = 2.4  # bark texture repeat along a branch; around it, a bark atlas column is used once
+BARK_PAD = 2.0 / sprites.BARK_SIZE[0]  # keep clear of the neighbouring columns when the texture is filtered
 
 VERTEX = np.dtype([("pos", "<f4", 3), ("normal", "<f4", 3), ("uv", "<f4", 2), ("tangent", "u1", 4),
                    ("uv2", "<f2", 2), ("extra", "u1", 4)])
@@ -147,8 +155,9 @@ def _unit(v):
     return v / np.linalg.norm(v, axis=-1, keepdims=True)
 
 
-def tube(points: np.ndarray, radii: np.ndarray, sides: int, parts: _Parts) -> None:
-    """A branch as rings of `sides` vertices along `points`, with bark UVs that tile in metres."""
+def tube(points: np.ndarray, radii: np.ndarray, sides: int, parts: _Parts, bark: int = sprites.SMOOTH_BARK) -> None:
+    """A branch as rings of `sides` vertices along `points`. Its bark is column `bark` of the shared bark atlas:
+    once around the branch, and tiled in metres along it."""
     t = np.gradient(points, axis=0)
     t = _unit(t)
     a = np.cross(t[0], UP if abs(t[0][1]) < 0.95 else np.array([1.0, 0.0, 0.0]))
@@ -160,13 +169,13 @@ def tube(points: np.ndarray, radii: np.ndarray, sides: int, parts: _Parts) -> No
         frames.append((a, np.cross(ti, a)))
     theta = np.linspace(0, 2 * np.pi, sides + 1)
     s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))]
-    u_repeat = max(1, round(2 * np.pi * radii[0] / BARK_TILE_M[0]))
+    u = (bark + BARK_PAD + theta / (2 * np.pi) * (1 - 2 * BARK_PAD)) / sprites.BARK_COLUMNS
     pos, nrm, uv = [], [], []
     for p, r, (fa, fb), si in zip(points, radii, frames, s):
         d = np.cos(theta)[:, None] * fa + np.sin(theta)[:, None] * fb
         pos.append(p + r * d)
         nrm.append(d)
-        uv.append(np.column_stack([theta / (2 * np.pi) * u_repeat, np.full(sides + 1, si / BARK_TILE_M[1])]))
+        uv.append(np.column_stack([u, np.full(sides + 1, si / BARK_TILE_M)]))
     ring = sides + 1
     tri = []
     for i in range(len(points) - 1):
@@ -188,6 +197,8 @@ class Kind:
     leaf_size: float  # leaf card size, metres
     cards: int  # leaf cards per cluster at LOD 0
     twigs: int  # side branches per limb
+    bark: int = sprites.SMOOTH_BARK  # column of the shared bark atlas
+    conifer: bool = False  # a straight leader with whorls of near-level branches (`conifer_skeleton`)
 
 
 KINDS = {
@@ -195,7 +206,21 @@ KINDS = {
     "euc_spread": Kind(18.0, 0.33, (4, 7), (32, 58), 0.46, 0.38, (0, 1, 2), 2.3, 5, 3),
     "euc_young": Kind(12.0, 0.25, (5, 8), (15, 32), 0.32, 0.18, (0, 1, 2), 1.8, 4, 2),
     "wattle": Kind(7.5, 0.15, (5, 8), (38, 66), 0.5, 0.14, (sprites.WATTLE_CELL,), 1.6, 6, 3),
+    # New kinds go last: `library` seeds each by its place, so the earlier models keep their shapes.
+    # Tall wet-forest eucalypt (E. obliqua, E. regnans): a long clean bole, rough at the base from the road,
+    # and a small crown high up.
+    "euc_wet": Kind(50.0, 0.62, (4, 7), (20, 42), 0.2, 0.75, (0, 1, 2), 3.0, 5, 3, sprites.ROUGH_BARK),
+    # Tea-tree and paperbark: stems from low down, steep and many, with fine foliage.
+    "tea_tree": Kind(7.0, 0.1, (6, 9), (10, 32), 0.6, 0.1, (sprites.TEA_TREE_CELL,), 1.2, 6, 2, sprites.GREY_BARK),
+    # Rainforest myrtle (Nothofagus cunninghamii): a dense, dark, domed crown on spreading limbs.
+    "myrtle": Kind(25.0, 0.3, (6, 9), (35, 62), 0.42, 0.45, sprites.MYRTLE_CELLS, 2.0, 5, 3, sprites.GREY_BARK),
+    # Radiata pine: a straight leader and whorls of level branches, conical; plantation rows come from the data.
+    "pine": Kind(30.0, 0.28, (7, 9), (78, 98), 0.3, 0.4, sprites.PINE_CELLS, 2.2, 4, 0, sprites.PINE_BARK, True),
 }
+# Texture variants: another model's geometry (and seed) with other bark. Rough-barked dry eucalypts (stringybark,
+# peppermint) look like the smooth gums in outline, so they reuse them.
+VARIANTS = {"euc_tall_rough": ("euc_tall", sprites.ROUGH_BARK), "euc_spread_rough": ("euc_spread", sprites.ROUGH_BARK)}
+MODEL_NAMES = (*KINDS, *VARIANTS)
 # Which models suit trees of each height: (up to metres, {model: share}).
 HEIGHT_BANDS = (
     (9.0, {"wattle": 0.6, "euc_young": 0.4}),
@@ -203,6 +228,37 @@ HEIGHT_BANDS = (
     (22.0, {"euc_spread": 0.55, "euc_tall": 0.35, "euc_young": 0.1}),
     (np.inf, {"euc_tall": 0.7, "euc_spread": 0.3}),
 )
+# The models that draw each tree family (`core.species`), by height in the same form. A family whose own
+# models aren't built yet borrows the nearest ones that are (research/TREE_SPECIES.md section 6d): plantation
+# eucalypt, she-oak, blackwood, snow gum, banksia and the highland conifers come in later batches.
+_DRY = ((9.0, {"euc_young": 0.7, "wattle": 0.3}), (15.0, {"euc_young": 0.5, "euc_spread": 0.5}),
+        (22.0, {"euc_spread": 0.6, "euc_tall": 0.4}), (np.inf, {"euc_tall": 0.7, "euc_spread": 0.3}))
+_ROUGH = ((9.0, {"euc_young": 0.7, "wattle": 0.3}), (15.0, {"euc_young": 0.5, "euc_spread_rough": 0.5}),
+          (22.0, {"euc_spread_rough": 0.6, "euc_tall_rough": 0.4}),
+          (np.inf, {"euc_tall_rough": 0.7, "euc_spread_rough": 0.3}))
+# A crown taller than a small species grows is something else standing in it (an emergent eucalypt over
+# tea-tree, a blackwood among wattles), and drawing it as the small model would hit Tree FX's 3x scale.
+_ACACIA = ((18.0, {"wattle": 1.0}), (np.inf, {"myrtle": 1.0}))
+_SHRUB = ((16.0, {"tea_tree": 1.0}), (np.inf, {"euc_tall_rough": 1.0}))
+_MYRTLE = ((np.inf, {"myrtle": 1.0}),)
+_PINE = ((np.inf, {"pine": 1.0}),)
+FAMILY_BANDS = {
+    "dry_smooth": _DRY,
+    "dry_rough": _ROUGH,
+    "snow_gum": ((np.inf, {"euc_spread": 0.8, "euc_young": 0.2}),),
+    "wet": ((12.0, {"euc_young": 1.0}), (28.0, {"euc_tall_rough": 0.6, "euc_wet": 0.4}), (np.inf, {"euc_wet": 1.0})),
+    "rainforest": _MYRTLE,
+    "conifer": _PINE,
+    "tea_tree": _SHRUB,
+    "wattle": _ACACIA,
+    "blackwood": ((12.0, {"wattle": 1.0}), (np.inf, {"myrtle": 1.0})),  # a dense, dark crown when grown
+    "she_oak": _ACACIA,
+    "banksia": _SHRUB,
+    "regrowth": ((9.0, {"wattle": 0.5, "euc_young": 0.5}), (np.inf, {"euc_young": 0.7, "euc_spread": 0.3})),
+    "pine": _PINE,
+    "plantation_euc": ((25.0, {"euc_young": 1.0}), (np.inf, {"euc_tall": 1.0})),
+    "willow": ((np.inf, {"euc_spread": 1.0}),),
+}
 
 
 def _path(start, direction, length, n, rng, upcurve):
@@ -268,6 +324,39 @@ def skeleton(kind: Kind, rng: np.random.Generator):
     return branches, clusters
 
 
+def conifer_skeleton(kind: Kind, rng: np.random.Generator):
+    """A conifer's branches and leaf clusters: a straight leader to the top, and `kind.limbs` whorls of near-level
+    branches (`limb_angle` from vertical) that shorten towards the top, so the crown is a cone."""
+    h = kind.height
+    top = 0.97 * h
+    ys = np.r_[-0.4, np.linspace(0.0, top, 12)]
+    lean = rng.normal(0, 0.008, 2)
+    trunk = np.column_stack([lean[0] * ys, ys, lean[1] * ys])
+    r_trunk = kind.radius * (1 - 0.9 * np.clip(ys / top, 0, 1))
+    r_trunk[:2] *= 1.25  # root flare
+    branches = [(trunk, r_trunk, 0)]
+    clusters = [(trunk[-1].copy(), UP.copy())]
+    lowest, highest = kind.trunk * h, 0.92 * h
+    az0 = rng.uniform(0, 2 * np.pi)
+    for w, y in enumerate(np.linspace(lowest, highest, int(rng.integers(*kind.limbs)))):
+        rise = (y - lowest) / max(highest - lowest, 1e-6)  # 0 at the lowest whorl, 1 at the top
+        length = kind.limb_length * h * (1 - 0.85 * rise) * rng.uniform(0.85, 1.1)
+        per = 3 if rise < 0.7 else 2
+        start, r_at = _at(trunk, r_trunk, np.clip((y + 0.4) / (top + 0.4), 0, 1))
+        for k in range(per):
+            az = az0 + w * 1.1 + k * 2 * np.pi / per + rng.normal(0, 0.25)
+            el = np.radians(rng.uniform(*kind.limb_angle))
+            direction = np.array([np.sin(el) * np.cos(az), np.cos(el), np.sin(el) * np.sin(az)])
+            pts = _path(start, direction, length, 3, rng, 0.02)
+            radii = max(r_at * 0.35, 0.03) * (1 - 0.85 * np.linspace(0, 1, len(pts)))
+            # Built as twigs: thin, and left out of the farthest LOD, where the needles alone read as the crown.
+            branches.append((pts, radii, 2))
+            for f_leaf in (0.45, 0.75, 1.0):
+                c, _ = _at(pts, radii, f_leaf)
+                clusters.append((c, _unit(np.r_[c[0], 0.1 * h, c[2]])))
+    return branches, clusters
+
+
 def leaf_cards(clusters, kind: Kind, lod: int, rng: np.random.Generator, parts: _Parts) -> None:
     """Leaf-spray cards around each cluster, facing outwards, hanging a little below their twig."""
     per = max(1, round(kind.cards * LOD_CARDS[lod]))
@@ -306,10 +395,10 @@ class TreeModel:
         return [sum(len(g.tri) for g in lod.values()) for lod in self.lods]
 
 
-def build_model(name: str, seed: int) -> TreeModel:
-    kind = KINDS[name]
+def build_model(name: str, seed: int, kind: Kind | None = None) -> TreeModel:
+    kind = kind or KINDS[name]
     rng = np.random.default_rng(seed)
-    branches, clusters = skeleton(kind, rng)
+    branches, clusters = (conifer_skeleton if kind.conifer else skeleton)(kind, rng)
     lods = []
     for lod, sides in enumerate(LOD_SIDES):
         bark, leaves = _Parts(), _Parts()
@@ -317,20 +406,31 @@ def build_model(name: str, seed: int) -> TreeModel:
             if sides[depth]:
                 step = 2 if lod == 2 and depth == 0 else 1
                 keep = np.r_[np.arange(0, len(pts) - 1, step), len(pts) - 1]
-                tube(pts[keep], radii[keep], sides[depth], bark)
+                tube(pts[keep], radii[keep], sides[depth], bark, kind.bark)
         leaf_cards(clusters, kind, lod, np.random.default_rng(seed * 10 + lod), leaves)
         lods.append({"bark": bark.geometry(), "leaves": leaves.geometry()})
     return TreeModel(name, lods)
 
 
-def library(seed: int = 5) -> dict[str, TreeModel]:
-    return {name: build_model(name, seed + i) for i, name in enumerate(KINDS)}
+def model(name: str, seed: int = 5) -> TreeModel:
+    """One model by name: a kind is seeded by its place in KINDS, and a texture variant by its base's."""
+    if name in VARIANTS:
+        base, bark = VARIANTS[name]
+        return build_model(name, seed + list(KINDS).index(base), replace(KINDS[base], bark=bark))
+    return build_model(name, seed + list(KINDS).index(name))
+
+
+def library(seed: int = 5, names=MODEL_NAMES) -> dict[str, TreeModel]:
+    """Models by name: every one, or just those in `names`."""
+    return {name: model(name, seed) for name in names}
 
 
 def texture_files() -> dict[str, bytes]:
+    """The shared atlases: every model carries the same four files, byte for byte."""
+    bark, bark_nm = sprites.bark_atlas()
     return {
-        "bark.dds": textures.to_dds(sprites.bark(), "DXT1"),
-        "bark_nm.dds": textures.to_dds(sprites.bark_normal(), "DXT1"),
+        "bark.dds": textures.to_dds(bark, "DXT1"),
+        "bark_nm.dds": textures.to_dds(bark_nm, "DXT1"),
         "leaves.dds": textures.to_dds(sprites.leaf_sprays(), "DXT5"),
         "leaves_nm.dds": textures.to_dds(sprites.flat_normal(), "DXT1"),
     }
@@ -391,29 +491,40 @@ def trunk_radius(model: TreeModel) -> float:
 
 
 def tree_ini(height: float, half_w: float, mesh_names: list[str]) -> str:
-    """The model's settings. LOD distances follow Content Manager's converter: the LODs share ten model heights
-    (LOD 0 ends 28-89 m out, the last 85-267 m). Past the last, Tree FX draws the tree as a baked billboard
+    """The model's settings. LOD distances follow Content Manager's converter: the LODs share ten model heights,
+    or `LOD_REACH_M` if that's less (LOD 0 ends 28-90 m out, the last 84-270 m). Past the last, Tree FX draws the
+    tree as a baked billboard
     (CSP wiki, Tracks: Trees), the cheapest far tree, so the far scenery (`core.reach`, 600 m) is billboards.
     Billboards fade out at a far distance CSP sets in its own code; it isn't documented (docs/known-issues.md)."""
     sections = [
         ("BASIC", {"HEIGHT": f"{height:.3f}", "WIDTH": f"{2 * half_w:.3f}", "CACHE_RESOLUTION": "256,512",
                    "VERTICAL_OFFSET": "0"}),
-        ("SHADING", {"SPECULAR": "0.6", "SUBSCATTERING": "1.0", "REFLECTIVITY": "0.6", "BRIGHTNESS": "1.0",
+        # Under headlights at night the trees blew out white (mapcreator#45, the gaming PC's test). Only BRIGHTNESS
+        # moved it; with the rest lowered too, white pixels in the beam fell from 1.34% to 0.55% (Huon, euc_wet),
+        # 3.21% to 2.04% (Lyell, tea-tree) and 1.43% to 0.20% (Dalgarth, pine). Was 0.6, 1.0, 0.6, 1.0.
+        ("SHADING", {"SPECULAR": "0.2", "SUBSCATTERING": "0.3", "REFLECTIVITY": "0.2", "BRIGHTNESS": "0.6",
                      "USE_AO_CHANNEL": "0"}),
         ("NORMALS", {"BOOST": "0.9", "SPHERE": "1.0"}),
         ("LEAVES", {"MULT": "20.0", "OFFSET": "0.0"}),
         ("FAKE_SHADOW", {"SIZE": "1.0", "OPACITY": "1.0"}),
     ]
+    last = min(height * 10, LOD_REACH_M)
     for i, name in enumerate(mesh_names):
-        sections.append((f"LOD_{i}", {"MODEL": name, "DISTANCE": f"{height * 10 * (i + 1) / len(mesh_names):.1f}"}))
+        sections.append((f"LOD_{i}", {"MODEL": name, "DISTANCE": f"{last * (i + 1) / len(mesh_names):.1f}"}))
     return package.ini(sections)
+
+
+@lru_cache(maxsize=16)
+def _texture_hash(data: bytes) -> int:
+    """xxHash32 of a texture, never 0. Cached: every model carries the same atlases, and xxh32 is pure Python."""
+    return xxh32(data) or 1
 
 
 def model_bin(model: TreeModel, tex: dict[str, bytes]) -> bytes:
     """The model as a Tree FX `.bin`: tree.ini, one .mesh per LOD, and the textures."""
     height, half_w = model.box
     names = sorted(tex)
-    hashes = [xxh32(tex[n]) or 1 for n in names]
+    hashes = [_texture_hash(tex[n]) for n in names]
     meshes = [f"lod{i}.mesh" for i in range(len(model.lods))]
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -430,17 +541,28 @@ def model_bin(model: TreeModel, tex: dict[str, bytes]) -> bytes:
 
 # -- placing --------------------------------------------------------------------------
 
-def assign(height: np.ndarray, names: list[str], rng: np.random.Generator) -> np.ndarray:
+def assign(height: np.ndarray, names: list[str], rng: np.random.Generator, bands=HEIGHT_BANDS) -> np.ndarray:
     """A model (index into `names`) for each tree, by its height."""
     height = np.asarray(height, dtype=float)
     out = np.zeros(len(height), dtype=np.int64)
     lower = -np.inf
-    for upper, shares in HEIGHT_BANDS:
+    for upper, shares in bands:
         band = (height > lower) & (height <= upper)
         options = [n for n in shares if n in names]
         p = np.array([shares[n] for n in options])
         out[band] = [names.index(options[k]) for k in rng.choice(len(options), int(band.sum()), p=p / p.sum())]
         lower = upper
+    return out
+
+
+def assign_families(height: np.ndarray, families: np.ndarray, names: list[str],
+                    rng: np.random.Generator) -> np.ndarray:
+    """A model (index into `names`) for each tree, by its family (`FAMILY_BANDS`) and its height."""
+    height, families = np.asarray(height, dtype=float), np.asarray(families, dtype=object)
+    out = np.zeros(len(height), dtype=np.int64)
+    for family in sorted(set(families.tolist())):
+        mine = families == family
+        out[mine] = assign(height[mine], names, rng, FAMILY_BANDS[family])
     return out
 
 

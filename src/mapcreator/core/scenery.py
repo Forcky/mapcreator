@@ -4,7 +4,7 @@ Trees and buildings stand within the scenery reach (`core.reach`).
 
 Trees:
 - Chosen here (positions and heights; made-up ones thinned with distance from the road and, near it, to a
-  per-km budget).
+  per-km budget). Their kind comes from a vegetation map where the region has one (`core.species`).
 - Drawn by Custom Shaders Patch Tree FX as 3D models (see `treefx`). The KN5 has no trees of its own,
   so players without CSP see none.
 - Tree FX has no physics. So each trunk a car can reach gets an invisible collider in the KN5
@@ -46,6 +46,10 @@ SINK_M = 0.4
 # (docs/known-issues.md), within a budget (`keep_trees`). Beyond NEAR_M the far band's share is its own bound: at
 # most 0.12 x 2 x 350 m x 1,000 m / (7 m x 7 m), about 1,700 trees per km, in unbroken forest both sides.
 MAX_TREES_PER_KM = 2500
+# A canopy-model crown's height is kept within these. Tasmania's wet-forest E. regnans passes 90 m, so the cap
+# only stops artefacts, not tall trees (it was 45 m before vegetation maps typed the tall eucalypts). Where the
+# region has a vegetation map, crowns outside forest are capped lower (`species.height_caps`).
+CROWN_HEIGHT_M = (4.0, 90.0)
 # Trunk colliders (`trunk_colliders`). The reach is from the road edge: in run-offs leaving the road at 5-30
 # degrees, 80-90% of first hits on a trunk were within 20 m of the edge (Grasstree Hill, Esperance Coast Road,
 # Dandenong Tourist Rd; 4 Nov 2026), and each 5 m beyond added about a quarter more colliders for 5-7% more.

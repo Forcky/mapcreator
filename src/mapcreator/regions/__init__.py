@@ -1,8 +1,9 @@
 """Which providers serve which part of the map.
 
 Regions are checked in order, best data first:
-- Tasmania has 2 m LiDAR elevation, a canopy model, building footprints and
-  TasNetworks' transmission lines and towers.
+- Tasmania has 2 m LiDAR elevation, a canopy model, building footprints,
+  TasNetworks' transmission lines and towers, and TASVEG's vegetation
+  communities, which say what kind of tree each one is.
 - Anywhere else in Australia falls back to national data: GA's 5 m LiDAR DEM where it covers
   the whole road (the populated coast, the Murray-Darling and towns), else GA's ~30 m DEM-S,
   ESA WorldCover trees, and OSM building footprints and power lines when a local
@@ -46,6 +47,9 @@ class Region:
     # Overhead power lines (`core.power.Line`s) by bbox in the region's CRS, or None; one source per region.
     power: Callable[[tuple, Settings], list] | None = None
     power_attribution: Attribution | None = None
+    # Vegetation communities (`core.species.Community`s) within a distance of the centreline, or None.
+    vegetation: Callable[..., list] | None = None
+    vegetation_attribution: Attribution | None = None
     country: str = "Australia"
     state: str = ""
     height_datum: str = "AHD"
@@ -87,6 +91,18 @@ def _tas_power(bbox, settings: Settings):
     return lines(bbox, settings)
 
 
+def _tas_vegetation(centre_xy, reach_m: float, settings: Settings):
+    from mapcreator.providers.tas_list.tasveg import communities
+
+    return communities(centre_xy, reach_m, settings)
+
+
+def _tas_vegetation_attribution() -> Attribution:
+    from mapcreator.providers.tas_list.tasveg import ATTRIBUTION
+
+    return ATTRIBUTION
+
+
 def _tas_power_attribution() -> Attribution:
     from mapcreator.providers.tas_list.power import ATTRIBUTION
 
@@ -117,6 +133,8 @@ TASMANIA = Region(
     buildings_attribution=_tas_buildings_attribution(),
     power=_tas_power,
     power_attribution=_tas_power_attribution(),
+    vegetation=_tas_vegetation,
+    vegetation_attribution=_tas_vegetation_attribution(),
     state="Tasmania",
 )
 

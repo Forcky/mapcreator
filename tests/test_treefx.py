@@ -107,7 +107,8 @@ def test_trunk_radius_is_the_trailer_in_metres(lib, tex):
         *_, trunk = read_mesh(treefx.mesh_file(model.lods[0], names, [1] * len(names), height, half_w))
         assert treefx.trunk_radius(model) == pytest.approx(trunk * half_w, rel=1e-6)
         # The base radius with its root flare, seen across the ring's flats.
-        assert treefx.KINDS[name].radius < treefx.trunk_radius(model) < treefx.KINDS[name].radius * 1.3
+        kind = treefx.KINDS[treefx.VARIANTS[name][0] if name in treefx.VARIANTS else name]
+        assert kind.radius < treefx.trunk_radius(model) < kind.radius * 1.3
 
 
 def test_a_bin_is_a_zip_with_tree_ini_lods_and_textures(lib, tex):
@@ -129,14 +130,20 @@ def test_a_bin_is_a_zip_with_tree_ini_lods_and_textures(lib, tex):
 def test_far_trees_are_left_to_tree_fx_billboards(lib):
     """Past its last LOD, Tree FX draws a tree as a baked billboard of six vertices, not as a mesh (CSP wiki, Tracks:
     Trees; its billboard shader). That's the cheapest far tree, so the meshes stop far inside the scenery reach:
-    beyond about 270 m, every tree on a 600 m hillside is a billboard."""
-    for model in lib.values():
+    beyond about 270 m, every tree on a 600 m hillside is a billboard. The tall models' LODs shrink in step to fit."""
+    capped = set()
+    for name, model in lib.items():
         height, half_w = model.box
         ini = treefx.tree_ini(height, half_w, ["lod0.mesh", "lod1.mesh", "lod2.mesh"])
         distances = [float(line.split("=")[1]) for line in ini.split("\r\n") if line.startswith("DISTANCE=")]
         assert distances == sorted(distances) and len(distances) == 3
-        assert distances[-1] == pytest.approx(height * 10, abs=0.05)  # Content Manager's converter's own rule
+        # Content Manager's converter's own rule, ten heights, unless that passes the cap
+        assert distances[-1] == pytest.approx(min(height * 10, treefx.LOD_REACH_M), abs=0.05)
+        assert distances[0] == pytest.approx(distances[-1] / 3, abs=0.05)  # the LODs keep their spacing
         assert distances[-1] < 0.5 * reach.SCENERY_M
+        if height * 10 > treefx.LOD_REACH_M:
+            capped.add(name)
+    assert capped == {"euc_wet", "myrtle", "pine"}
 
 
 def test_leaves_are_greener_than_red_and_bark_is_not():
@@ -145,8 +152,60 @@ def test_leaves_are_greener_than_red_and_bark_is_not():
     solid = leaves[..., 3] > 200
     green = leaves[..., 1] - leaves[..., 0]
     assert (green[solid] >= sprites.MIN_LEAF_GREEN - 2).mean() > 0.9  # twigs aside
-    bark = np.asarray(sprites.bark()).astype(int)
+    for cell in range(sprites.LEAF_GRID ** 2):  # every species' cell, not just the atlas as a whole
+        c, r = cell % sprites.LEAF_GRID, cell // sprites.LEAF_GRID
+        sl = (slice(r * sprites.LEAF_CELL, (r + 1) * sprites.LEAF_CELL), slice(c * sprites.LEAF_CELL, (c + 1) * sprites.LEAF_CELL))
+        assert solid[sl].mean() > 0.05, cell
+        assert (green[sl][solid[sl]] >= sprites.MIN_LEAF_GREEN - 2).mean() > 0.85, cell
+    bark = np.asarray(sprites.bark_atlas()[0]).astype(int)
     assert (bark[..., 1] <= bark[..., 0]).all()
+
+
+def test_the_atlases_keep_todays_gum_bark_and_leaves():
+    bark, _ = sprites.bark_atlas()
+    w, h = sprites.BARK_SIZE
+    assert bark.size == (w * sprites.BARK_COLUMNS, h)
+    assert np.array_equal(np.asarray(bark)[:, :w], np.asarray(sprites.bark(sprites.BARK_SIZE)))
+    # The first four leaf cells are drawn as before (three eucalypt sprays and the wattle), the new ones after.
+    assert sprites.LEAF_KINDS[:4] == ("eucalypt", "eucalypt", "eucalypt", "wattle")
+
+
+def test_every_model_carries_the_same_textures_and_uses_its_own_cells(lib, tex):
+    for name, model in lib.items():
+        kind = treefx.KINDS[treefx.VARIANTS[name][0] if name in treefx.VARIANTS else name]
+        bark = treefx.VARIANTS[name][1] if name in treefx.VARIANTS else kind.bark
+        u = np.vstack([lod["bark"].uv for lod in model.lods])[:, 0] * sprites.BARK_COLUMNS
+        assert (u > bark).all() and (u < bark + 1).all(), name  # its own bark column, clear of the next
+        cells = [sprites.leaf_uv_cell(c) for c in kind.leaf_cells]
+        uv = np.vstack([lod["leaves"].uv for lod in model.lods])
+        inside = np.zeros(len(uv), dtype=bool)
+        for u0, v0, u1, v1 in cells:
+            inside |= (uv[:, 0] >= u0 - 1e-6) & (uv[:, 0] <= u1 + 1e-6) & (uv[:, 1] >= v0 - 1e-6) & (uv[:, 1] <= v1 + 1e-6)
+        assert inside.all(), name
+    with zipfile.ZipFile(io.BytesIO(treefx.model_bin(lib["pine"], tex))) as a, \
+            zipfile.ZipFile(io.BytesIO(treefx.model_bin(lib["euc_tall"], tex))) as b:
+        for n in tex:
+            assert a.read(n) == b.read(n)
+
+
+def test_rough_bark_variants_keep_their_base_shape(lib):
+    for name, (base, _) in treefx.VARIANTS.items():
+        for mine, theirs in zip(lib[name].lods, lib[base].lods):
+            assert np.array_equal(mine["bark"].pos, theirs["bark"].pos)
+            assert np.array_equal(mine["leaves"].pos, theirs["leaves"].pos)
+            assert not np.array_equal(mine["bark"].uv, theirs["bark"].uv)
+
+
+def test_new_species_stay_in_the_triangle_budget_and_the_pine_is_a_cone(lib):
+    for name in ("euc_wet", "tea_tree", "myrtle", "pine"):
+        tris = lib[name].triangles
+        assert tris[0] <= 2200 and tris == sorted(tris, reverse=True), (name, tris)
+    # The pine's needles spread less towards the top: a cone, not a ball.
+    leaves = lib["pine"].lods[0]["leaves"].pos
+    height = lib["pine"].box[0]
+    r = np.hypot(leaves[:, 0], leaves[:, 2])
+    low = r[(leaves[:, 1] > 0.2 * height) & (leaves[:, 1] < 0.4 * height)].mean()
+    assert low > 2 * r[leaves[:, 1] > 0.75 * height].mean()
 
 
 def test_models_suit_the_tree_height():

@@ -12,7 +12,7 @@ Everything that can be built and checked without the game is done. The next mile
 | profile | `mapcreator profile job.json` | Smooth centreline + DEM profile, bridges filled; `02_profile/profile.png` | Done |
 | section | `mapcreator section job.json` | Width from OSM tags, camber from the DEM | Done |
 | mesh | `mapcreator mesh job.json` | Road, verges, skirts, terrain; `04_mesh/preview.obj` with `MAPCREATOR_PREVIEW_OBJ=1` (or `preview_obj = true` in `config.local.toml`) | Done |
-| scenery | `mapcreator scenery job.json` | Trees (canopy model or WorldCover) and buildings (LIST in Tasmania; OSM elsewhere, with an OSM index); solid house walls and trunk colliders near the road | Done |
+| scenery | `mapcreator scenery job.json` | Trees (canopy model or WorldCover; typed by TASVEG in Tasmania) and buildings (LIST in Tasmania; OSM elsewhere, with an OSM index); solid house walls and trunk colliders near the road | Done |
 | track | `mapcreator track job.json` | KN5s, AI lines, layouts, data and UI files, zip | Done, **never loaded in game** |
 | validate | `mapcreator validate job.json` | 73 static checks | Done |
 | `harness/` | `python harness/ac_harness.py …` | CM showroom, install and launch; log, results and shared-memory checks | Written, **untested** |
@@ -132,6 +132,7 @@ These are written down as defaults in the code. Change them in one place if the 
 | Do guard rails stop the car? (invisible `1WALL_RAIL_*` colliders, 5.4 km on C324) | they should | `core/roadside.py` |
 | Do houses stop the car? (`1WALL_BUILDINGS`) | they should | `core/scenery.py` |
 | Do tree trunks stop the car at the bark? (invisible `1WALL_TRUNK_*` prisms, trunks within 20 m of the road edge) | they should | `core/scenery.py` `trunk_colliders` |
+| Do TASVEG-typed trees read as the right forest? (Huon Highway: tall wet eucalypts; Lyell Highway: wet eucalypt over tea-tree and rainforest, tea-tree in the buttongrass) | they should | `core/species.py`, `core/treefx.py` `FAMILY_BANDS` |
 | Do both layouts show in Content Manager with names and previews? | they should | `pipeline/track_stage.py` |
 
 ## Rules that still apply

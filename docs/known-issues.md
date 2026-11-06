@@ -18,6 +18,9 @@ These need the in-game harness on a machine with Assetto Corsa (`docs/dev-handov
 - what race.ini's `[AUTOSPAWN]` does
 - whether the tree trunk colliders (#15) stop a car at the bark: their radius assumes Tree FX scales a model by `size` all round and by `width` horizontally on top. And what 200-560 colliders per km cost in frame rate.
 - AI opponents on a road too narrow for pairs, where the grid goes single file: Lower Swamp Road (`examples/lower_swamp_road.json`, 4.0 m) is the first example that narrow (see "Gravel and narrow roads" below)
+- whether trees typed by TASVEG look right: tall wet eucalypts over tea-tree or rainforest understorey, tea-tree in scrub and buttongrass, myrtle in rainforest, pine in plantations. Some families still borrow other models until batch 2: plantation eucalypt (`euc_young`), she-oak (`wattle`), blackwood (`wattle`, then `myrtle` above 12 m), snow gum (`euc_spread`), banksia (`tea_tree`), the highland conifers (`pine`)
+- whether the bark atlas holds up close: a column goes once around a branch, so a thick trunk's bark is stretched across (about 2.6 times on a 1 m-wide trunk)
+- a few canopy-model crowns in paddocks and towns are far taller than any forest beside them (100 m and 65 m on the Huon Highway, where the tallest wet-forest crowns are 57-58 m). They're probably artefacts in the canopy model (a mast, a cliff edge). Crowns outside forest codes are capped at 45 m, so they stand as 45 m trees rather than vanish (`species.height_caps`)
 - whether Tree FX draws trees 600 m out, and what they cost in frame rate (see "Scenery reach" below)
 
 Answered at milestone M3 (Grasstree Hill, both layouts; CSP 0.2.11, Content Manager's default starter):
@@ -104,7 +107,7 @@ The AI line runs out-in-out over the whole road (`core/racing_line.py`, 4 Nov). 
 Trees and buildings now stand within 600 m of the road (`core.reach`); they stopped at 250 m. Power-line supports still reach the terrain's edge less 5 m (695 m). None of it has been seen in game yet.
 
 - **To check in game** (CSP 0.2.11, GTX 1660 Ti, 1440p):
-  - **Do far trees draw?** Past its last LOD (85-267 m out, by model), Tree FX draws each tree as a billboard. The billboard fades out at a distance that CSP's own code sets and doesn't document (`docs/ac-format.md`). If that's under 600 m, the far trees never show.
+  - **Do far trees draw?** Past its last LOD (84-270 m out, by model), Tree FX draws each tree as a billboard. The billboard fades out at a distance that CSP's own code sets and doesn't document (`docs/ac-format.md`). If that's under 600 m, the far trees never show.
   - **What do they cost?** Compare frame rates against a 250 m build, at the same probe points, both along the road and looking out to the side (`probe-points --yaw 90` and `--yaw -90`). Near the road, the cost was mostly the trees within 40 m. What a billboard 250-600 m out costs isn't known.
   - CSP's tree loading time, with 2.4 times as many trees in a canopy-model build.
 - **What it adds** (laptop builds, made-up WorldCover trees with the Meta/WRI mask):

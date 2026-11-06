@@ -5,7 +5,10 @@ supports anywhere on the terrain (695 m).
 Trees come from the region's individual-crown canopy model when one is
 configured (Tasmania's 2 m CHM mirror), and then every crown in the corridor is
 kept, at its own height. Otherwise they're made-up positions in ESA WorldCover
-tree cover, thinned with distance and, near the road, capped per km. Buildings come from the
+tree cover, thinned with distance and, near the road, capped per km. Where the region
+has a vegetation map (TASVEG in Tasmania), each tree's kind comes from the community it
+stands in (`core.species`): crowns are only retyped, while made-up trees are also
+dropped where the map has none. Buildings come from the
 region's footprint layer, and power lines from the region's power source
 (`core.power`): towers or poles, and wires, with colliders on the supports a car
 can reach.
@@ -29,7 +32,7 @@ import shapely
 
 from mapcreator.config import Settings
 from mapcreator.core import mesh as base_mesh
-from mapcreator.core import power, reach, scenery, sprites, treefx
+from mapcreator.core import power, reach, scenery, species, sprites, treefx
 from mapcreator.core.scene import Material, Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import mesh_stage, profile_stage, section_stage
@@ -78,14 +81,23 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             attributions.append(region.buildings_attribution)
     built = shapely.unary_union([b.buffer(3.0) for b in buildings]) if buildings else None
 
+    vmap, vegetation_note = None, None
+    if region.vegetation is not None:
+        try:
+            vmap = species.VegetationMap(region.vegetation(xy, scenery.TREE_REACH_M + 10, settings))
+        except Exception as e:  # noqa: BLE001 - any source failure costs the tree kinds, not the trees
+            log.warning("vegetation map unavailable (%s: %s); trees typed by height alone", type(e).__name__, e)
+            vegetation_note = "unavailable"
+
     canopy = region.canopy(settings) if region.canopy else None
     tree_region = centre.buffer(scenery.TREE_REACH_M).difference(road_clear)
+    dropped = 0
     if canopy is not None:
         canopy.load_corridor(xy, scenery.TREE_REACH_M + 10)
         cxy, ch = canopy.crowns()
         shapely.prepare(tree_region)
         inside = shapely.contains_xy(tree_region, cxy[:, 0], cxy[:, 1]) if len(cxy) else np.zeros(0, bool)
-        trees = scenery.Trees(cxy[inside], np.clip(ch[inside], 4.0, 45.0))
+        trees = scenery.Trees(cxy[inside], np.clip(ch[inside], *scenery.CROWN_HEIGHT_M))
         source = "canopy model"
         attributions.append(_attr("mapcreator.providers.tas_list.canopy"))
     else:
@@ -114,6 +126,12 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         shapely.prepare(built)
         trees = trees.subset(~shapely.contains_xy(built, trees.xy[:, 0], trees.xy[:, 1]))
     trees = scenery.keep_trees(trees, xy, float(c["s"][-1]), rng, real_crowns=canopy is not None)
+    if vmap is not None and canopy is None and len(trees):
+        # Made-up trees go where the vegetation map says there are none, and thin out in paddocks and towns. After
+        # the per-km cap, so treeless country stays open and the total falls, rather than the cap refilling its
+        # budget with trees from elsewhere.
+        keep = species.keep_made_up(trees.xy, vmap, tree_region, rng, mask_agreed=source.endswith("Meta/WRI canopy"))
+        dropped, trees = int((~keep).sum()), trees.subset(keep)
     ground = dem.sample(trees.xy[:, 0], trees.xy[:, 1]) if len(trees) else np.zeros(0)
     ok = np.isfinite(ground)
     trees, ground = trees.subset(ok), ground[ok]
@@ -124,7 +142,27 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     power_meshes, power_summary = _power(region, settings, xy, half, dem, frame, out, attributions,
                                          c, sec)
     meshes += power_meshes
-    fx, trunk_r = _tree_fx(trees, ground, frame, rng, out)
+    where = vmap.at(trees.xy) if vmap is not None else None
+    capped = 0
+    if vmap is not None:
+        # 90 m in forest, 45 m elsewhere: a paddock or town crown taller than that is an artefact.
+        cap = species.height_caps(vmap.codes(where))
+        capped = int((trees.height > cap).sum())
+        trees = scenery.Trees(trees.xy, np.minimum(trees.height, cap))
+    families = species.families(trees.xy, trees.height, vmap, where) if vmap is not None else None
+    if region.vegetation is None:
+        vegetation = {"source": "none"}
+    else:
+        name = region.vegetation_attribution.dataset
+        vegetation = {"source": f"{name} ({vegetation_note})" if vegetation_note else name}
+    if vmap is not None:
+        attributions.append(region.vegetation_attribution)
+        codes = vmap.codes(where)
+        vegetation |= {"communities": len(vmap), "made_up_dropped": dropped,
+                       f"capped_at_{species.OTHER_HEIGHT_M:.0f}m": capped, "families": species.counts(families)}
+        # Every tree's community code: the count by code is how to spot crowns the map calls treeless.
+        work.write_json(STAGE, "vegetation.json", {**vegetation, "by_code": species.counts(codes)})
+    fx, trunk_r = _tree_fx(trees, ground, frame, rng, out, families)
     edge, station = scenery.edge_distance(trees.xy, xy, c["heading"], sec["half_left"], sec["half_right"])
     colliders = scenery.trunk_colliders(trees.xy, ground, trunk_r, edge, c["s"][station], frame)
     meshes += colliders
@@ -147,6 +185,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "trees": len(trees),
         "tree_source": source,
         "tree_fx_models": fx,
+        "vegetation": vegetation,
         "trunk_colliders": sum(len(m.positions) for m in colliders) // (2 * scenery.TRUNK_SIDES),
         "trunk_collider_meshes": len(colliders),
         "buildings": len(buildings),
@@ -188,22 +227,29 @@ def _power(region, settings: Settings, xy: np.ndarray, half: float, dem, frame, 
     return built, {"source": source, **p.summary(), **info}
 
 
-def _tree_fx(trees: scenery.Trees, ground: np.ndarray, frame, rng: np.random.Generator,
-             out) -> tuple[list[str], np.ndarray]:
-    """3D models for Tree FX and a placement for every tree: a model that suits its height, scaled to it.
-    Returns the model names and each tree's trunk radius in metres, as Tree FX draws it."""
+def _tree_fx(trees: scenery.Trees, ground: np.ndarray, frame, rng: np.random.Generator, out,
+             families: np.ndarray | None = None) -> tuple[list[str], np.ndarray]:
+    """3D models for Tree FX and a placement for every tree: a model that suits its family (when the region
+    has a vegetation map) and its height, scaled to it. Only the models some tree uses are written. Returns
+    their names and each tree's trunk radius in metres, as Tree FX draws it."""
     fx = out / "treefx"
     if fx.exists():
         for old in fx.iterdir():
             old.unlink()
     fx.mkdir(exist_ok=True)
-    models = treefx.library()
-    names = list(models)
-    tex = treefx.texture_files()
-    for name, model in models.items():
-        (fx / f"{name}.bin").write_bytes(treefx.model_bin(model, tex))
+    every = list(treefx.MODEL_NAMES)
     n = len(trees)
-    model = treefx.assign(trees.height, names, rng)
+    if families is not None:
+        model = treefx.assign_families(trees.height, families, every, rng)
+    else:
+        model = treefx.assign(trees.height, every, rng)
+    used = sorted(set(model.tolist()))
+    names = [every[i] for i in used]
+    model = np.searchsorted(used, model).astype(np.int64)
+    models = treefx.library(names=names)
+    tex = treefx.texture_files()
+    for name in names:
+        (fx / f"{name}.bin").write_bytes(treefx.model_bin(models[name], tex))
     own_height = np.array([models[name].box[0] for name in names])
     size = np.clip(trees.height / own_height[model], 0.3, 3.0) if n else np.zeros(0)
     angle = rng.uniform(0, 360, n)
