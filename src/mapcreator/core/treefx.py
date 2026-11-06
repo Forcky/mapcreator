@@ -46,10 +46,14 @@ from functools import lru_cache
 
 import numpy as np
 
-from mapcreator.core import package, sprites, textures
+from mapcreator.core import package, reach, sprites, textures
 from mapcreator.core.kn5 import tangents
 
 UP = np.array([0.0, 1.0, 0.0])
+# Every model's last LOD ends within this, so past it every tree draws as a billboard (`tree_ini`), as the 600 m
+# reach was measured in game with. Ten heights put it at 84-267 m for most models, but at 273 m for the myrtle, 301 m
+# for the pine and 457 m for the wet-forest eucalypt; their LODs shrink in step instead (the maintainer's decision, 6 Nov 2026).
+LOD_REACH_M = 0.45 * reach.SCENERY_M
 ZIP_DATE = (2020, 1, 1, 0, 0, 0)  # fixed, so the same model gives the same bytes
 BARK_TILE_M = 2.4  # bark texture repeat along a branch; around it, a bark atlas column is used once
 BARK_PAD = 2.0 / sprites.BARK_SIZE[0]  # keep clear of the neighbouring columns when the texture is filtered
@@ -506,8 +510,9 @@ def trunk_radius(model: TreeModel) -> float:
 
 
 def tree_ini(height: float, half_w: float, mesh_names: list[str]) -> str:
-    """The model's settings. LOD distances follow Content Manager's converter: the LODs share ten model heights
-    (LOD 0 ends 28-89 m out, the last 85-267 m). Past the last, Tree FX draws the tree as a baked billboard
+    """The model's settings. LOD distances follow Content Manager's converter: the LODs share ten model heights,
+    or `LOD_REACH_M` if that's less (LOD 0 ends 28-90 m out, the last 84-270 m). Past the last, Tree FX draws the
+    tree as a baked billboard
     (CSP wiki, Tracks: Trees), the cheapest far tree, so the far scenery (`core.reach`, 600 m) is billboards.
     Billboards fade out at a far distance CSP sets in its own code; it isn't documented (docs/known-issues.md)."""
     sections = [
@@ -522,8 +527,9 @@ def tree_ini(height: float, half_w: float, mesh_names: list[str]) -> str:
         ("LEAVES", {"MULT": "20.0", "OFFSET": "0.0"}),
         ("FAKE_SHADOW", {"SIZE": "1.0", "OPACITY": "1.0"}),
     ]
+    last = min(height * 10, LOD_REACH_M)
     for i, name in enumerate(mesh_names):
-        sections.append((f"LOD_{i}", {"MODEL": name, "DISTANCE": f"{height * 10 * (i + 1) / len(mesh_names):.1f}"}))
+        sections.append((f"LOD_{i}", {"MODEL": name, "DISTANCE": f"{last * (i + 1) / len(mesh_names):.1f}"}))
     return package.ini(sections)
 
 
