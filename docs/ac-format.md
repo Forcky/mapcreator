@@ -243,7 +243,20 @@ For the AI line it also checks:
 
 ## Roadside furniture (`core/furniture.py`)
 
-Built in the mesh stage, visual only, in `FURNITURE_n` meshes with one material (`furniture`) and a texture atlas the stage draws (`furniture.png`).
+Built in the mesh stage, visual only, in `FURNITURE_n` meshes and a texture atlas the stage draws (`furniture.png`).
+
+- **Three materials on the one atlas**, with the same values by day:
+  - `furniture_reflector`: the guide post reflectors, a small quad on each face of the post, 2 mm proud of it;
+  - `furniture_retro`: both faces of a CAM board and a speed sign's face, which are retroreflective sheeting on the real thing;
+  - `furniture`: everything else (posts, poles, board edges, the backs of speed signs).
+- **At night** CSP brightens the two reflective materials through `ext_config.ini`, so they throw back the headlights the way real reflectors do:
+  - a `[MATERIAL_ADJUSTMENT_n]` per material with `CONDITION = NIGHT_SMOOTH` raises its `ksDiffuse` (`furniture.NIGHT_DIFFUSE`: 12 for the reflectors, 2 for the boards' faces, against 0.6 by day), and `VALUE_0_OFF` puts the KN5's value back by day;
+  - the file includes CSP's `common/conditions.ini`, which defines `NIGHT_SMOOTH` (sun above 88 degrees);
+  - this is how CSP's own Imola config makes "curbs + start markers reflective at night" (`extension/config/tracks/loaded/imola.ini`, `MATERIAL_ADJUSTMENT_15`);
+  - it raises diffuse, not `ksEmissive`, so the faces light up only where the headlights fall and don't glow by themselves from afar. The ambient term (the night sky) stays as it is;
+  - the boards' faces get less: in the beam a CAM already reaches the top of CSP's tone curve unboosted, so more only bleaches it (yellow to nearly white from 2.5), and from about 6 a speed sign's legend washes out at 35 m; at 12 one 90 m away reads as a light (in game, 5 Nov);
+  - vanilla AC ignores the file, so there the faces look as by day.
+
 
 - **Guide posts** stand on both sides, 0.8 m beyond the road's edge and about 1 m tall, with a black band and a reflector on each face.
   - Red faces the traffic for which the post is on the left; white faces the traffic for which it's on the right.

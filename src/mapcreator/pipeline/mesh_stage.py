@@ -99,7 +99,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             "terrain": Material("terrain", texture="ground"),
             "rail": Material("rail", texture="steel"),
             **({"water": Material("water", texture="water")} if water else {}),
-            **({furniture.MATERIAL: Material(furniture.MATERIAL, furniture.MATERIAL)} if furn else {}),
+            # The furniture's materials (plain, reflectors, the boards' faces) all draw on the one atlas.
+            **{name: Material(name, furniture.MATERIAL) for name in sorted({m.material for m in furn})},
         },
         textures=textures,
     )
