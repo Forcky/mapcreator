@@ -45,6 +45,14 @@ AI_END_SHORT_M = 40.0  # the AI line stops this far before the road's end, short
 # pace of 0.05 the AI held about 100 km/h down Grasstree Hill's straight reverse run-off and left the road past
 # the end of its line; with 0 it stopped on the road in both layouts (in game, 4 Nov).
 AI_RUNOFF_RAMP = ((150.0, 0.5), (60.0, 0.2), (0.0, 0.0))
+# The AI's pace over unsealed road up to the finish, one hint per unsealed run (`ai_line.gravel_hints`), by the
+# maintainer's decision. With no hint and GRAVEL at friction 0.88, the AI drove the gravel at near-tarmac pace (in
+# game, 5 Nov): about 106 km/h on average on Hartz Road's two-lane gravel, up to 156 km/h on Lower Swamp Road's
+# one lane, and in reverse there every car jumped the crest about 1.8 km in and was damaged. Like the run-off's,
+# this hint scales the speed AC allows for the line's curvature, so it should slow the AI into bends but may do
+# little on a straight, or over a straight crest: the GRAVEL surface's lower friction (`package.GRAVEL_SURFACE`)
+# is the other lever.
+AI_GRAVEL_PACE = 0.8
 SPAWN_BEFORE_GATE_M = 8.0
 HOTLAP_BEFORE_GATE_M = 30.0
 SPAWN_HEIGHT_M = 0.3

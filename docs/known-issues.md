@@ -53,8 +53,12 @@ Answered at M4 (AI opponents; Grasstree Hill, both layouts, and Brinktop Road; 8
 
 ## Gravel and narrow roads
 
-Nothing about gravel has been loaded in game yet. The `GRAVEL` surface's numbers (`docs/ac-format.md`) are a starting point from community gravel stages, to be tuned by feel.
+Lower Swamp Road and Hartz Road have been raced by the AI in game (5 Nov), but nobody has driven them by hand yet. The `GRAVEL` surface's numbers (`docs/ac-format.md`) started from community gravel stages and are to be tuned by feel.
 
+- **The AI overdrove the gravel (5 Nov), so its friction is lower and it has a pace hint, both untested.** With friction 0.88 and no hints, the AI drove the gravel at near-tarmac pace, with wheel slip as on a seal: about 106 km/h on average over Hartz Road (up to 140), and a median of 93-96 km/h on Lower Swamp Road's one lane (up to 156). In reverse on Lower Swamp Road, all 5 cars jumped the crest the validator warns about, about 1.8 km in, landed on the steep slope beyond it and took about 70 damage each.
+  - The maintainer's decisions: GRAVEL friction 0.80 (chosen without a test by hand), and a pace hint of 0.8 over each unsealed run up to the finish (`docs/ac-format.md`).
+  - **The hint may not slow the AI over the crest.** An earlier test (#17, #18) showed a hint scales AC's corner speed: on a straight run-off, 0.05 to 0.2 did nothing, and only 0 stopped a car. So 0.8 may do nothing on a straight, and the crest on Lower Swamp Road is on one. The lower friction is the other lever.
+  - **To check in game (the AI re-test):** Lower Swamp Road in reverse, over the crest about 1.8 km in: whether the cars still leave the ground there, and still take damage. Then the gravel speeds on both roads against those above, and that nothing breaks: no car off the narrow road or stuck, the run-off stop as before, the grid and start as before.
 - **To check in game** (CSP 0.2.11):
   - **Lower Swamp Road** (`examples/lower_swamp_road.json`, both layouts): one lane at 4.0 m, sealed for 1.6 km and then unsealed for 5.2 km.
     - All 5 single-file spots spawn on the road with every wheel loaded, and `pitboxes` is 5. The forward grid stands on the seal and the reverse grid on the gravel.
@@ -66,8 +70,7 @@ Nothing about gravel has been loaded in game yet. The `GRAVEL` surface's numbers
     - `custom_shaders_patch.log` is clean.
     - A Lua probe reads `wheels[i].surfaceSectionIndex` 2 and `surfaceExtendedType` (CSP 0.2.8) on the gravel: that shows `_EXT_SURFACE_TYPE=GRAVEL` takes effect without extended physics.
   - **Hartz Road** (C632, 13.2 km of two-lane gravel at 6.0 m, a 700 m climb): gravel at speed.
-  - **Tuning (Q3 of the gravel research):** friction 0.88, damping 0.01, dirt additive 0.8, `gravel.wav`, 1 cm Perlin bumps, on Lower Swamp Road and Hartz Road. With CSP's Surfaces FX **off** first, because it's off by default and offline only, so the plain numbers must feel right on their own; then **on**.
-  - **AI on gravel:** whether AC's AI copes with friction 0.88 plus dirty tyres, or overdrives. There are no pace hints on gravel; if it overdrives, try about 0.8 over the unsealed stretches.
+  - **Tuning by hand (Q3 of the gravel research):** friction 0.80, damping 0.01, dirt additive 0.8, `gravel.wav`, 1 cm Perlin bumps, on Lower Swamp Road and Hartz Road. With CSP's Surfaces FX **off** first, because it's off by default and offline only, so the plain numbers must feel right on their own; then **on**.
   - **CSP's Rally Stage mode** (Quick Drive, CSP 0.2.4) and its Rally Copilot app with our point-to-point layouts, and whether CSP picks street tyres for the AI on a track tagged `rally`. Their requirements aren't documented.
   - The gravel texture's colour (a grey-brown from a CC0 photo; Tasmanian dolerite gravel runs from blue-grey to brown-grey), and whether its 24 m repeat shows.
   - A narrow seal with no centre line at 4.0 m (Allens Rivulet Road, `lanes=1`).

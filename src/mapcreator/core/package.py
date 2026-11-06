@@ -27,11 +27,14 @@ SURFACES = [
 ]
 # Unsealed road (1GRAVEL_### meshes), written only for a track that has some. AC's own loose surfaces (Kunos's
 # Laguna Seca and Zandvoort GRAVEL, Black Cat County's OFF: friction 0.7-0.8, dirt 1) are run-off built to slow a
-# car down. This is a road to drive at pace, in the range community gravel stages settle on (friction 0.87-0.90,
-# damping 0-0.02, dirt 0.8-1; assettocorsamods.net "new CSP +Gravel" and "How to use surfaces in surfaces.ini"):
-# - FRICTION 0.88: under 0.89, above which one modder found gravel made the tyres squeal, and under 0.9, below
-#   which CSP's ParticlesFX makes "dusty tracks" (CSP 0.2.5 changelog). Dirt on the tyres takes off roughly
-#   another 20% (one community skidpad test).
+# car down. Community gravel stages settle on friction 0.87-0.90, damping 0-0.02 and dirt 0.8-1
+# (assettocorsamods.net "new CSP +Gravel" and "How to use surfaces in surfaces.ini"):
+# - FRICTION 0.80, the maintainer's choice, not yet tried by hand. It started at 0.88, in the community range,
+#   but in game (5 Nov 2026) AC's AI read that as only 10% under the seal's 0.98 and drove the gravel at
+#   near-tarmac pace, with wheel slip as on a seal. 0.80 is the top of the range of AC's own loose surfaces. Like
+#   0.88 it's under 0.89, above which one modder found gravel made the tyres squeal, and under 0.9, below which
+#   CSP's ParticlesFX makes "dusty tracks" (CSP 0.2.5 changelog). Dirt on the tyres takes off roughly another 20%
+#   (one community skidpad test). The AI also gets a pace hint over unsealed road (`layout.AI_GRAVEL_PACE`).
 # - DIRT_ADDITIVE 0.8: dirt builds up on the tyres; at least 0.7 makes CSP's SurfacesFX treat it as loose
 #   (cup.acstuff.club/docs/csp/tracks/surface-tweaks).
 # - WAV gravel.wav, which Kunos ships (Black Cat County's OFF uses it). Never grass.wav: CSP draws the dirt of a
@@ -42,7 +45,7 @@ SURFACES = [
 #   isn't needed for these, and vanilla AC would crash on it.
 # All of it is to confirm in game.
 GRAVEL_SURFACE = {
-    "KEY": "GRAVEL", "FRICTION": "0.88", "DAMPING": "0.01", "WAV": "gravel.wav", "WAV_PITCH": "0",
+    "KEY": "GRAVEL", "FRICTION": "0.80", "DAMPING": "0.01", "WAV": "gravel.wav", "WAV_PITCH": "0",
     "FF_EFFECT": "NULL", "DIRT_ADDITIVE": "0.8", "IS_VALID_TRACK": "1", "BLACK_FLAG_TIME": "0",
     "SIN_HEIGHT": "0.01", "SIN_LENGTH": "0.5", "IS_PITLANE": "0", "VIBRATION_GAIN": "0.1", "VIBRATION_LENGTH": "0.35",
     "_EXT_SURFACE_TYPE": "GRAVEL", "_EXT_SURFACE_TYPE_MODIFIER": "REGULAR", "_EXT_PERLIN_NOISE": "1",
@@ -85,9 +88,10 @@ def groove_ini() -> str:
 
 
 def ai_hints_ini(sections: list[tuple[float, float, float]]) -> str:
-    """`data/ai_hints.ini`: one `[HINT_n]` per (start, end, pace). START and END are fractions of the AI spline
-    (0 at its start, 1 at its end), and VALUE scales the AI's speed between them (the format other tracks use;
-    checked against AC modding guides, Nov 2026)."""
+    """`data/ai_hints.ini`: one `[HINT_n]` per (start, end, pace), numbered in the order given (`ai_line.pace_hints`
+    gives them in order along the line). START and END are fractions of the AI spline (0 at its start, 1 at its
+    end), and VALUE scales the speed AC allows for the line's curvature between them (the format other tracks use;
+    checked against AC modding guides, Nov 2026; what VALUE scales was measured in game, `layout.AI_RUNOFF_RAMP`)."""
     def clamp(v):
         return min(max(v, 0.0), 1.0)
 
