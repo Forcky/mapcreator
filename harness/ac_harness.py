@@ -326,8 +326,14 @@ def probe_install() -> None:
     print(f"installed the probe app -> {dest} (needs Custom Shaders Patch)")
 
 
-def probe_points(track_dir: Path, layout: str, every_m: float, quit_after: bool, shots_every: int) -> None:
-    """Points along the layout's AI line (already 0.4 m above the road) for the Lua app to visit."""
+def probe_points(track_dir: Path, layout: str, every_m: float, quit_after: bool, shots_every: int,
+                 yaw_deg: float = 0.0) -> None:
+    """Points along the layout's AI line (already 0.4 m above the road) for the Lua app to visit.
+
+    The car faces along the road, or turned `yaw_deg` from it (positive to the left, seen from above): at 90 or
+    -90 the camera looks out across the road, at the scenery beside it."""
+    import numpy as np
+
     sys.path.insert(0, str(ROOT / "src"))
     from mapcreator.core import ai_line  # the harness runs from the repo's venv
 
@@ -338,20 +344,25 @@ def probe_points(track_dir: Path, layout: str, every_m: float, quit_after: bool,
     # the end of the road, which the probe then reports as off the track (Esperance coast road, M3).
     ends = (line.length >= PROBE_END_MARGIN_M) & (line.length <= line.length[-1] - PROBE_END_MARGIN_M)
     first = int(ends.argmax())
+    # AC axes: x east, y up, z south. Turning left (anticlockwise from above) by a: x' = x cos a + z sin a,
+    # z' = -x sin a + z cos a.
+    c, s = np.cos(np.radians(yaw_deg)), np.sin(np.radians(yaw_deg))
     pts = []
     for i in range(first, len(line.pos), step):
         if not ends[i]:
             continue
-        fwd = line.extra[i, 13:16]
+        x, y, z = line.extra[i, 13:16]
+        fwd = (x * c + z * s, y, -x * s + z * c)
         pts.append({"pos": [round(float(v), 3) for v in line.pos[i] + [0.0, 0.6, 0.0]],
                     "dir": [round(float(v), 4) for v in fwd], "s_m": round(float(line.length[i]), 1)})
     out = _probe_dir()
     out.mkdir(parents=True, exist_ok=True)
     for old in ("results.json", "status.json"):
         (out / old).unlink(missing_ok=True)
-    (out / "points.json").write_text(json.dumps({"points": pts, "quit": quit_after,
+    (out / "points.json").write_text(json.dumps({"points": pts, "quit": quit_after, "yaw_deg": yaw_deg,
                                                  "screenshots_every": shots_every}), encoding="utf-8")
-    print(f"wrote {len(pts)} probe points every ~{every_m:.0f} m to {out / 'points.json'}")
+    print(f"wrote {len(pts)} probe points every ~{every_m:.0f} m to {out / 'points.json'}"
+          + (f", facing {yaw_deg:+.0f} degrees from the road" if yaw_deg else ""))
 
 
 def probe_report() -> int:
@@ -519,6 +530,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--every", type=float, default=200.0, help="metres between probe points")
     p.add_argument("--quit", action="store_true", help="quit AC when the probe finishes")
     p.add_argument("--screenshots-every", type=int, default=0, help="screenshot every Nth point (0 = none)")
+    p.add_argument("--yaw", type=float, default=0.0,
+                   help="face this many degrees from the road, positive to the left (90/-90: look out to the side)")
     sub.add_parser("probe-report")
     p = sub.add_parser("race")
     p.add_argument("track_id")
@@ -540,7 +553,7 @@ def main(argv: list[str] | None = None) -> int:
         probe_install()
         return 0
     if args.cmd == "probe-points":
-        probe_points(args.track_dir, args.layout, args.every, args.quit, args.screenshots_every)
+        probe_points(args.track_dir, args.layout, args.every, args.quit, args.screenshots_every, args.yaw)
         return 0
     if args.cmd == "probe-report":
         return probe_report()
