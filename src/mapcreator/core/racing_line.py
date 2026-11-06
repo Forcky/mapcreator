@@ -28,6 +28,10 @@ Where this differs from the paper:
   bounds widen from 0 over `BLEND_M`, so the line leaves and rejoins the centreline smoothly.
 - On a straight, any straight line has no curvature at all. A light pull toward the centre
   (`CENTRE_PULL_M`) picks the middle there, and lets the line drift out only in the run-up to a bend.
+- The margin from the road's edges grows with the speed (`edge_margin`, #50). AC's AI tracks the line less
+  closely the faster it goes: at 127 km/h it ran 1.0-1.3 m outside it (in game, 4-5 Nov), so a line 1.2 m
+  from the edge put two wheels off before the turn-in, and at 190-200 km/h 2.5-3.4 m. The speed depends on
+  the line, so the caller solves, works out the speeds and the margins, and solves again (`ai_line.build`).
 - On the inside of a tight bend the line stays within `INSIDE_FRACTION` of the bend's radius of the
   centreline, so its points never cross the bend's centre.
 - It needs no QP library. The curvature limits go into an augmented Lagrangian (multipliers updated
@@ -45,7 +49,20 @@ from scipy.linalg import solveh_banded
 from scipy.ndimage import maximum_filter1d, minimum_filter1d
 
 STEP_M = 2.0  # between optimisation stations
-EDGE_MARGIN_M = 1.2  # from the road's edge to the line: half a car's width plus room for error
+# From the road's edge to the line: half a car's width (0.85 m for a car 1.7 m wide) plus 0.35 m for error. The
+# least margin, at or below MARGIN_SLOW_KMH (the maintainer's choice, #44).
+EDGE_MARGIN_M = 1.2
+# At MARGIN_FAST_KMH: the same 1.2 m plus the 1.3 m AC's AI ran outside the line at 127 km/h on Grasstree Hill
+# (#50, the most of its measured 1.0-1.3 m).
+EDGE_MARGIN_FAST_M = 2.5
+# At MARGIN_TOP_KMH and above (the maintainer's choice, #52). On Brinktop Road's kink at 190-200 km/h the AI ran
+# 2.5-3.4 m outside a line 2.5 m from the edge, and 5 of 8 cars put wheels off (in game, 5 Nov). Room for all of
+# that (1.2 m plus 3.4 m) is more than a two-lane road has. 3.3 m holds the line on the centreline of a 6.4 m
+# road there, which is where the cars drove anyway, and leaves a wider road some room.
+EDGE_MARGIN_TOP_M = 3.3
+MARGIN_SLOW_KMH = 60.0
+MARGIN_FAST_KMH = 120.0
+MARGIN_TOP_KMH = 200.0
 HOLD_START_M = 60.0  # the line stays on the centreline this far from the layout's start (grid, start gate)
 HOLD_BEFORE_FINISH_M = 30.0  # and from this far before the finish gate to its end (finish gate, run-off)
 BLEND_M = 50.0  # over which the bounds widen from the centreline to the road's full width
@@ -70,6 +87,20 @@ class Offsets:
     hi: np.ndarray
     limit: np.ndarray  # the curvature limit (1/m) at each station
     steps: int  # projected Newton steps, all rounds and linearisations together
+    margin: np.ndarray | None = None  # the margin from each edge (m) the bounds were drawn with
+    hold_until: float = 0.0  # the line is on the centreline up to here and from `hold_from` on
+    hold_from: float = np.inf
+    lam_hi: np.ndarray | None = None  # the curvature limits' multipliers, for a re-solve to start from
+    lam_lo: np.ndarray | None = None
+
+
+def edge_margin(speed: np.ndarray | float) -> np.ndarray:
+    """The margin (m) from each road edge to the line at a speed (m/s): EDGE_MARGIN_M at or below MARGIN_SLOW_KMH,
+    rising in straight lines to EDGE_MARGIN_FAST_M at MARGIN_FAST_KMH and EDGE_MARGIN_TOP_M at MARGIN_TOP_KMH, and
+    that above it. The line is built with the speed the cars may reach there (`ai_line._Traced.margin_speeds`),
+    not the planned speed, which stops at ai_line.V_MAX: the cars don't."""
+    return np.interp(np.asarray(speed, dtype=float) * 3.6, [MARGIN_SLOW_KMH, MARGIN_FAST_KMH, MARGIN_TOP_KMH],
+                     [EDGE_MARGIN_M, EDGE_MARGIN_FAST_M, EDGE_MARGIN_TOP_M])
 
 
 def _smoothstep(x: np.ndarray) -> np.ndarray:
@@ -78,11 +109,13 @@ def _smoothstep(x: np.ndarray) -> np.ndarray:
 
 
 def bounds(s: np.ndarray, half_left: np.ndarray, half_right: np.ndarray, curvature: np.ndarray,
-           hold_until: float, hold_from: float, step: float) -> tuple[np.ndarray, np.ndarray]:
-    """(lo, hi) for n at each station: the road's edges less EDGE_MARGIN_M, never past INSIDE_FRACTION of a
-    bend's radius on its inside, and 0 (the centreline) before `hold_until` and after `hold_from`."""
-    hi = np.maximum(half_left - EDGE_MARGIN_M, 0.0)
-    lo = -np.maximum(half_right - EDGE_MARGIN_M, 0.0)
+           hold_until: float, hold_from: float, step: float,
+           margin: np.ndarray | float = EDGE_MARGIN_M) -> tuple[np.ndarray, np.ndarray]:
+    """(lo, hi) for n at each station: the road's edges less `margin` (never past the centreline: a road too
+    narrow for it keeps the line in the middle), never past INSIDE_FRACTION of a bend's radius on its inside,
+    and 0 (the centreline) before `hold_until` and after `hold_from`."""
+    hi = np.maximum(half_left - margin, 0.0)
+    lo = -np.maximum(half_right - margin, 0.0)
     k = np.abs(curvature)
     inside = INSIDE_FRACTION / np.maximum(k, 1e-9)
     hi = np.where(curvature > 0, np.minimum(hi, inside), hi)
@@ -237,16 +270,20 @@ def _newton(problem: _Round, lo, hi, x0) -> tuple[np.ndarray, int]:
 
 def offsets(d: np.ndarray, e: np.ndarray, n: np.ndarray, heading: np.ndarray, curvature: np.ndarray,
             half_left: np.ndarray, half_right: np.ndarray, *, hold_until: float, hold_from: float,
-            step: float = STEP_M) -> Offsets:
+            step: float = STEP_M, margin: np.ndarray | float = EDGE_MARGIN_M,
+            start: Offsets | None = None) -> Offsets:
     """The minimum-curvature line's offsets at stations `step` apart, for a road sampled at distances `d`.
 
     `hold_until` and `hold_from` (metres along the road) bound the stretch the line may leave the centreline;
-    outside it the offset is 0.
+    outside it the offset is 0. `margin` is the room kept from each edge, one value or one per sample of the
+    road (`edge_margin` of the planned speed there). `start`, a line already found at the same stations, is
+    where the solve begins, with its multipliers: a re-solve after the margins change then takes far fewer
+    steps (Grasstree Hill: 180 for the first solve, then 49 and 19).
     """
     s = np.arange(d[0], d[-1] + 1e-9, step)
     if len(s) < 5:
         z = np.zeros(len(s))
-        return Offsets(s, z, z, z, z, 0)
+        return Offsets(s, z, z, z, z, 0, z, hold_until, hold_from)
 
     def f(a):
         return np.interp(s, d, a)
@@ -254,7 +291,8 @@ def offsets(d: np.ndarray, e: np.ndarray, n: np.ndarray, heading: np.ndarray, cu
     h = f(np.unwrap(heading))
     p = np.column_stack([f(e) - e[0], f(n) - n[0]])  # near the origin, for precision
     nrm = np.column_stack([-np.sin(h), np.cos(h)])
-    lo, hi = bounds(s, f(half_left), f(half_right), f(curvature), hold_until, hold_from, step)
+    room = f(np.broadcast_to(np.asarray(margin, dtype=float), np.shape(d)))
+    lo, hi = bounds(s, f(half_left), f(half_right), f(curvature), hold_until, hold_from, step, room)
     # The centreline's own curvature, measured as the line's is: the limit is its tightest nearby.
     centre = np.abs(_menger(p))
     limit = np.maximum(maximum_filter1d(centre, 2 * max(int(round(LIMIT_NEAR_M / step)), 1) + 1, mode="nearest"),
@@ -262,6 +300,11 @@ def offsets(d: np.ndarray, e: np.ndarray, n: np.ndarray, heading: np.ndarray, cu
     eps = CENTRE_PULL_M ** -4
     x = np.zeros(len(s))
     lam_hi, lam_lo = np.zeros(len(s)), np.zeros(len(s))
+    if start is not None and len(start.n) == len(s):
+        # Its multipliers too: the curvature limits bind in the same bends, so the first round starts near them.
+        x = np.clip(start.n, lo, hi)
+        if start.lam_hi is not None:
+            lam_hi, lam_lo = start.lam_hi, start.lam_lo
     total = 0
     if (hi - lo).max() > 1e-9:
         for _ in range(ITERATIONS):
@@ -273,4 +316,4 @@ def offsets(d: np.ndarray, e: np.ndarray, n: np.ndarray, heading: np.ndarray, cu
                 k, lam_hi, lam_lo = problem.parts(x)
                 if np.all(np.abs(k) <= limit * 1.001):
                     break
-    return Offsets(s, x, lo, hi, limit, total)
+    return Offsets(s, x, lo, hi, limit, total, room, hold_until, hold_from, lam_hi, lam_lo)

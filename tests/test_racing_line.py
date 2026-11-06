@@ -13,7 +13,7 @@ from mapcreator.core.layout import AI_END_SHORT_M, RoadModel, finish_distance
 from mapcreator.core.scene import LocalFrame
 
 FRAME = LocalFrame(500_000.0, 5_200_000.0, 10.0)
-HALF = 4.0  # an 8 m road: the line may stand 2.8 m either side of the centreline
+HALF = 4.0  # an 8 m road: the line may stand up to 2.8 m either side of the centreline, at 60 km/h or slower
 ROOM = HALF - racing_line.EDGE_MARGIN_M
 
 
@@ -40,19 +40,32 @@ def at(line, d, values):
     return float(np.interp(d, line.station, values))
 
 
+def room_at(line, d, half=HALF):
+    """How far the line may stand from the centreline at `d`: the road's half-width less the margin for the
+    planned speed there."""
+    return half - float(racing_line.edge_margin(at(line, d, line.extra[:, 0])))
+
+
+def clearance(line):
+    return np.minimum(line.extra[:, 5], line.extra[:, 6])
+
+
 def test_a_constant_radius_bend_is_taken_out_in_out():
     # 500 m straight, a 90-degree left-hander of 50 m radius (79 m long), 500 m straight.
     road = road_from(bends((500, 0), (np.pi / 2 * 50, 50), (500, 0)))
     line = ai_line.build(road, FRAME)
     start, end = 500.0, 500.0 + np.pi / 2 * 50
-    assert at(line, start - 15, line.offset) < -0.6 * ROOM  # outside (right) on the way in
-    assert at(line, (start + end) / 2, line.offset) > 0.8 * ROOM  # inside (left) at the apex
-    assert at(line, end + 15, line.offset) < -0.6 * ROOM  # outside again on the way out
+    # Out-in-out within the room the speed leaves (#50): about 1.7 m on the way in and out at 109 km/h, 2.3 m at the
+    # apex at 83 km/h. Before #50 the margin was 1.2 m at any speed, leaving 2.8 m.
+    assert at(line, start - 15, line.offset) < -0.6 * room_at(line, start - 15)  # outside (right) on the way in
+    assert at(line, (start + end) / 2, line.offset) > 0.8 * room_at(line, (start + end) / 2)  # inside at the apex
+    assert at(line, end + 15, line.offset) < -0.6 * room_at(line, end + 15)  # outside again on the way out
     assert np.abs(line.offset).max() <= ROOM + 0.05
     assert line.centre_radius.min() == pytest.approx(50, rel=0.05)
-    # Wider than the road's own radius, even at the apex: without the curvature limit, the least summed squared
-    # curvature hugs the inside there, at the road's radius less the 2.8 m it moved in (48 m).
-    assert line.extra[:, 4].min() > 1.05 * 50
+    # No tighter than the road's own radius, even at the apex: without the curvature limit, the least summed squared
+    # curvature hugs the inside there, at the road's radius less the room it moved in (48 m with 2.8 m). With the
+    # room the speed leaves, the line straightens the bend less than with 2.8 m (over 52.5 m before #50; 50.9 m now).
+    assert line.extra[:, 4].min() > 50
 
 
 def test_a_straight_stays_on_the_centre():
@@ -109,10 +122,103 @@ def test_a_chicane_is_straightened():
     road = road_from(bends((400, 0), (50, 40), (50, -40), (400, 0)))
     line = ai_line.build(road, FRAME)
     assert line.centre_radius.min() == pytest.approx(40, rel=0.05)
-    assert line.extra[:, 4].min() > 1.2 * 40
+    # At about 90 km/h the margin is 1.9 m, leaving 2.1 m of room either side, not the 2.8 m a 1.2 m margin left
+    # before #50 (when the line's tightest was over 48 m): it straightens the chicane a little less.
+    assert line.extra[:, 4].min() > 1.1 * 40
     assert at(line, 425, line.offset) > 0.5 * ROOM  # inside of the left-hander
     assert at(line, 475, line.offset) < -0.5 * ROOM  # inside of the right-hander
     assert np.abs(line.offset).max() <= ROOM + 0.05
+
+
+def test_the_edge_margin_grows_with_speed():
+    kmh = np.array([0, 40, 60, 90, 120, 130, 160, 200, 250])
+    assert racing_line.edge_margin(kmh / 3.6) == pytest.approx([1.2, 1.2, 1.2, 1.85, 2.5, 2.6, 2.9, 3.3, 3.3])
+
+
+def _fast_kink() -> np.ndarray:
+    """#52 (Brinktop Road at 9.95-10.0 km, taken at 190-200 km/h), as curvature every metre: 800 m straight, a
+    300 m-radius kink left then right, 80 m each, 600 m straight."""
+    return bends((800, 0), (80, 300), (80, -300), (600, 0))
+
+
+def test_a_fast_kink_keeps_the_margin_for_the_speed_the_cars_reach():
+    # The planned speed stops at V_MAX (about 130 km/h), but AC's AI took this kink at 190-200 km/h and ran 2.5-3.4 m
+    # outside a line 2.5 m from the edge: 5 of 8 cars put wheels off. The margin follows the speed the cars may
+    # reach (here 200 km/h: 3.3 m), so on a 6.4 m road the line stays on the centreline through the kink...
+    line = ai_line.build(road_from(_fast_kink(), half=3.2), FRAME)
+    kink = (line.station > 760) & (line.station < 1000)
+    assert line.extra[kink, 0].min() * 3.6 > 125  # planned at the cap
+    assert np.abs(line.offset[kink]).max() <= 0.02
+    # ...and on a 9 m road it keeps 3.3 m from each edge, where before #52 it kept 2.5 m and used 2 m either side.
+    wide = ai_line.build(road_from(_fast_kink(), half=4.5), FRAME)
+    kink = (wide.station > 760) & (wide.station < 1000)
+    assert clearance(wide)[kink].min() >= racing_line.EDGE_MARGIN_TOP_M - 0.05
+    assert np.abs(wide.offset[kink]).max() > 0.8  # still out-in-out, in the 1.2 m left
+
+
+def _grip_used(line) -> np.ndarray:
+    """At each point, the share of the tyres' grip the planned speed asks for, turning and braking together, on the
+    ellipse `ai_line.speed_profile` brakes within (flat road): 1 at the limit."""
+    v = line.extra[:, 0]
+    turning = v ** 2 / line.extra[:, 4] / (ai_line.MU * ai_line.G)
+    braking = np.maximum(-np.gradient(v, line.length) * v, 0.0) / 8.0
+    return turning ** 2 + braking ** 2
+
+
+def _tightening_bend() -> np.ndarray:
+    """#50 (Grasstree Hill forward, 5.95-6.03 km), as curvature every metre: 500 m straight, then a right-hander that
+    reaches 130 m radius over 40 m and tightens to 68 m over the next 75 m, 68 m for 20 m, out over 60 m, 400 m
+    straight."""
+    return -np.concatenate([np.zeros(500), np.linspace(0, 1 / 130, 40), np.linspace(1 / 130, 1 / 68, 75),
+                            np.full(20, 1 / 68), np.linspace(1 / 68, 0, 60), np.zeros(400)])
+
+
+def test_a_fast_tightening_bend_keeps_its_margin_and_is_entered_slower():
+    # #50: on a 6.4 m road the line entered at 127 km/h only 1.2 m from the outside edge. AC's AI ran 1.0-1.3 m
+    # outside the line at that speed, so two wheels were off before the turn-in, and every car of 8 left the road.
+    half = 3.2
+    line = ai_line.build(road_from(_tightening_bend(), half=half), FRAME)
+    v = line.extra[:, 0]
+    entry = (line.station > 400) & (line.station < 615)  # the run-in and the tightening, to the 68 m radius
+    fast = entry & (v * 3.6 > 110)
+    assert fast.sum() > 20
+    # The margin for the speed all the way in: 2.5 m at 120 km/h and over (before #50, 1.2 m at 129.6 km/h).
+    assert np.all(clearance(line)[entry] >= racing_line.edge_margin(v[entry]) - 0.05)
+    assert clearance(line)[fast].min() >= 2.3
+    # Entered slowly enough for the tighter radius ahead: turning and braking together never ask for more grip than
+    # there is. Before #50 they asked for up to 1.95 times as much: at the limit for 130 m and braking for 68 m.
+    assert _grip_used(line)[entry].max() < 1.05
+    # So where the tightening starts (540 m), the line is well under the grip-limited speed for its own radius
+    # there (before #50, at it: 129.6 km/h).
+    i = int(np.argmin(np.abs(line.station - 540)))
+    assert v[i] < 0.96 * min(np.sqrt(ai_line.MU * ai_line.G * line.extra[i, 4]), ai_line.V_MAX)
+    rep = validate.Report()
+    validate.racing_line_checks(rep, "t", line, _flat_road_surface(half), validate.road_middle(line)[1])
+    assert rep.failed == [] and not [w for w in rep.warnings if "close to the edge" in w]
+
+
+@pytest.mark.parametrize("half", [3.2, 2.0])
+def test_a_fast_sweep_keeps_the_fast_margin(half):
+    # #50, Brinktop Road at about 5.6 km: the line swung out to 1.2 m from the edge at 130 km/h on a near-straight
+    # (radius 650-700 m), and 3 of 8 cars put two wheels off. Here, gentle S-bends at the top speed: the line keeps
+    # 2.5 m from each edge, which on a 4 m road leaves it in the middle (the bounds never cross the centreline).
+    line = ai_line.build(road_from(bends((400, 0), (150, 700), (150, -650), (400, 0)), half=half), FRAME)
+    sweep = (line.station > 300) & (line.station < 800)
+    assert line.extra[sweep, 0].min() * 3.6 > 125
+    assert clearance(line)[sweep].min() >= min(racing_line.EDGE_MARGIN_FAST_M, half) - 0.02
+    assert np.abs(line.offset[sweep]).max() <= max(half - racing_line.EDGE_MARGIN_FAST_M, 0.0) + 0.02
+
+
+def test_slow_bends_still_use_the_width():
+    # Three 20 m bends back to back, at 52-71 km/h: the margin stays at or near 1.2 m, and the line swings from
+    # 1.2 m off one edge to 1.2 m off the other, as before #50.
+    half = 3.2
+    line = ai_line.build(road_from(bends((400, 0), (40, -20), (15, 0), (40, 20), (15, 0), (40, -20), (400, 0)),
+                                   half=half), FRAME)
+    s = (line.station > 400) & (line.station < 550)
+    assert line.extra[s, 0].max() * 3.6 < 75
+    room = half - racing_line.EDGE_MARGIN_M
+    assert line.offset[s].max() > room - 0.15 and line.offset[s].min() < -(room - 0.15)
 
 
 def test_a_hairpin_keeps_the_line_on_the_road():
@@ -160,8 +266,10 @@ def test_a_long_road_solves_quickly():
     line = ai_line.build(road, FRAME, end_short_m=AI_END_SHORT_M)
     whole = time.perf_counter() - t
     print(f"64 km: solve {solve:.1f} s, whole AI line {whole:.1f} s, {off.steps} steps")
-    # About 3 s on a laptop, but 22-32 s on a build server's slower cores (4 Nov). This only catches a pathological
-    # slowdown; a real build's budget is the worker's 1 h limit.
+    # About 3 s on a laptop, but 22-32 s on a build server's slower cores (4 Nov). The edge margins for speed (#50)
+    # solve the line up to three times, each from where the last left it: the whole line went from about 10 s to
+    # 13-15 s on the laptop that measured it (5 Nov). This only catches a pathological slowdown; a real build's
+    # budget is the worker's 1 h limit.
     assert whole < 120.0
     assert line.extra[:, 4].min() >= 0.95 * line.centre_radius.min()
 
@@ -264,7 +372,7 @@ def test_the_validator_warns_of_a_line_that_weaves_and_fails_one_too_near_an_edg
     good = _straight_line(np.zeros(len(s)))
     rep = validate.Report()
     validate.racing_line_checks(rep, "t", good, _flat_road_surface(), validate.road_middle(good)[1])
-    assert rep.failed == [] and len(rep.passed) == 3
+    assert rep.failed == [] and len(rep.passed) == 4  # both edge checks, the speed's margin (#50) and the radius
     # Weaving 1 m either way every 60 m on a straight road: a 91 m radius where the road has none.
     weave = _straight_line(np.sin(2 * np.pi * s / 60))
     middle, radius = validate.road_middle(weave)
@@ -288,3 +396,21 @@ def test_the_validator_warns_of_a_line_that_weaves_and_fails_one_too_near_an_edg
     off_mesh = _straight_line(np.full(len(s), 2.5), half=4.0)  # the file claims 1.5 m to spare; the mesh disagrees
     validate.racing_line_checks(rep, "t", off_mesh, road, validate.road_middle(off_mesh)[1])
     assert [f for f in rep.failed if "triangles reach" in f]
+
+
+def test_the_validator_warns_of_a_fast_line_near_an_edge():
+    # #50: 1.3 m from the edge is inside the 1.0 m floor at any speed, but short of the margin above 63 km/h.
+    s = np.arange(400.0)
+    line = _straight_line(np.full(len(s), HALF - 1.3))
+    for kmh, warned in ((50, False), (130, True)):
+        line.extra[:, 0] = kmh / 3.6
+        rep = validate.Report()
+        validate.racing_line_checks(rep, "t", line, _flat_road_surface(), validate.road_middle(line)[1])
+        assert rep.failed == [] and rep.ok
+        assert bool([w for w in rep.warnings if "close to the edge for its speed" in w]) == warned
+    # On a 4 m road the middle is all there is: 2.0 m from each edge at 130 km/h passes.
+    narrow = _straight_line(np.zeros(len(s)), half=2.0)
+    narrow.extra[:, 0] = 130 / 3.6
+    rep = validate.Report()
+    validate.racing_line_checks(rep, "t", narrow, _flat_road_surface(), validate.road_middle(narrow)[1])
+    assert [p for p in rep.passed if "keeps its speed's margin" in p] and not rep.warnings
