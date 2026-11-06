@@ -27,7 +27,8 @@ def test_cover_candidates_stay_in_the_region_and_clear_of_the_road():
 def test_thinning_keeps_everything_near_the_road_and_less_far_away():
     rng = np.random.default_rng(1)
     pts = np.column_stack([rng.uniform(500_100, 500_900, 20000), 5_200_000 + rng.uniform(-250, 250, 20000)])
-    trees = scenery.thin_by_distance(scenery.Trees(pts, np.full(len(pts), 15.0)), CENTRE, rng)
+    trees = scenery.keep_trees(scenery.Trees(pts, np.full(len(pts), 15.0)), CENTRE, 1e6, rng,
+                               real_crowns=False)  # a long road: the cap doesn't bind
     d = np.abs(trees.xy[:, 1] - 5_200_000)
     near = np.sum(np.abs(pts[:, 1] - 5_200_000) <= 60)
     assert np.sum(d <= 60) == near
@@ -151,10 +152,11 @@ def test_worldcover_tile_names(lon, lat, name):
 def test_tree_cap_keeps_the_nearest_trees():
     rng = np.random.default_rng(4)
     pts = np.column_stack([rng.uniform(500_000, 501_000, 10000), 5_200_000 + rng.uniform(-250, 250, 10000)])
-    capped = scenery.cap_trees(scenery.Trees(pts, np.full(len(pts), 15.0)), CENTRE, 1000.0, rng, per_km=2000)
+    capped = scenery.keep_trees(scenery.Trees(pts, np.full(len(pts), 15.0)), CENTRE, 1000.0, rng,
+                                real_crowns=False, per_km=2000)
     assert len(capped) == 2000
     d = np.abs(capped.xy[:, 1] - 5_200_000)
-    assert np.percentile(d, 95) < 80  # the far bands gave way
+    assert np.median(d) < 80  # the far bands gave way, down to the far band's share (test_reach)
 
 
 def _house_meshes(width: float, depth: float):

@@ -67,6 +67,7 @@ To run it:
 ```
 
 - Results and screenshots land in `Documents/Assetto Corsa/mapcreator_probe/`.
+- `--yaw 90` (or `-90`) turns the car square to the road, to its left (or right), so the camera and the frame rate take in the scenery beside the road rather than along it. The car then sits across the road, so on a narrow road some points report wheels off the track; the frame rate is still recorded.
 - A teleport the game ignores is reported as a harness problem, not a track problem.
 - Teleporting is only known to work in offline practice.
 
