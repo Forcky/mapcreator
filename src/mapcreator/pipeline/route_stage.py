@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 from mapcreator.config import Settings
+from mapcreator.core import centreline
 from mapcreator.core.centreline import cumulative
 from mapcreator.job import Job
 from mapcreator.pipeline.workdir import WorkDir
@@ -19,6 +20,42 @@ from mapcreator.regions import job_region
 STAGE = "01_route"
 class RouteTooLong(osm_graph.RouteError):
     """A user-facing error: the route between the waypoints is longer than the job allows."""
+
+
+class RouteTurnsBack(osm_graph.RouteError):
+    """A user-facing error: the route goes back over road it has already driven, usually because a point landed on
+    a side road or past a junction. A track can't use the same road twice, and its AI line can't turn on the spot."""
+
+
+RETRACE_LIMIT_M = 1.0  # every route built before this check measured 0 m
+
+
+def turn_back(xy: np.ndarray) -> tuple[int, float] | None:
+    """Where the route first goes back the way it came: the index of the point, and how much road it drives twice
+    (metres). Either a segment runs over road already driven (`centreline.retraced`), or a single node turns harder
+    than `centreline.REVERSAL_DEG`, as where two points on one stretch of road send it out and back. No route built
+    before this check had either: its sharpest single-node turn was a junction in Richmond, 108 degrees."""
+    xy = np.asarray(xy, dtype=float)
+    retraced_m, first = centreline.retraced(xy)
+    found = [first] if first is not None and retraced_m > RETRACE_LIMIT_M else []
+    seg = np.diff(xy, axis=0)
+    keep = np.flatnonzero(np.hypot(*seg.T) > 1e-6)
+    if len(keep) >= 2:
+        h = np.arctan2(seg[keep, 1], seg[keep, 0])
+        turn = np.degrees(np.abs(np.angle(np.exp(1j * np.diff(h)))))
+        found += [int(i) for i in keep[1:][turn > centreline.REVERSAL_DEG]]  # the node the turn is at
+    return (min(found), retraced_m) if found else None
+
+
+def turns_back_message(retraced_m: float, along_m: float) -> str:
+    """What to tell the person, in the build's words and the preview's."""
+    twice = f" and drives {_distance(retraced_m)} of road twice" if retraced_m > RETRACE_LIMIT_M else ""
+    return (f"The route turns back on itself {_distance(along_m)} along{twice}. A track can't go back the way it "
+            "came: move the point near there onto the road you mean, or finish the track before it turns.")
+
+
+def _distance(m: float) -> str:
+    return f"{m:.0f} m" if m < 1000 else f"{m / 1000:.1f} km"
 
 
 KEEP_TAGS = ("highway", "ref", "name", "lanes", "width", "surface", "oneway", "maxspeed", "bridge", "tunnel", "layer",
@@ -62,6 +99,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     length = float(cumulative(route.xy)[-1])
     if length > job.max_length_km * 1000:
         raise RouteTooLong(f"The route is {length / 1000:.1f} km; the limit is {job.max_length_km:g} km.")
+    back = turn_back(route.xy)
+    if back is not None:
+        raise RouteTurnsBack(turns_back_message(back[1], float(cumulative(route.xy)[back[0]])))
 
     sharp = sharp_turns(route.xy)
     lon, lat = region.to_lonlat().transform(route.xy[:, 0], route.xy[:, 1])
@@ -95,8 +135,9 @@ def sharp_turns(xy: np.ndarray, limit_deg: float = SHARP_TURN_DEG) -> list[dict]
 
     A real hairpin is drawn in OSM as many nodes, each turning a little. One node turning 100°+ is a turn
     into a side street at an acute junction (Richmond's Bridge Street into Wellington Street turns 108°),
-    which the profile stage rounds to a drivable corner, or, past 150°, the route doubling back because a
-    waypoint landed on the wrong road, which validation reports with its place.
+    which the profile stage rounds to a drivable corner, or, past 150°, usually the route doubling back because a
+    waypoint landed on the wrong road. `RouteTurnsBack` refuses that where it drives road twice; validation
+    reports any other with its place.
     """
     seg = np.diff(xy, axis=0)
     keep = np.hypot(*seg.T) > 1e-6

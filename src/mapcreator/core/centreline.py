@@ -19,7 +19,8 @@ spot (1.7 m radius at Richmond's Bridge Street into Wellington Street, Nov
 2026). `fillet` rounds every such corner to `CORNER_RADIUS_M`, about the path
 a car takes through a town junction, before the spline. A turn of more than
 `REVERSAL_DEG` is the route going back the way it came, which no radius makes
-drivable: it's left for validation to report.
+drivable: the route stage refuses a route that drives road twice (`retraced`),
+and validation reports any reversal left.
 """
 
 from __future__ import annotations
@@ -63,6 +64,29 @@ def resample(xy: np.ndarray, step: float) -> tuple[np.ndarray, np.ndarray, np.nd
     return out, ss, seg_ids[seg] if len(seg_ids) else seg
 
 
+def retraced(xy: np.ndarray, *, decimals: int = 2) -> tuple[float, int | None]:
+    """Road the line drives more than once: its length, and the index of the point where it first goes back over
+    road it has already driven (None if it never does).
+
+    A segment is the same road as an earlier one when its two ends match, in either order, to `decimals` places of
+    the line's units. A routed line that turns back runs over the very nodes it came along, so they match exactly.
+    """
+    xy = np.asarray(xy, dtype=float)
+    keys = np.round(xy, decimals)
+    seen: set[tuple[float, ...]] = set()
+    length, first = 0.0, None
+    for i in range(len(xy) - 1):
+        a, b = tuple(keys[i]), tuple(keys[i + 1])
+        if a == b:
+            continue
+        key = (*min(a, b), *max(a, b))
+        if key in seen:
+            length += float(np.hypot(*(xy[i + 1] - xy[i])))
+            if first is None:
+                first = i
+        else:
+            seen.add(key)
+    return length, first
 
 
 def distance_to_polyline(points: np.ndarray, line: np.ndarray) -> np.ndarray:
