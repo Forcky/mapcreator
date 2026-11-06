@@ -154,13 +154,14 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         # A made-up tree's height was invented for a dry eucalypt; now its family is known, it gets one of its own.
         trees = scenery.Trees(trees.xy, species.made_up_heights(families, rng))
     if vmap is not None:
-        vegetation = {"source": region.vegetation_attribution.dataset}
+        credits = vmap.attributions or (region.vegetation_attribution,)  # SVTM's map names NVIS too, if it used it
+        vegetation = {"source": " + ".join(a.dataset for a in credits)}
     elif vegetation_note:
         vegetation = {"source": f"{region.vegetation_attribution.dataset} ({vegetation_note})"}
     else:
         vegetation = {"source": "none"}
     if vmap is not None:
-        attributions.append(region.vegetation_attribution)
+        attributions.extend(credits)
         codes = vmap.codes(where)
         vegetation |= {"communities": len(vmap), "made_up_dropped": dropped,
                        f"capped_at_{species.OTHER_HEIGHT_M:.0f}m": capped, "families": species.counts(families)}

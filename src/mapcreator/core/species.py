@@ -1,5 +1,5 @@
 """Which kind of tree stands where: a model family for every tree, from a vegetation map: TASVEG in Tasmania
-(`VegetationMap`), NVIS elsewhere (`NvisMap`).
+(`VegetationMap`), NSW's State Vegetation Type Map in NSW (`SvtmMap`), NVIS elsewhere (`NvisMap`).
 
 In Tasmania a tree's family comes from the vegetation community it stands in (`Community.code`, TASVEG's VEGCODE):
 - **Woody communities** name their family directly: dry eucalypt (smooth or rough bark), wet eucalypt,
@@ -22,6 +22,13 @@ On the mainland, NVIS 7.0's Major Vegetation Subgroups give each 100 m cell one 
 subgroup gives the family (`NVIS_SUBGROUPS`). The cells are too coarse to delete trees by, and the publisher
 warns against analysing its non-native classes, so NVIS only types trees (`NvisMap.keep_made_up` keeps all).
 
+In NSW the State Vegetation Type Map gives each 5 m cell a Plant Community Type (PCT), whose name lists its
+dominant trees: "Narrow-leaved Ironbark - White Cypress Pine - Buloke tall open forest...", "Woronora Plateau
+Scribbly Gum Woodland". A tree there is drawn from the families of the trees its PCT names, in equal shares
+(`svtm_families`); a PCT that names none we know takes its vegetation class's family, else its formation's.
+Cleared land and treeless PCTs take the nearest typed PCT within `SVTM_NEAREST_M`, as NVIS's cleared cells do.
+It only types trees too, so far, and outside NSW the NVIS map takes over.
+
 A made-up tree's height is invented too, so once typed it's drawn again from its family's range (`HEIGHT_M`):
 a tea-tree a few metres tall, a wet-forest eucalypt tens of metres. Before, every made-up tree had a dry
 eucalypt's height, which the height bands then turned into a eucalypt whatever its family.
@@ -32,6 +39,7 @@ whose own models aren't built yet borrows the nearest ones that are.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import numpy as np
@@ -123,6 +131,69 @@ NVIS_SUBGROUPS = {mvs: family for family, numbers in _SUBGROUPS.items() for mvs 
 # NVIS_NEAREST_M, as a Tasmanian paddock tree takes its nearest woody community's; else a paddock gum.
 NVIS_UNTYPED = frozenset({0, 17, 31, 33, 34, 35, 36, 37, 38, 39, 41, 42, 43, 44, 46, 63, 64, 92, 93, 97, 98, 99})
 NVIS_NEAREST_M = 200.0
+
+# SVTM: each vegetation formation's family, the default for its classes and PCTs. Formations not here
+# (grassland, wetland, saltmarsh, chenopod shrubland, the alpine complex, and "Not classified") are untyped.
+_SVTM_FORMATIONS = {
+    "Rainforests": RAINFOREST,
+    "Wet Sclerophyll Forests (Shrubby sub-formation)": WET,
+    "Wet Sclerophyll Forests (Grassy sub-formation)": WET,
+    # Stringybarks, peppermints and bloodwoods; the grassy forests and woodlands are gums and boxes, as for NVIS.
+    "Dry Sclerophyll Forests (Shrubby sub-formation)": DRY_ROUGH,
+    "Dry Sclerophyll Forests (Shrub/grass sub-formation)": DRY_SMOOTH,
+    "Grassy Woodlands": DRY_SMOOTH,
+    "Forested Wetlands": DRY_SMOOTH,  # river red gum
+    "Semi-arid Woodlands (Grassy sub-formation)": DRY_ROUGH,  # black box, coolabah, poplar box
+    "Semi-arid Woodlands (Shrubby sub-formation)": DRY_ROUGH,
+    "Heathlands": TEA_TREE,
+    "Arid Shrublands (Acacia sub-formation)": WATTLE,
+}
+# Vegetation classes whose trees aren't their formation's.
+_SVTM_CLASSES = {
+    "Subalpine Woodlands": SNOW_GUM,
+    "Southern Wattle Dry Sclerophyll Forests": WATTLE,
+    "Coastal Swamp Forests": TEA_TREE,  # paperbark and swamp mahogany
+    "Coastal Floodplain Wetlands": TEA_TREE,  # paperbark, swamp turpentine and swamp oak
+    "Eastern Riverine Forests": SHE_OAK,  # river oak
+    "Mangrove Swamps": TEA_TREE,  # low, dense crowns
+    "Coastal Heath Swamps": TEA_TREE,  # wet heath: tea-tree, paperbark and banksia
+    "Brigalow Clay Plain Woodlands": WATTLE,
+    "Riverine Plain Woodlands": WATTLE,  # weeping myall
+    "Dune Mallee Woodlands": MALLEE,
+    "Sand Plain Mallee Woodlands": MALLEE,
+    "Semi-arid Sand Plain Woodlands": SHE_OAK,  # belah and black oak
+    "Riverine Sandhill Woodlands": CONIFER,  # white cypress pine
+    "Wallum Sand Heaths": BANKSIA,
+}
+# The trees a PCT's name may list, by family, ignoring case. Where patterns overlap the earlier wins, so a snow
+# gum isn't a gum and a rough-barked apple isn't an apple. In wet forest a named eucalypt is the formation's own
+# family; elsewhere its bark decides, as for TASVEG's dry forest.
+_NAMED_TREES = (
+    (SNOW_GUM, "Snow Gum|Sally"),
+    (MALLEE, "Mallee"),
+    (CONIFER, "Cypress Pine|Cypress|Pine"),  # Callitris; a hoop pine's PCT is rainforest
+    (SHE_OAK, "She[- ]?Oak|Oak|Buloke|Belah|Casuarina"),
+    (TEA_TREE, "Paperbark|Melaleuca|Tea[- ]?tree|Leptospermum|Kunzea|Broombush|Mangrove"),
+    (WATTLE, "Wattle|Acacia|Mulga|Gidgee|Brigalow|Myall|Nelia|Yarran|Currawang|Boree|Lancewood|Ironwood|Coobah|"
+             "Dead Finish"),
+    (BANKSIA, "Banksia"),
+    (DRY_ROUGH, "Rough-barked Apple|Ironbark|Stringybark|Peppermint|Box|Bloodwood|Mahogany|Messmate|Blackbutt|"
+                "Tallowwood|Ash|Coolabah|Coolibah|Bangalay|Carbeen|Turpentine(?! Bush)"),
+    (DRY_SMOOTH, "Gum|Apple|Angophora"),
+)
+_NAMED = re.compile("|".join(rf"(?P<{family}>\b(?:{p})\b)" for family, p in _NAMED_TREES), re.IGNORECASE)
+# A western PCT's name gives its trees, its structure, then where it grows ("... tall open forest on lower slopes
+# in the Pilliga Scrub", "... mainly in the Mulga Lands Bioregion"). Only the part before the place is read, as
+# two bioregions are named after trees.
+_PLACE = re.compile(r"\s(?:on|of|in|along|including|lining|fringing|mainly|with|from|between|near|the NSW)\s"
+                    r"|\b(?:Brigalow Belt|Mulga Lands)\b")
+# A name that gives no tree but says it's open country is treeless, whatever its class.
+_TREELESS = re.compile(r"\b(?:grassland|herbfield|sedgeland|forbland|fen|bog|saltmarsh|marsh|meadow|lake|lagoon)s?\b",
+                       re.IGNORECASE)
+SVTM_NEAREST_M = 200.0  # as NVIS_NEAREST_M
+SVTM_OUTSIDE = 65535  # the SVTM's no data, outside NSW
+_NVIS_CODE = 100_000  # `SvtmMap.at` gives an NVIS subgroup outside NSW as this plus its number
+
 ROUGH_EUCALYPTS = ("obliqua", "amygdalina", "ovata", "delegatensis", "sieberi", "nitida", "radiata", "dalrympleana")
 WEEDS = {"PI": PINE, "CY": PINE, "WW": WILLOW}
 
@@ -184,8 +255,9 @@ def notable_family(c: Community) -> str | None:
 class VegetationMap:
     """Communities with a spatial index: which one each tree stands in, and the nearest woody one."""
 
-    def __init__(self, communities: list[Community]):
+    def __init__(self, communities: list[Community], attributions: tuple = ()):
         self.communities = list(communities)
+        self.attributions = attributions  # the sources to credit (`providers.base.Attribution`s)
         self.kinds = np.array([kind(c.code) for c in self.communities], dtype=object)
         # Per community: its woody family (the eucalypt, in mixed forest), its understorey family in mixed
         # forest, and the family of the scattered trees it names.
@@ -242,8 +314,9 @@ class NvisMap:
     subgroup of its 100 m cell. It never removes a tree, and caps no heights: on the mainland every tree is
     made up, with a height drawn from its family."""
 
-    def __init__(self, nvis):
+    def __init__(self, nvis, attributions: tuple = ()):
         self._nvis = nvis
+        self.attributions = attributions
         cells = nvis.cells
         # Each untyped cell takes the subgroup of the nearest cell with trees, if one is within NVIS_NEAREST_M.
         woody = np.isin(cells, list(NVIS_SUBGROUPS))
@@ -269,6 +342,102 @@ class NvisMap:
         xy = np.asarray(xy, dtype=float).reshape(-1, 2)
         typed = self._nvis.sample(self._typed, xy[:, 0], xy[:, 1]) if len(xy) else np.zeros(0, dtype=np.int64)
         return np.array([NVIS_SUBGROUPS.get(int(n), DRY_SMOOTH) for n in typed], dtype=object)
+
+    def keep_made_up(self, xy: np.ndarray, corridor, rng, *, mask_agreed: bool) -> np.ndarray:
+        return np.ones(len(xy), dtype=bool)
+
+    def height_caps(self, where: np.ndarray) -> np.ndarray:
+        return np.full(len(where), FOREST_HEIGHT_M)
+
+
+def svtm_families(pct) -> tuple[str, ...]:
+    """The families a PCT's trees are drawn from, in equal shares (a family named twice gets two), or () for a
+    PCT that says nothing about its trees. `pct` is a `providers.nsw.svtm.Pct`."""
+    if pct.formation == "Rainforests":
+        return (RAINFOREST,)
+    wet = pct.formation.startswith("Wet Sclerophyll")
+    head = _PLACE.split(pct.name, maxsplit=1)[0]
+    named = tuple(WET if wet and m.lastgroup in (DRY_ROUGH, DRY_SMOOTH) else m.lastgroup
+                  for m in _NAMED.finditer(head))
+    if named or _TREELESS.search(head):
+        return named
+    base = _SVTM_CLASSES.get(pct.veg_class, _SVTM_FORMATIONS.get(pct.formation))
+    return (base,) if base else ()
+
+
+def _unit_hash(xy: np.ndarray) -> np.ndarray:
+    """A number in [0, 1) for each point, fixed by where it is: picks a tree's share without a generator."""
+    return np.modf(np.abs(np.sin(xy[:, 0] * 12.9898 + xy[:, 1] * 78.233)) * 43758.5453)[0]
+
+
+class SvtmMap:
+    """SVTM PCTs around one corridor (`providers.nsw.svtm.Svtm`, loaded with an `SVTM_NEAREST_M` halo), with
+    `nvis_map` (an `NvisMap`, or None) for any of it outside NSW. Like NVIS it never removes a tree, and caps no
+    heights."""
+
+    def __init__(self, svtm, nvis_map: NvisMap | None = None, attributions: tuple = ()):
+        self._svtm, self._nvis = svtm, nvis_map
+        self._shares = {n: svtm_families(p) for n, p in svtm.table.items()}
+        typed = np.zeros(SVTM_OUTSIDE + 1, dtype=bool)
+        typed[[n for n, fams in self._shares.items() if fams]] = True
+        # Each block's cells, where untyped ones inside NSW take the PCT of the nearest typed cell within
+        # SVTM_NEAREST_M; the block's halo lets that search see past its edge.
+        self._typed = {}
+        counts = np.zeros(SVTM_OUTSIDE + 1, dtype=np.int64)
+        for key, cells in svtm.blocks.items():
+            counts += np.bincount(cells.ravel(), minlength=SVTM_OUTSIDE + 1)
+            woody, out = typed[cells], cells.copy()
+            if woody.any() and not woody.all():
+                dist, (ir, ic) = distance_transform_edt(~woody, return_indices=True)
+                near = ~woody & (cells != SVTM_OUTSIDE) & (dist * svtm.cell_m <= SVTM_NEAREST_M)
+                out[near] = cells[ir[near], ic[near]]
+            self._typed[key] = out
+        self._pcts = int((counts[1:SVTM_OUTSIDE] > 0).sum())
+        self._leaves_nsw = bool(counts[SVTM_OUTSIDE]) and nvis_map is not None  # the sea counts
+        self._own, self._nvis_typed = attributions, False
+
+    @property
+    def attributions(self) -> tuple:
+        """The SVTM's, and NVIS's once `families` has typed a tree by it."""
+        return self._own + (self._nvis.attributions if self._nvis_typed else ())
+
+    def __len__(self) -> int:
+        """How many PCTs the corridor's cells hold (not counting cleared land), and NVIS subgroups if it leaves
+        NSW."""
+        return self._pcts + (len(self._nvis) if self._leaves_nsw else 0)
+
+    def at(self, xy: np.ndarray) -> np.ndarray:
+        """The PCT at each point; outside NSW, _NVIS_CODE plus the NVIS subgroup (or SVTM_OUTSIDE without NVIS)."""
+        xy = np.asarray(xy, dtype=float).reshape(-1, 2)
+        where = self._svtm.pcts(xy[:, 0], xy[:, 1]) if len(xy) else np.zeros(0, dtype=np.int64)
+        outside = where == SVTM_OUTSIDE
+        if self._nvis is not None and outside.any():
+            where[outside] = _NVIS_CODE + self._nvis.at(xy[outside])
+        return where
+
+    def codes(self, where: np.ndarray) -> np.ndarray:
+        return np.array([f"MVS{int(n) - _NVIS_CODE:02d}" if n >= _NVIS_CODE else "" if n == SVTM_OUTSIDE
+                         else f"PCT{int(n)}" for n in where], dtype=object)
+
+    def families(self, xy: np.ndarray, height: np.ndarray, where: np.ndarray | None = None) -> np.ndarray:
+        """By the PCT of each tree's cell (or for an untyped cell its nearest typed neighbour's), drawing among
+        the families it names; outside NSW, NVIS's."""
+        xy, height = np.asarray(xy, dtype=float).reshape(-1, 2), np.asarray(height, dtype=float)
+        out = np.full(len(xy), DRY_SMOOTH, dtype=object)
+        if not len(xy):
+            return out
+        pct = self._svtm.sample(self._typed, xy[:, 0], xy[:, 1])
+        outside = pct == SVTM_OUTSIDE
+        if self._nvis is not None and outside.any():
+            out[outside] = self._nvis.families(xy[outside], height[outside])
+            self._nvis_typed = True
+        u = _unit_hash(xy)
+        for n in np.unique(pct[~outside]):
+            fams = self._shares.get(int(n), ())
+            if fams:
+                mine = np.flatnonzero(pct == n)
+                out[mine] = np.array(fams, dtype=object)[np.minimum((u[mine] * len(fams)).astype(int), len(fams) - 1)]
+        return out
 
     def keep_made_up(self, xy: np.ndarray, corridor, rng, *, mask_agreed: bool) -> np.ndarray:
         return np.ones(len(xy), dtype=bool)
