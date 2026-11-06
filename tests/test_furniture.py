@@ -180,3 +180,28 @@ def test_meshes_are_valid_visual_only_and_face_outward():
         p0, p1, p2 = (m.positions[m.triangles[:, j]].astype(float) for j in range(3))
         agree = (np.cross(p1 - p0, p2 - p0) * m.normals[m.triangles].mean(axis=1)).sum(axis=1) >= 0
         assert agree.all()
+
+
+def test_cams_need_an_advisory_speed_of_60_or_less():
+    k = np.zeros(800)
+    k[200:400] = 1 / 90.0  # about 66 km/h advisory: 15 under an 80 limit, but over 60
+    _, info, _ = build(road(k))
+    assert info["cams"] == 0
+    k[200:400] = 1 / 50.0  # about 47 km/h
+    _, info, _ = build(road(k))
+    assert info["cam_curves"] == 1
+
+
+def test_a_long_tight_bend_gets_at_most_cam_max_markers():
+    k = np.zeros(1200)
+    k[200:900] = 1 / 40.0  # a 700 m bend at 40 m radius
+    _, info, _ = build(road(k))
+    assert info["cam_curves"] == 1 and furniture.CAM_MIN <= info["cams"] <= furniture.CAM_MAX
+
+
+def test_an_unknown_limit_is_judged_at_the_default():
+    k = np.zeros(800)
+    k[200:400] = 1 / 70.0  # about 59 km/h advisory: tight against 100 (85), not against 80 (65)... and under 60
+    _, unknown, _ = build(road(k), limits=np.full(800, np.nan))
+    _, at_80, _ = build(road(k), limits=np.full(800, 80.0))
+    assert unknown["cam_curves"] == at_80["cam_curves"]

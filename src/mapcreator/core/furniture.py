@@ -38,12 +38,15 @@ CURVATURE_SMOOTH_M = 20.0
 CAM_SPEED_DROP_KMH = 15.0  # a curve gets CAMs when its advisory speed is at least this far below the limit
 CAM_SIDE_FRICTION = 0.35  # side friction for the advisory speed, v = sqrt(127 R (e + f)) in km/h
 CAM_MIN = 3
+CAM_MAX = 6  # per bend: spread evenly over the bend and its approach when the spacing would give more
+CAM_MAX_ADVISORY_KMH = 60.0  # and only bends whose advisory speed is at most this get them
 CAM_SPACING_FACTOR = 2.0  # CAMs at twice the outside guide post spacing for the curve's radius, 12-40 m apart
 CAM_OFFSET_M = 2.0
 CAM_BOARD = (0.45, 0.6)  # width, height
 CAM_BOTTOM_M = 1.2
 CAM_MIN_CURVE_M = 15.0  # shorter tight spots (a kink in the centreline) get none
-DEFAULT_LIMIT_KMH = 100.0  # where OSM gives no limit, the rural default
+DEFAULT_LIMIT_KMH = 80.0  # where OSM gives no limit: the speed CAMs are judged against. Tasmania's rural default is
+# 100 km/h, but winding back roads are mostly posted lower; at 100 a 20 km coast road got 723 CAMs (4 Nov).
 
 SIGN_BOARD = (0.45, 0.6)
 SIGN_BOTTOM_M = 1.5
@@ -157,7 +160,7 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
     # CAMs first: the outside of a qualifying curve has them instead of guide posts.
     limit = np.where(np.isfinite(limits), limits, DEFAULT_LIMIT_KMH)
     advisory = np.sqrt(127.0 * radius * (np.abs(superelevation) + CAM_SIDE_FRICTION))
-    tight = advisory <= limit - CAM_SPEED_DROP_KMH
+    tight = (advisory <= limit - CAM_SPEED_DROP_KMH) & (advisory <= CAM_MAX_ADVISORY_KMH)
     cam_zone = {"L": np.zeros(n, bool), "R": np.zeros(n, bool)}
     cams = curves = 0
     # None on gravel: a bend partly on it counts only by its sealed part, which must qualify on its own (long
@@ -175,6 +178,8 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
         stations = np.arange(s[i0] - lead, s[i1] + lead + 0.1, gap)
         if len(stations) < CAM_MIN:
             stations = np.linspace(s[i0] - lead, s[i1] + lead, CAM_MIN)
+        elif len(stations) > CAM_MAX:
+            stations = np.linspace(s[i0] - lead, s[i1] + lead, CAM_MAX)
         idx = np.clip(np.searchsorted(s, stations), 0, n - 1)
         cam_zone[side][max(idx[0] - 1, 0):idx[-1] + 2] = True
         for i in np.unique(idx[~gravel[idx]]):

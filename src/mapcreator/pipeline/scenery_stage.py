@@ -1,10 +1,12 @@
 """Stage 4b: trees, buildings and power lines around the road, as a second scene the track stage merges.
 
+Trees and buildings stand within the scenery reach of the centreline (`core.reach`, 600 m), and power-line
+supports anywhere on the terrain (695 m).
 Trees come from the region's individual-crown canopy model when one is
 configured (Tasmania's 2 m CHM mirror), and then every crown in the corridor is
 kept, at its own height. Otherwise they're made-up positions in ESA WorldCover
-tree cover, thinned with distance and capped per km. Where the region has a
-vegetation map (TASVEG in Tasmania), each tree's kind comes from the community it
+tree cover, thinned with distance and, near the road, capped per km. Where the region
+has a vegetation map (TASVEG in Tasmania), each tree's kind comes from the community it
 stands in (`core.species`): crowns are only retyped, while made-up trees are also
 dropped where the map has none. Buildings come from the
 region's footprint layer, and power lines from the region's power source
@@ -30,7 +32,7 @@ import shapely
 
 from mapcreator.config import Settings
 from mapcreator.core import mesh as base_mesh
-from mapcreator.core import power, scenery, species, sprites, treefx
+from mapcreator.core import power, reach, scenery, species, sprites, treefx
 from mapcreator.core.scene import Material, Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import mesh_stage, profile_stage, section_stage
@@ -74,7 +76,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         except Exception as e:  # noqa: BLE001 - any source failure costs the buildings, not the track
             log.warning("building footprints unavailable (%s: %s); building without them", type(e).__name__, e)
             found, buildings_note = [], "unavailable"
-        buildings = scenery.select_buildings(found, xy, centre.buffer(half + 2.0))
+        buildings = scenery.select_buildings(found, xy, centre.buffer(half + 2.0), scenery.BUILDING_REACH_M)
         if buildings:
             attributions.append(region.buildings_attribution)
     built = shapely.unary_union([b.buffer(3.0) for b in buildings]) if buildings else None
@@ -208,14 +210,14 @@ def _power(region, settings: Settings, xy: np.ndarray, half: float, dem, frame, 
     if region.power is None:
         return [], {"source": "none"}
     source = f"{region.power_attribution.dataset}, {region.power_attribution.holder}"
-    reach = mesh_stage.TERRAIN_CORRIDOR_M - 5.0  # supports stand on the terrain mesh
-    bbox = shapely.LineString(xy).buffer(reach).bounds
+    reach_m = reach.POWER_M  # supports stand on the terrain mesh, past the trees
+    bbox = shapely.LineString(xy).buffer(reach_m).bounds
     try:
         lines = region.power(bbox, settings)
     except Exception as e:  # noqa: BLE001 - any source failure costs the power lines, not the track
         log.warning("power lines unavailable (%s: %s); building without them", type(e).__name__, e)
         return [], {"source": f"{source} (unavailable)"}
-    p = power.plan(lines, xy, half, reach_m=reach)
+    p = power.plan(lines, xy, half, reach_m=reach_m)
     sxy = np.array([s.xy for s in p.supports]).reshape(-1, 2)
     edge, station = scenery.edge_distance(sxy, xy, c["heading"], sec["half_left"], sec["half_right"])
     s_m = c["s"][station] if len(sxy) else np.zeros(0)

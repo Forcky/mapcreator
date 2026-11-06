@@ -160,7 +160,9 @@ def test_a_long_road_solves_quickly():
     line = ai_line.build(road, FRAME, end_short_m=AI_END_SHORT_M)
     whole = time.perf_counter() - t
     print(f"64 km: solve {solve:.1f} s, whole AI line {whole:.1f} s, {off.steps} steps")
-    assert whole < 30.0  # about 3 s on a laptop
+    # About 3 s on a laptop, but 22-32 s on a build server's slower cores (4 Nov). This only catches a pathological
+    # slowdown; a real build's budget is the worker's 1 h limit.
+    assert whole < 120.0
     assert line.extra[:, 4].min() >= 0.95 * line.centre_radius.min()
 
 
