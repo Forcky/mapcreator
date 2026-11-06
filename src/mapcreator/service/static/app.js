@@ -73,6 +73,7 @@
     pollTimer: null,
     retryJob: null, // the job that builds a failed road anyway, when the build offers it
     bendMarker: null,
+    turnMarker: null, // where the previewed route goes back over its own road
     fallbackId: "track_" + randomSuffix(6),
   };
 
@@ -413,6 +414,7 @@
     if (state.previewAbort) state.previewAbort.abort();
     state.previewSeq += 1;
     state.routeUsable = false;
+    showTurnBack(null);
     if (state.points.length < 2) {
       state.route = null;
       drawRoute();
@@ -434,7 +436,11 @@
       if (seq !== state.previewSeq) return;
       state.route = preview.coordinates;
       const limitM = state.config.max_length_km * 1000;
-      if (preview.length_m > limitM) {
+      if (preview.turns_back) {
+        // No build accepts a route that drives road twice: say where, in the build's own words.
+        el.routeInfo.textContent = preview.turns_back.message;
+        showTurnBack(preview.turns_back);
+      } else if (preview.length_m > limitM) {
         el.routeInfo.textContent = `The route is ${formatKm(preview.length_m)}, longer than the ` +
           `${state.config.max_length_km} km limit. Move the points closer together.`;
       } else {
@@ -606,6 +612,24 @@
       .setLngLat([failure.lon, failure.lat])
       .addTo(state.map);
     state.map.flyTo({ center: [failure.lon, failure.lat], zoom: Math.max(state.map.getZoom(), 15) });
+  }
+
+  // Mark where the previewed route turns back on itself; or clear the mark.
+  function showTurnBack(turn) {
+    if (state.turnMarker) {
+      state.turnMarker.remove();
+      state.turnMarker = null;
+    }
+    const ok = turn && Number.isFinite(turn.lon) && Number.isFinite(turn.lat);
+    if (!ok || !state.map || typeof maplibregl === "undefined") return;
+    // A badge beside the spot, not on it: the turn is often at a point, which has to stay visible and draggable.
+    const node = document.createElement("span");
+    node.className = "marker-bend marker-turn";
+    node.textContent = "!";
+    node.title = "The route turns back here";
+    state.turnMarker = new maplibregl.Marker({ element: node, anchor: "bottom-left", offset: [6, -6] })
+      .setLngLat([turn.lon, turn.lat])
+      .addTo(state.map);
   }
 
   // Warn before anyone submits if no builder has been heard from lately. Nothing to say if this fails.

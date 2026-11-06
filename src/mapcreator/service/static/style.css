@@ -395,7 +395,7 @@ input[type="radio"] {
   background: var(--finish);
 }
 
-/* Where a build found a bend too tight to drive. */
+/* Where a build found a bend too tight to drive, or where the previewed route turns back on itself. */
 .marker-bend {
   display: inline-block;
   width: 30px;
@@ -407,6 +407,10 @@ input[type="radio"] {
   color: #ffffff;
   font: 800 16px/24px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   text-align: center;
+}
+
+.marker-turn {
+  pointer-events: none; /* drags reach the point underneath */
 }
 
 /* ----- the job ----- */

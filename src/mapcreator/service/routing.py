@@ -11,14 +11,16 @@ runs later on the worker and is the one that counts. Two implementations:
 - `GraphHopperRouter` asks a self-hosted GraphHopper with a `car` profile.
 
 Region checks happen before either router is asked anything, so a point in
-an unsupported state costs nothing. Every exception here carries a message
+an unsupported state costs nothing. A preview that drives road twice says
+where it turns back (`turns_back`), in the words the build would refuse it
+with, so the page can stop it before anyone submits. Every exception here carries a message
 that is safe to show the person using the map.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Protocol, TypedDict
+from typing import NotRequired, Protocol, TypedDict
 
 import httpx
 import numpy as np
@@ -26,6 +28,7 @@ import numpy as np
 from mapcreator import config
 from mapcreator.core.centreline import cumulative
 from mapcreator.job import Waypoint
+from mapcreator.pipeline import route_stage
 from mapcreator.providers.osm import graph as osm_graph
 from mapcreator.providers.osm import overpass
 from mapcreator.providers.osm import roads as osm_roads
@@ -47,9 +50,18 @@ class RouterUnavailable(RoutingError):
     pass
 
 
+class TurnBack(TypedDict):
+    lon: float  # where the route first goes back over its own road
+    lat: float
+    along_m: float
+    retraced_m: float  # road driven twice (0 for a reversal on the spot)
+    message: str  # the build's own words (`route_stage.RouteTurnsBack`)
+
+
 class RoutePreview(TypedDict):
     coordinates: list[list[float]]  # [[lon, lat], ...]
     length_m: float
+    turns_back: NotRequired[TurnBack]  # only when the route drives road twice, which no build accepts
 
 
 class Router(Protocol):
@@ -76,9 +88,18 @@ def check_region(waypoints: Sequence[Waypoint]) -> Region:
         raise OutOfArea("All points must be in the same region.") from None
 
 
-def _preview(lon: Sequence[float], lat: Sequence[float], length_m: float) -> RoutePreview:
-    return {"coordinates": [[round(float(a), 6), round(float(b), 6)] for a, b in zip(lon, lat)],
-            "length_m": round(float(length_m), 1)}
+def _preview(lon: Sequence[float], lat: Sequence[float], length_m: float, xy: np.ndarray) -> RoutePreview:
+    """The preview for the page; `xy` is the same line in the region's metres, to measure any road driven twice."""
+    out: RoutePreview = {"coordinates": [[round(float(a), 6), round(float(b), 6)] for a, b in zip(lon, lat)],
+                         "length_m": round(float(length_m), 1)}
+    found = route_stage.turn_back(xy)
+    if found is not None:
+        back, retraced_m = found
+        along_m = float(cumulative(xy)[back])
+        out["turns_back"] = {"lon": round(float(lon[back]), 6), "lat": round(float(lat[back]), 6),
+                             "along_m": round(along_m, 1), "retraced_m": round(retraced_m, 1),
+                             "message": route_stage.turns_back_message(retraced_m, along_m)}
+    return out
 
 
 class DevRouter:
@@ -115,7 +136,7 @@ class DevRouter:
         except osm_graph.RouteError as e:
             raise NoRoute(_sentence(str(e))) from e
         lon, lat = region.to_lonlat().transform(route.xy[:, 0], route.xy[:, 1])
-        return _preview(lon, lat, cumulative(route.xy)[-1])
+        return _preview(lon, lat, cumulative(route.xy)[-1], route.xy)
 
 
 # GraphHopper names the reason for a 400 in hints[].details (Java exception class names).
@@ -136,7 +157,7 @@ class GraphHopperRouter:
         self._profile = profile
 
     def preview(self, waypoints: Sequence[Waypoint]) -> RoutePreview:
-        check_region(waypoints)
+        region = check_region(waypoints)
         body = {
             "points": [[w.lon, w.lat] for w in waypoints],  # GraphHopper's POST body takes [lon, lat]
             "profile": self._profile,
@@ -149,13 +170,13 @@ class GraphHopperRouter:
         except httpx.HTTPError as e:
             raise RouterUnavailable("The route preview service didn't answer. Try again in a minute.") from e
         if r.status_code == 200:
-            return self._parse(r)
+            return self._parse(r, region)
         if 400 <= r.status_code < 500:
             raise self._error(r)
         raise RouterUnavailable("The route preview service is having trouble. Try again in a minute.")
 
     @staticmethod
-    def _parse(r: httpx.Response) -> RoutePreview:
+    def _parse(r: httpx.Response, region: Region) -> RoutePreview:
         try:
             path = r.json()["paths"][0]
             coords = path["points"]["coordinates"]
@@ -166,7 +187,8 @@ class GraphHopperRouter:
             raise RouterUnavailable("The route preview service sent an answer we couldn't read.") from e
         if len(lon) < 2:
             raise NoRoute("No drivable route connects these points.")
-        return _preview(lon, lat, length)
+        x, y = region.to_xy().transform(lon, lat)
+        return _preview(lon, lat, length, np.column_stack([x, y]))
 
     @staticmethod
     def _error(r: httpx.Response) -> RoutingError:

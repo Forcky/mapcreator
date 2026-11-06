@@ -48,7 +48,7 @@ Operator flows, outside any job: downloading the OSM extract and building the in
 
 ## A job, end to end
 
-1. **Pick a road.** The page sends the points to `POST /api/route-preview` (limit: `MAPCREATOR_PREVIEWS_PER_IP_PER_MINUTE`, default 30). The router returns the route and its length; the page refuses to submit routes over the job's length limit (64 km: Targa Tasmania's longest stage, Mt Arrowsmith at 53 km, plus a fifth).
+1. **Pick a road.** The page sends the points to `POST /api/route-preview` (limit: `MAPCREATOR_PREVIEWS_PER_IP_PER_MINUTE`, default 30). The router returns the route and its length; the page refuses to submit routes over the job's length limit (64 km: Targa Tasmania's longest stage, Mt Arrowsmith at 53 km, plus a fifth), and routes that go back the way they came (`turns_back`: road driven twice, or a single node turning more than 150 degrees). It marks where the route turns back and gives the build's own message, which the route stage raises as a user-facing `RouteTurnsBack` for any job that reaches it.
 2. **Submit.** `POST /api/jobs` with the job (waypoints, width option, layouts, track name) and a Turnstile token. The web app, in order:
    - verifies the Turnstile token (when configured);
    - checks every point is in one supported region;
