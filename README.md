@@ -2,14 +2,29 @@
 
 Generate drivable [Assetto Corsa](https://www.assettocorsa.it/) tracks from real roads, using only open data that may legally be redistributed.
 
-**Status:** the pipeline builds installable tracks, and they've been driven in game end to end (milestone M3: Grasstree Hill both ways, the Esperance coast road and the Lyell Highway).
+**Status:** an early-stage personal project, maintained in spare time. The pipeline builds installable tracks, and they've been driven in game end to end, with AI opponents (Grasstree Hill both ways, the Esperance coast road and the Lyell Highway among them). Expect rough edges, and changes without notice.
 
 **Requirements:** the tracks need Assetto Corsa on PC with [Custom Shaders Patch](https://acstuff.club/patch/) (CSP), which draws their trees and water. They aren't built to work without it (#28). Tested with CSP 0.2.11.
 
-- **Coverage:** Tasmania has detailed data (2 m LiDAR elevation, canopy and building footprints). The rest of Australia uses a national fallback (30 m elevation, ESA WorldCover trees, and OSM building footprints when a local OSM index is set up).
-- **Hosted service:** a skeleton (map page, job queue, build worker) is in `src/mapcreator/service/`.
+- **Coverage:** Tasmania has detailed data (2 m LiDAR elevation, canopy heights, vegetation types, building footprints and transmission lines). The rest of Australia uses national data: Geoscience Australia's 5 m LiDAR elevation where it covers the road (Victoria's 10 m model, then 30 m, where it doesn't), ESA WorldCover trees checked against Meta and WRI's canopy map, and OSM buildings and power lines when a local OSM index is set up.
+- **Hosted service:** running. The map page, job queue and build worker are in `src/mapcreator/service/`; [docs/deploy.md](docs/deploy.md) says how to run your own.
 
-Developers picking this up on a machine with Assetto Corsa: start with `docs/dev-handover.md`.
+Want to help? See [CONTRIBUTING.md](CONTRIBUTING.md). Developing on a machine with Assetto Corsa: start with [docs/dev-handover.md](docs/dev-handover.md).
+
+## Quick start: build a track on the command line
+
+You need Python 3.12. No GPU, game or account is needed to build.
+
+```sh
+python -m venv .venv
+. .venv/bin/activate                     # Windows: .venv\Scripts\activate
+pip install -e .
+mapcreator build examples/grasstree_hill.json
+```
+
+This builds Grasstree Hill Road in Tasmania (12.8 km, both directions). The first build downloads the road from the public Overpass server and the elevation and scenery data around it; later builds reuse the downloads in `cache/`. The track is written to `out/grasstree_hill/05_track/`: a `grasstree_hill/` folder and `grasstree_hill.zip`. Install it by unzipping it into `assettocorsa/content/tracks`, or by dragging the zip onto Content Manager.
+
+To build another road, copy a job from `examples/` and change its `track_id` and `waypoints` (longitude and latitude, in driving order). `mapcreator <stage> job.json` reruns one stage (`route`, `profile`, `section`, `mesh`, `scenery`, `track`, `validate`). For more than light use, read OSM from a local index rather than public Overpass (below).
 
 ## How it works
 

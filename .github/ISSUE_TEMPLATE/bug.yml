@@ -1,0 +1,47 @@
+name: Bug in a track or the site
+description: A track that won't install, load or drive right, or something wrong on the map page or in a build.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. For a security problem, don't open an issue: see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Screenshots help.
+    validations:
+      required: true
+  - type: input
+    id: track
+    attributes:
+      label: Track
+      description: >-
+        The track's id (its folder name under assettocorsa/content/tracks) and the layout. If you built it with the
+        CLI, attach the job.json too. Leave it empty if it isn't about a track.
+      placeholder: grasstree_hill, forward
+  - type: dropdown
+    id: built
+    attributes:
+      label: Where it was built
+      options:
+        - The hosted site
+        - The command line (mapcreator build)
+        - Not a track problem
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: CSP and Content Manager versions
+      description: Custom Shaders Patch and Content Manager versions, from Content Manager's About and Settings pages.
+      placeholder: CSP 0.2.11, Content Manager 0.8.2xxx
+  - type: textarea
+    id: log
+    attributes:
+      label: AC log
+      description: >-
+        After quitting the game, attach Documents/Assetto Corsa/logs/log.txt, or paste the lines around the error.
+        custom_shaders_patch.log in the same folder helps too.
+      render: text

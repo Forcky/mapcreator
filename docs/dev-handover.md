@@ -1,8 +1,8 @@
-# Developer handover: first drive on a machine with Assetto Corsa
+# Developer handover: working on a machine with Assetto Corsa
 
-Read this when picking up development on a Windows machine with Assetto Corsa, Content Manager and Custom Shaders Patch installed.
+Read this when developing on a Windows machine with Assetto Corsa, Content Manager and Custom Shaders Patch installed. Building and testing need none of them (see `CONTRIBUTING.md`); this is about checking tracks in game.
 
-Everything that can be built and checked without the game is done. The next milestone (M3) is the first in-game load and drive. The private deployment repo has the full plan, the research notes and the progress log. Record findings there, not here.
+Tracks have been loaded and driven in game since milestone M3, and raced by AI opponents since M4. `docs/known-issues.md` lists what has been answered in game and what is still to check. Record new in-game findings in the issue or pull request they belong to, and move lasting answers into `docs/known-issues.md`.
 
 ## Where things stand
 
@@ -13,19 +13,11 @@ Everything that can be built and checked without the game is done. The next mile
 | section | `mapcreator section job.json` | Width from OSM tags, camber from the DEM | Done |
 | mesh | `mapcreator mesh job.json` | Road, verges, skirts, terrain; `04_mesh/preview.obj` with `MAPCREATOR_PREVIEW_OBJ=1` (or `preview_obj = true` in `config.local.toml`) | Done |
 | scenery | `mapcreator scenery job.json` | Trees (canopy model or WorldCover; typed by TASVEG in Tasmania) and buildings (LIST in Tasmania; OSM elsewhere, with an OSM index); solid house walls and trunk colliders near the road | Done |
-| track | `mapcreator track job.json` | KN5s, AI lines, layouts, data and UI files, zip | Done, **never loaded in game** |
-| validate | `mapcreator validate job.json` | 73 static checks | Done |
-| `harness/` | `python harness/ac_harness.py …` | CM showroom, install and launch; log, results and shared-memory checks | Written, **untested** |
+| track | `mapcreator track job.json` | KN5s, AI lines, layouts, data and UI files, zip | Done; driven in game since M3 |
+| validate | `mapcreator validate job.json` | Static checks on the finished track folder | Done |
+| `harness/` | `python harness/ac_harness.py …` | CM showroom, install and launch; log, results and shared-memory checks; the CSP probe app | In use since M3 |
 
 `mapcreator build job.json` runs every stage. The reference job is `examples/grasstree_hill.json`: Grasstree Hill Road (C324), Tasmania, 12.8 km, two layouts.
-
-Changes since the code was last run by hand that M3 should look out for (all checked by tests, none yet in game):
-
-- OSM and map coordinates now get the GDA2020-to-GDA94 datum shift, so the road sits about 1.5 m from where it did, onto the DEM and theLIST buildings.
-- Verge skirts stop halfway to a parallel leg of the road on switchbacks.
-- Gable-end walls of houses face outward; before, they were see-through from outside.
-- Roads under 5 m wide now pass validation; the timing gates still sit 0.5 m past each edge.
-- A build has an hour's time limit in the hosted worker, and the CLI is unchanged.
 
 ## Set up
 
@@ -39,10 +31,9 @@ py -3 -m venv .venv
 
 Then:
 
-1. Copy the private marker list from the deployment repo to `.private-markers` in this folder. It's gitignored, and the privacy test uses it.
-2. Create `config.local.toml` from `config.local.toml.example`. Set `ac_root` (the folder that contains `acs.exe`) and `cm_path` (`Content Manager.exe`).
-3. Run `.venv\Scripts\python -m pytest -q`. Every test should pass.
-4. Run `.venv\Scripts\mapcreator build examples\grasstree_hill.json`. The first run downloads OSM data from Overpass (about 45 s; nothing with an OSM index, below) and DEM tiles (about 30 MB). Later runs take about 30 s.
+1. Create `config.local.toml` from `config.local.toml.example`. Set `ac_root` (the folder that contains `acs.exe`) and `cm_path` (`Content Manager.exe`).
+2. Run `.venv\Scripts\python -m pytest -q`. Every test should pass. (Maintainers also keep a private list of deployment-specific words in a gitignored `.private-markers` file, which the privacy test reads when it's there. You don't need one.)
+3. Run `.venv\Scripts\mapcreator build examples\grasstree_hill.json`. The first run downloads OSM data from Overpass (about 45 s; nothing with an OSM index, below) and DEM tiles (about 30 MB). Later runs take about 30 s.
 
 The output is `out\grasstree_hill\05_track\grasstree_hill\` and `grasstree_hill.zip`.
 
@@ -65,7 +56,7 @@ Then set `osm_index` in `config.local.toml` (or `MAPCREATOR_OSM_INDEX`) to the i
 - **Not yet measured:** build time, peak memory and index size for the full Australia extract. On synthetic data the builder handles about 13,000 ways a second on a laptop, so expect it to take tens of minutes.
 - **Windows:** a Python process that had called `osmium.apply()` could take many minutes to exit, or not exit at all. The builder and the tests don't use it; don't use it in scripts either.
 
-## First drive (M3)
+## Driving a track in game
 
 Follow `harness/README.md`. It goes through Content Manager, which is what players use. In short:
 
@@ -74,7 +65,7 @@ Follow `harness/README.md`. It goes through Content Manager, which is what playe
 3. `launch`: start practice through `acmanager://race/config`, then press Drive.
 4. While driving, `probe`: all four wheels should be loaded at the spawn.
 5. Afterwards, `results` and `check-log`.
-6. Repeat for the reverse layout, then add an AI car (M4).
+6. Repeat for the reverse layout, then race AI opponents (`harness/README.md`).
 
 If the track won't load:
 
@@ -94,7 +85,7 @@ Trees are 3D models drawn by Custom Shaders Patch (Tree FX, CSP 0.1.79+); withou
 
 ## What Content Manager and CSP expect, and what we already do
 
-Taken from reading CM's source and CSP's docs (Nov 2026). None of it has been tried in game yet.
+Taken from reading CM's source and CSP's docs (Nov 2026). What has since been confirmed in game is in `docs/known-issues.md`.
 
 - **Zip:** `<track_id>/` at the zip root.
 - **Layouts:** each layout needs both `models_<layout>.ini` and `ui/<layout>/ui_track.json`, or CM silently drops it. There's no root `ui/ui_track.json`. The forward layout carries `"priority": 1`, so it's the default.
@@ -117,7 +108,7 @@ Taken from reading CM's source and CSP's docs (Nov 2026). None of it has been tr
 
 ## Questions only the game can answer
 
-These are written down as defaults in the code. Change them in one place if the game disagrees.
+These are written down as defaults in the code. Change them in one place if the game disagrees. Several have been answered in game since this table was written; `docs/known-issues.md` has the answers.
 
 | Question | Default | Where |
 |---|---|---|
@@ -142,10 +133,6 @@ These are written down as defaults in the code. Change them in one place if the 
 - **No Google, Esri, Bing or Mapbox content.** See `docs/data-sources.md`.
 - **One commit per reviewable step.** Run the tests before each commit.
 
-## After M3 and M4
+## Where to go next
 
-- **M5 scenery:** trees and buildings from open data, plus CC0 textures.
-- **M6 build worker:** a hardened container.
-- **M7 web front end and queue.**
-
-`docs/architecture.md` has the shape. Work on these may already be on other branches; check `git branch -a`.
+`docs/architecture.md` has the shape of the pipeline and the hosted service, and `docs/known-issues.md` lists what's open. Before starting something big, check the open issues and pull requests.

@@ -41,7 +41,7 @@ If the track doesn't load at all:
 
 ## What to record
 
-Write these into the private deployment notes:
+Record these in the issue or pull request for the change you're testing:
 
 - the spawn facing (+Z or −Z) and height
 - whether the A→B timing shows in `race_out.json`

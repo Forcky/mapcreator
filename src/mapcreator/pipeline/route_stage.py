@@ -18,6 +18,10 @@ from mapcreator.providers.osm import roads as osm_roads
 from mapcreator.regions import job_region
 
 STAGE = "01_route"
+# How the roads were selected from OpenStreetMap (`osm_roads.selection`), for the track's ATTRIBUTION.txt.
+OSM_SELECTION = "osm_selection.json"
+
+
 class RouteTooLong(osm_graph.RouteError):
     """A user-facing error: the route between the waypoints is longer than the job allows."""
 
@@ -123,8 +127,17 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         epsg=region.epsg,
     )
     work.write_json(STAGE, "runs.json", route_runs)
+    work.write_json(STAGE, OSM_SELECTION, osm_roads.selection(settings))
     return {"length_m": round(length, 1), "retraced_m": round(route.retraced_m, 1), "ways": len(route_runs),
             "region": region.key, "sharp_turns": sharp}
+
+
+def osm_selection(work: WorkDir, settings: Settings) -> dict[str, str]:
+    """How this route's roads were selected from OpenStreetMap, as `run` recorded it. A work folder routed before
+    that was recorded gets the answer for the current settings."""
+    if (work.root / STAGE / OSM_SELECTION).exists():
+        return work.read_json(STAGE, OSM_SELECTION)
+    return osm_roads.selection(settings)
 
 
 SHARP_TURN_DEG = 100.0

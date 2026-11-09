@@ -293,6 +293,10 @@ def test_route_stage_reads_the_index_when_configured(osm_index, tmp_path, monkey
     runs = json.loads((tmp_path / "work" / route_stage.STAGE / "runs.json").read_text(encoding="utf-8"))
     assert runs[0]["way_id"] == 10 and runs[0]["tags"]["name"] == "Main Road"
     assert not (tmp_path / "cache" / "osm").exists()  # index answers aren't cached
+    # For ATTRIBUTION.txt: the extract the index was built from (XML records no OSM timestamp).
+    work, recorded = WorkDir(tmp_path / "work"), {"index": "fixture.osm", "osm_timestamp": ""}
+    assert work.read_json(route_stage.STAGE, route_stage.OSM_SELECTION) == recorded
+    assert route_stage.osm_selection(work, _settings(tmp_path)) == recorded  # what was recorded, not the settings
 
 
 def test_route_stage_asks_overpass_without_an_index(osm_index, tmp_path, monkeypatch):
@@ -308,6 +312,11 @@ def test_route_stage_asks_overpass_without_an_index(osm_index, tmp_path, monkeyp
     assert result["ways"] == 1
     # Overpass takes south, west, north, east.
     assert len(queries) == 1 and "(-42.820000,147.280500,-42.780000,147.329500)" in queries[0]
+    work = WorkDir(tmp_path / "work")
+    assert route_stage.osm_selection(work, _settings(tmp_path)) == {"overpass_filter": overpass.ROADS_FILTER}
+    # A work folder routed before the selection was recorded gets the current settings' answer.
+    (tmp_path / "work" / route_stage.STAGE / route_stage.OSM_SELECTION).unlink()
+    assert route_stage.osm_selection(work, _settings(tmp_path, osm_index))["index"] == "fixture.osm"
 
 
 def test_dev_router_reads_the_index_when_configured(osm_index, tmp_path):

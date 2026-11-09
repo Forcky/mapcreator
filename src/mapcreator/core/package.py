@@ -13,7 +13,7 @@ MAP_MARGIN = 20
 MAP_MAX = 1600
 CRLF = "\r\n"
 
-# ROAD/GRASS values follow the Kunos-style set used by open-source generators.
+# ROAD/GRASS values are the ones johnzara/ac-track-studio writes (MIT; see THIRD_PARTY_NOTICES.md).
 # There is deliberately no WALL entry: defining one is reported to make walls driveable.
 SURFACES = [
     {"KEY": "ROAD", "FRICTION": "0.98", "DAMPING": "0", "WAV": "", "WAV_PITCH": "0", "FF_EFFECT": "NULL",
