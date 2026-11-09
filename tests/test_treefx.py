@@ -305,5 +305,5 @@ def test_tea_tree_is_dimmer_than_the_rest_at_night():
         ini = treefx.tree_ini(7.0, 2.0, ["lod0.mesh"], model)
         return next(ln.split("=")[1] for ln in ini.splitlines() if ln.startswith("BRIGHTNESS"))
 
-    assert brightness("tea_tree") == "0.4"
-    assert brightness("euc_wet") == brightness("myrtle") == brightness("") == treefx.SHADING["BRIGHTNESS"] == "0.6"
+    assert brightness("tea_tree") == brightness("euc_wet") == "0.4"
+    assert brightness("myrtle") == brightness("pine") == brightness("") == treefx.SHADING["BRIGHTNESS"] == "0.6"

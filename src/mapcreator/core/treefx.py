@@ -528,8 +528,10 @@ def trunk_radius(model: TreeModel) -> float:
 # (Lyell, tea-tree) and 1.43% to 0.20% (Dalgarth, pine). Was 0.6, 1.0, 0.6, 1.0.
 SHADING = {"SPECULAR": "0.2", "SUBSCATTERING": "0.3", "REFLECTIVITY": "0.2", "BRIGHTNESS": "0.6", "USE_AO_CHANNEL": "0"}
 # Per model, on top of SHADING. Tea-tree was still a white wall at 0.6 (1.90% in the beam on the Lyell): its low,
-# pale, fine crowns stand 3-10 m from the road, right in the beam, and fill it.
-MODEL_SHADING = {"tea_tree": {"BRIGHTNESS": "0.4"}}
+# pale, fine crowns stand 3-10 m from the road, right in the beam, and fill it. At 0.4 it fell to 0.88% and still
+# read right by day. euc_wet's grey bark (lighter by day than the stringybark brown) glared at 0.6: 0.22% to 0.79%
+# on the Huon, 1.76% to 3.13% on Lady Wakehurst (mapcreator#62, the gaming PC's test).
+MODEL_SHADING = {"tea_tree": {"BRIGHTNESS": "0.4"}, "euc_wet": {"BRIGHTNESS": "0.4"}}
 
 
 def tree_ini(height: float, half_w: float, mesh_names: list[str], model: str = "") -> str:
