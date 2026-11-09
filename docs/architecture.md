@@ -12,7 +12,8 @@ profile   02_profile   DEM sampling, smoothing with a grade-change limit and gra
 section   03_section   sealed or unsealed (OSM surface, short runs merged), width (OSM width → lanes × lane width →
                        narrow → class default, narrower on gravel; +15% / +30%), camber from the DEM (limited by
                        width), crown
-mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, adaptive terrain corridor, guard rails, AC dummies
+mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, adaptive terrain corridor (in ground classes from
+                       TASVEG in Tasmania, for Grass FX), guard rails, AC dummies
 scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), typed by TASVEG in Tasmania, trunk colliders, buildings from footprints
 track     05_track     numpy KN5 writer, DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,
                        centreline.geojson (ODbL), the zip
@@ -40,7 +41,8 @@ Geofabrik extract (.osm.pbf) ──build once (pyosmium)──▶ index (SQLite)
 ```
 src/mapcreator/
   core/        centreline, profile, section, mesh, scene, scenery, sprites, textures, roadside, kn5, ai_line,
-               layout, package, validate (data-agnostic: arrays and geometry in, meshes and files out)
+               layout, package, validate, grass and grassfx (data-agnostic: arrays and geometry in, meshes and
+               files out)
   providers/   one package per source; each declares its licence and attribution
                base, raster (windowed reads and tile cache)
                tas_list/: 2 m DEM, canopy height model, building footprints (Tasmania)
