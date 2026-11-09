@@ -4,7 +4,7 @@ Tree FX (CSP 0.1.79 and later) draws instanced 3D trees with LODs and distant bi
 file under the track's `extension/` folder. These are a track's only trees: the KN5 has none, so vanilla AC
 (without CSP) shows none.
 
-The models are generated here (dry and wet-forest eucalypts, a wattle, a tea-tree, a myrtle and a pine), so
+The models are generated here (dry and wet-forest eucalypts, wattle, tea-tree, myrtle, and pines grown and young), so
 there's no licensing question. They share one bark atlas and one leaf atlas (`sprites`), so every model's
 textures are the same bytes. CSP ships no tree models of its own. Which model draws a tree comes from its height, and where there's
 a vegetation map from its family too (`FAMILY_BANDS`, `core.species`). A model only a handful of a track's trees
@@ -208,15 +208,23 @@ KINDS = {
     "euc_young": Kind(12.0, 0.25, (5, 8), (15, 32), 0.32, 0.18, (0, 1, 2), 1.8, 4, 2),
     "wattle": Kind(7.5, 0.15, (5, 8), (38, 66), 0.5, 0.14, (sprites.WATTLE_CELL,), 1.6, 6, 3),
     # New kinds go last: `library` seeds each by its place, so the earlier models keep their shapes.
-    # Tall wet-forest eucalypt (E. obliqua, E. regnans): a long clean bole, rough at the base from the road,
-    # and a small crown high up.
-    "euc_wet": Kind(50.0, 0.62, (4, 7), (20, 42), 0.2, 0.75, (0, 1, 2), 3.0, 5, 3, sprites.ROUGH_BARK),
+    # Tall wet-forest eucalypt (E. obliqua, E. regnans): a long clean bole and a small crown high up. Grey bark,
+    # not the stringybarks' rough brown: under Tree FX's dimmed shading those trunks read near-black, a
+    # plantation's even dark poles (mapcreator#45, the gaming PC's look).
+    "euc_wet": Kind(50.0, 0.62, (4, 7), (20, 42), 0.2, 0.75, (0, 1, 2), 3.0, 5, 3, sprites.GREY_BARK),
     # Tea-tree and paperbark: stems from low down, steep and many, with fine foliage.
     "tea_tree": Kind(7.0, 0.1, (6, 9), (10, 32), 0.6, 0.1, (sprites.TEA_TREE_CELL,), 1.2, 6, 2, sprites.GREY_BARK),
-    # Rainforest myrtle (Nothofagus cunninghamii): a dense, dark, domed crown on spreading limbs.
-    "myrtle": Kind(25.0, 0.3, (6, 9), (35, 62), 0.42, 0.45, sprites.MYRTLE_CELLS, 2.0, 5, 3, sprites.GREY_BARK),
+    # Rainforest myrtle (Nothofagus cunninghamii): a dense, dark, domed crown from low down. Limbs start at a
+    # fifth of the height and spread wider, and the leaf cards are 3.2 m, not 2.0: the first version (limbs from
+    # 30%, 2 m cards) read as open eucalypt woodland in game, in Tasmania and in NSW's rainforest alike. Bigger
+    # cards rather than more of them keep its triangles where they were (2,032 at LOD 0).
+    "myrtle": Kind(25.0, 0.2, (7, 9), (40, 70), 0.42, 0.45, sprites.MYRTLE_CELLS, 3.2, 5, 3, sprites.GREY_BARK),
     # Radiata pine: a straight leader and whorls of level branches, conical; plantation rows come from the data.
     "pine": Kind(30.0, 0.28, (7, 9), (78, 98), 0.3, 0.4, sprites.PINE_CELLS, 2.2, 4, 0, sprites.PINE_BARK, True),
+    # A young pine, for the 3-12 m trees of a young plantation: drawn as the grown pine they sat at Tree FX's
+    # 0.3 size floor, so 54% of Dalgarth's pines stood 9 m tall whatever their height.
+    "pine_young": Kind(10.0, 0.15, (6, 8), (75, 95), 0.34, 0.14, sprites.PINE_CELLS, 1.6, 4, 0, sprites.PINE_BARK,
+                       True),
 }
 # Texture variants: another model's geometry (and seed) with other bark. Rough-barked dry eucalypts (stringybark,
 # peppermint) look like the smooth gums in outline, so they reuse them.
@@ -241,24 +249,29 @@ _ROUGH = ((9.0, {"euc_young": 0.7, "wattle": 0.3}), (15.0, {"euc_young": 0.5, "e
 # tea-tree, a blackwood among wattles), and drawing it as the small model would hit Tree FX's 3x scale.
 _ACACIA = ((18.0, {"wattle": 1.0}), (np.inf, {"myrtle": 1.0}))
 _SHRUB = ((16.0, {"tea_tree": 1.0}), (np.inf, {"euc_tall_rough": 1.0}))
-_MYRTLE = ((np.inf, {"myrtle": 1.0}),)
-_PINE = ((np.inf, {"pine": 1.0}),)
+# Every family has a band for short trees and one for tall ones, so no tree is drawn by a model it would sit at
+# the 0.3 or 3x size clip of. The rainforest's understorey (under 10 m) is a small dense crown, and a crown over
+# 40 m in rainforest or blackwood is an emergent wet-forest eucalypt (myrtle reached 59 m on the Lyell).
+_MYRTLE = ((10.0, {"wattle": 1.0}), (40.0, {"myrtle": 1.0}), (np.inf, {"euc_wet": 1.0}))
+_PINE = ((12.0, {"pine_young": 1.0}), (np.inf, {"pine": 1.0}))
 FAMILY_BANDS = {
     "dry_smooth": _DRY,
     "dry_rough": _ROUGH,
-    "snow_gum": ((np.inf, {"euc_spread": 0.8, "euc_young": 0.2}),),
-    "wet": ((12.0, {"euc_young": 1.0}), (28.0, {"euc_tall_rough": 0.6, "euc_wet": 0.4}), (np.inf, {"euc_wet": 1.0})),
+    "snow_gum": ((9.0, {"euc_young": 1.0}), (np.inf, {"euc_spread": 0.8, "euc_young": 0.2})),
+    "wet": ((12.0, {"euc_young": 1.0}), (15.0, {"euc_tall_rough": 1.0}),
+            (28.0, {"euc_tall_rough": 0.6, "euc_wet": 0.4}), (np.inf, {"euc_wet": 1.0})),
     "rainforest": _MYRTLE,
     "conifer": _PINE,
     "tea_tree": _SHRUB,
     "wattle": _ACACIA,
-    "blackwood": ((12.0, {"wattle": 1.0}), (np.inf, {"myrtle": 1.0})),  # a dense, dark crown when grown
+    # A dense, dark crown when grown.
+    "blackwood": ((12.0, {"wattle": 1.0}), (35.0, {"myrtle": 1.0}), (np.inf, {"euc_wet": 1.0})),
     "she_oak": _ACACIA,
     "banksia": _SHRUB,
     "regrowth": ((9.0, {"wattle": 0.5, "euc_young": 0.5}), (np.inf, {"euc_young": 0.7, "euc_spread": 0.3})),
     "pine": _PINE,
     "plantation_euc": ((25.0, {"euc_young": 1.0}), (np.inf, {"euc_tall": 1.0})),
-    "willow": ((np.inf, {"euc_spread": 1.0}),),
+    "willow": ((9.0, {"euc_young": 1.0}), (np.inf, {"euc_spread": 1.0})),
     "mallee": ((np.inf, {"euc_young": 1.0}),),  # a low eucalypt until mallee has its own multi-stemmed model
 }
 SIZE_CLIP = (0.3, 3.0)  # a tree's scale against its model's own height (trees.txt `size`)
@@ -277,6 +290,7 @@ FOLD_INTO = {
     "wattle": ("tea_tree", "euc_young", "myrtle"),
     "tea_tree": ("wattle", "euc_young"),
     "myrtle": ("euc_spread", "euc_spread_rough", "wattle"),
+    "pine_young": ("pine",),  # only where the clip allows: a handful of 10-12 m pines among grown ones
 }
 
 
@@ -509,7 +523,16 @@ def trunk_radius(model: TreeModel) -> float:
     return (_base_width(model.lods[0], height, half_w) or 0.0) * half_w
 
 
-def tree_ini(height: float, half_w: float, mesh_names: list[str]) -> str:
+# Under headlights at night the trees blew out white (mapcreator#45, the gaming PC's test). Only BRIGHTNESS moved
+# it; with the rest lowered too, white pixels in the beam fell from 1.34% to 0.55% (Huon, euc_wet), 3.21% to 2.04%
+# (Lyell, tea-tree) and 1.43% to 0.20% (Dalgarth, pine). Was 0.6, 1.0, 0.6, 1.0.
+SHADING = {"SPECULAR": "0.2", "SUBSCATTERING": "0.3", "REFLECTIVITY": "0.2", "BRIGHTNESS": "0.6", "USE_AO_CHANNEL": "0"}
+# Per model, on top of SHADING. Tea-tree was still a white wall at 0.6 (1.90% in the beam on the Lyell): its low,
+# pale, fine crowns stand 3-10 m from the road, right in the beam, and fill it.
+MODEL_SHADING = {"tea_tree": {"BRIGHTNESS": "0.4"}}
+
+
+def tree_ini(height: float, half_w: float, mesh_names: list[str], model: str = "") -> str:
     """The model's settings. LOD distances follow Content Manager's converter: the LODs share ten model heights,
     or `LOD_REACH_M` if that's less (LOD 0 ends 28-90 m out, the last 84-270 m). Past the last, Tree FX draws the
     tree as a baked billboard
@@ -518,11 +541,7 @@ def tree_ini(height: float, half_w: float, mesh_names: list[str]) -> str:
     sections = [
         ("BASIC", {"HEIGHT": f"{height:.3f}", "WIDTH": f"{2 * half_w:.3f}", "CACHE_RESOLUTION": "256,512",
                    "VERTICAL_OFFSET": "0"}),
-        # Under headlights at night the trees blew out white (mapcreator#45, the gaming PC's test). Only BRIGHTNESS
-        # moved it; with the rest lowered too, white pixels in the beam fell from 1.34% to 0.55% (Huon, euc_wet),
-        # 3.21% to 2.04% (Lyell, tea-tree) and 1.43% to 0.20% (Dalgarth, pine). Was 0.6, 1.0, 0.6, 1.0.
-        ("SHADING", {"SPECULAR": "0.2", "SUBSCATTERING": "0.3", "REFLECTIVITY": "0.2", "BRIGHTNESS": "0.6",
-                     "USE_AO_CHANNEL": "0"}),
+        ("SHADING", SHADING | MODEL_SHADING.get(model, {})),
         ("NORMALS", {"BOOST": "0.9", "SPHERE": "1.0"}),
         ("LEAVES", {"MULT": "20.0", "OFFSET": "0.0"}),
         ("FAKE_SHADOW", {"SIZE": "1.0", "OPACITY": "1.0"}),
@@ -550,7 +569,7 @@ def model_bin(model: TreeModel, tex: dict[str, bytes]) -> bytes:
         def put(name, data):
             z.writestr(zipfile.ZipInfo(name, ZIP_DATE), data, compress_type=zipfile.ZIP_DEFLATED)
 
-        put("tree.ini", tree_ini(height, half_w, meshes).encode("utf-8"))
+        put("tree.ini", tree_ini(height, half_w, meshes, model.name).encode("utf-8"))
         for mesh, lod in zip(meshes, model.lods):
             put(mesh, mesh_file(lod, names, hashes, height, half_w))
         for n in names:
