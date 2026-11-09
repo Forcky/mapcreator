@@ -109,7 +109,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, ground, frame)
     else:
         meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, ground, frame, ground=gmap.materials,
-                                      letters=grass.LETTERS, fold_skirt=True)
+                                      classes=grass.MESHES, fold_skirt=True)
     meshes += water_core.meshes(water, frame)
     rails, rail_stats = [], {"skipped": "DEM too coarse to place rails"}
     fine = c["fine"] if "fine" in c else np.full(len(c["s"]), getattr(dem, "resolution_m", 2.0) <= FINE_DEM_M)

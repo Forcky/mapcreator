@@ -39,6 +39,17 @@ LATTICE_BLOCK_M = 512.0  # the lattice is made in blocks this size, skipping tho
 FOLD_FRACTION = 0.8  # skirt may reach at most this share of the local radius on the inside of a bend
 # Road distance over straight distance above which a nearby centreline point is another part of the route.
 OTHER_PART_RATIO = 1.4
+# Terrain in ground classes (`terrain_meshes(ground=...)`): a class's mesh gathers its triangles from consecutive
+# 400 m chunks until it holds about CLASS_MESH_TRIANGLES, or spans CLASS_MESH_CHUNKS chunks (3.2 km) with at least a
+# quarter of that. So the track has about as many terrain meshes as without classes, not a mesh per class per chunk
+# (33 -> 167 on Grasstree Hill, and draw calls with them), and a class found in a few small patches is one mesh.
+CLASS_MESH_TRIANGLES = 24_000
+CLASS_MESH_CHUNKS = 8
+# Classed terrain's texture coordinates can be warped by up to about UV_WARP_M, in long, smooth waves of world
+# position (`warped_uv`), so a texture's repeat doesn't line up into rows across open ground. Its wavelengths are long
+# beside the lattice, and since it's a function of position alone, neighbouring meshes still meet without a seam.
+UV_WARP_M = 4.0
+UV_WARP_WAVES_M = (71.0, 113.0, 83.0, 127.0)
 
 
 @dataclass
@@ -340,16 +351,18 @@ def _skirt_triangles(rb: Ribbon, first: int) -> tuple[np.ndarray, np.ndarray, np
 
 
 def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame, *,
-                   uv_m: float = 8.0, ground=None, letters: dict[str, str] | None = None,
+                   uv_m: float = 8.0, ground=None, classes: dict[str, tuple[str, float, bool]] | None = None,
                    fold_skirt: bool = False) -> list[Mesh]:
     """Terrain from the skirt's outer edge out to `corridor_m`, chunked under the vertex limit.
 
     - `fold_skirt` adds the skirt (verge edge outwards) to the terrain, for verge meshes made without it
       (`ribbon_meshes(skirt=False)`). Its outer edge is the terrain's own boundary, so they share those points.
     - `ground`, if given, picks each triangle's material: called with the triangles' centres (n, 2, easting and
-      northing) and their distance from the centreline, it returns a material name for each. Each chunk is then a
-      mesh per material, named with the material's letter from `letters` (`1GRASS_T012P`). Without it every
-      triangle is `terrain`, in meshes named `1GRASS_T###` as before.
+      northing) and their distance from the centreline, it returns a material name for each. `classes` gives each
+      material's mesh-name letter, its texture's repeat in metres, and whether its texture coordinates are warped
+      (`warped_uv`). Each material's triangles go in meshes of a few 400 m chunks each (`_class_groups`), named by
+      their first chunk and the letter (`1GRASS_T012P`). Without it every triangle is `terrain`, in a mesh per chunk
+      named `1GRASS_T###`, as before.
     """
     ring, ring_h = _outline(rb)
     corridor, footprint = terrain_region(rb, corridor_m)
@@ -388,19 +401,57 @@ def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame,
         for k in np.unique(chunk):
             out.extend(_split_by_vertex_limit(f"1GRASS_T{k:03d}", tri[chunk == k], pts, hts, frame, uv_m))
         return out
-    # A mesh per chunk and material, materials in `letters` order: one stable sort, not a scan per mesh.
-    names = list(letters)
-    rank = {n: i for i, n in enumerate(names)}
-    group = chunk.astype(np.int64) * len(names) + np.fromiter((rank[m] for m in material), np.int64, len(material))
-    order = np.argsort(group, kind="stable")
-    for idx in np.split(order, np.flatnonzero(np.diff(group[order])) + 1):
-        k, r = divmod(int(group[idx[0]]), len(names))
-        name = names[r]
-        out.extend(_split_by_vertex_limit(f"1GRASS_T{k:03d}{letters[name]}", tri[idx], pts, hts, frame, uv_m, name))
+    # Meshes of each material in `classes` order, each of a few chunks; then sorted along the road.
+    rank = {n: i for i, n in enumerate(classes)}
+    code = np.fromiter((rank[m] for m in material), np.int64, len(material))
+    order = np.argsort(code, kind="stable")
+    meshes = []
+    for idx in np.split(order, np.flatnonzero(np.diff(code[order])) + 1):
+        name = material[idx[0]]
+        letter, tile, warp = classes[name]
+        for first, mine in _class_groups(chunk[idx]):
+            meshes.append((first, rank[name], _split_by_vertex_limit(
+                f"1GRASS_T{first:03d}{letter}", tri[idx[mine]], pts, hts, frame, tile, name,
+                warp=tile if warp else None)))
+    for _, _, ms in sorted(meshes, key=lambda m: m[:2]):
+        out.extend(ms)
     return out
 
 
-def _split_by_vertex_limit(name, tri, pts, hts, frame, uv_m, material: str = "terrain") -> list[Mesh]:
+def warped_uv(x: np.ndarray, z: np.ndarray, tile_m: float) -> np.ndarray:
+    """Texture coordinates for AC x and z (metres), repeating every `tile_m` but shifted by up to about UV_WARP_M in
+    two directions by two waves each."""
+    a, b, c, d = UV_WARP_WAVES_M
+    wx = np.sin(2 * np.pi * z / a + 1.3) + 0.8 * np.sin(2 * np.pi * (x + z) / b + 4.1)
+    wz = np.sin(2 * np.pi * x / c + 2.7) + 0.8 * np.sin(2 * np.pi * (x - z) / d + 0.6)
+    return np.column_stack([x + UV_WARP_M / 1.8 * wx, z + UV_WARP_M / 1.8 * wz]) / tile_m
+
+
+def _class_groups(chunk: np.ndarray) -> list[tuple[int, np.ndarray]]:
+    """One class's triangles (their 400 m chunk numbers) in meshes: consecutive chunks gathered until a mesh holds
+    about CLASS_MESH_TRIANGLES, or spans CLASS_MESH_CHUNKS with a quarter of that. Returns (first chunk, triangle
+    indices) per mesh."""
+    order = np.argsort(chunk, kind="stable")
+    ids, starts, counts = np.unique(chunk[order], return_index=True, return_counts=True)
+    out, first, start, held = [], None, 0, 0
+    for k, at, n in zip(ids, starts, counts):
+        full = held + n > CLASS_MESH_TRIANGLES
+        long = k - first >= CLASS_MESH_CHUNKS and 4 * held >= CLASS_MESH_TRIANGLES if first is not None else False
+        if first is not None and (full or long):
+            out.append((first, order[start:at]))
+            first = None
+        if first is None:
+            first, start, held = int(k), int(at), 0
+        held += int(n)
+    if first is not None:
+        out.append((first, order[start:]))
+    return out
+
+
+def _split_by_vertex_limit(name, tri, pts, hts, frame, uv_m, material: str = "terrain",
+                           warp: float | None = None) -> list[Mesh]:
+    """Meshes of `tri` under the vertex limit, halved by easting until each fits. UVs repeat every `uv_m`, or with
+    `warp` every `warp` metres through `warped_uv`."""
     pieces = []
     parts = [tri]
     while parts:
@@ -415,7 +466,7 @@ def _split_by_vertex_limit(name, tri, pts, hts, frame, uv_m, material: str = "te
     for i, t in enumerate(pieces):
         used, local = np.unique(t, return_inverse=True)  # each corner's index among the mesh's own points
         pos = frame.to_ac(pts[used, 0], pts[used, 1], hts[used])
-        uv = np.column_stack([pos[:, 0], pos[:, 2]]) / uv_m
+        uv = np.column_stack([pos[:, 0], pos[:, 2]]) / uv_m if warp is None else warped_uv(pos[:, 0], pos[:, 2], warp)
         suffix = f"_{i}" if len(pieces) > 1 else ""
         meshes.append(_mesh(name + suffix, material, pos, local.reshape(t.shape), uv))
     return meshes

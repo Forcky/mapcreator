@@ -8,8 +8,8 @@ drawn: Grass FX takes each blade's colour from the ground under it.
 
 | Class | Material | Grass FX |
 |---|---|---|
-| Mown verge (the 2 m strip), lawn, saltmarsh, cushion moor | `grass`, `terrain_short` | A |
-| Pasture | `terrain_pasture` | base `[GRASS_FX]` |
+| Mown verge (the 2 m strip); saltmarsh, cushion moor and other short herbland | `grass`; `terrain_short` | A |
+| Pasture and towns, and any gap in the map | `terrain` (today's, `ground`) | base `[GRASS_FX]`: CSP's defaults |
 | Native tussock grassland | `terrain_tussock` | B |
 | Grassy dry woodland | `terrain_woodland` | B at half weight: sparse tussock |
 | Buttongrass moorland, sedgeland; wetland | `terrain_moor`; `terrain_wet` | C (wetland on its own darker ground) |
@@ -17,7 +17,6 @@ drawn: Grass FX takes each blade's colour from the ground under it.
 | Forest, plantation, scrub | `terrain_forest` | none |
 | Forest seen from afar | `terrain_canopy` | none |
 | Sand, mud, rock, water | `terrain_bare` | none |
-| Not mapped (a gap in the map) | `terrain` (today's) | base |
 
 - Only four extra configurations exist ("only up to a D config is possible atm", CSP's Grass FX docs), so wetland
   shares C with moorland, and its own ground tells them apart.
@@ -26,6 +25,11 @@ drawn: Grass FX takes each blade's colour from the ground under it.
   so litter-brown ground would show as bare brown hills. The change is dithered over CANOPY_BLEND_M.
 - Under the verge's mown strip the class is always A. The skirt beyond it takes the class of the ground it
   stands on (`mesh.terrain_meshes(fold_skirt=True)`), so in forest only the verge is mown grass.
+- Pasture and towns are as on a track without the pack: the `terrain` material and texture, and CSP's default
+  grass (no shape keys, no atlas pieces). That's where the pack changed the look least and cost the most frame
+  rate (in game, 9 Nov 2026: Grasstree Hill 5.4% slower, most of it on pasture), so it gives way there.
+- Class edges are dithered over EDGE_DITHER_M or more (`GroundMap.materials`), so a mapped block's straight
+  edge breaks up instead of drawing a ruled line across a paddock.
 - Without a vegetation map (the mainland so far, or a failed fetch), none of this applies: the terrain is one
   `terrain` material and Grass FX keeps today's defaults.
 
@@ -58,10 +62,20 @@ class GroundClass:
     letter: str  # ends its terrain meshes' names: `1GRASS_T012P`. One capital letter never spells a surface KEY
     config: str | None  # its Grass FX configuration: "" the base [GRASS_FX], "A" to "D", None for no grass
     weight: float = 1.0  # the configuration's share (MAP = X, weight); the rest is the base configuration
+    # Metres per repeat of its texture. Pasture keeps today's 8 m; the others repeat every 16 m.
+    tile_m: float = 16.0
+
+    @property
+    def warp(self) -> bool:
+        """Whether its texture coordinates are warped (`mesh.warped_uv`): where grass grows, other than pasture, so
+        the repeat doesn't line tussocks up in rows across an open plain (Lyell Highway's moorland, in game, 9 Nov
+        2026). Not where none grows: warped coordinates deflate worse, about 3 MB more in each of Lyell Highway's
+        KN5s for all of its ground."""
+        return self.config is not None and self.material != "terrain"
 
 
 CLASSES = (
-    GroundClass(PASTURE, "terrain_pasture", "ground_pasture", "P", ""),
+    GroundClass(PASTURE, "terrain", "ground", "P", "", tile_m=8.0),
     GroundClass(SHORT, "terrain_short", "ground_short", "S", "A"),
     GroundClass(TUSSOCK, "terrain_tussock", "ground_tussock", "T", "B"),
     GroundClass(WOODLAND, "terrain_woodland", "ground_woodland", "G", "B", 0.5),
@@ -72,23 +86,30 @@ CLASSES = (
     GroundClass(FOREST, "terrain_forest", "ground_forest", "F", None),
     GroundClass(CANOPY, "terrain_canopy", "ground_canopy", "K", None),
     GroundClass(BARE, "terrain_bare", "ground_bare", "X", None),
-    GroundClass(UNKNOWN, "terrain", "ground", "U", ""),
 )
-BY_KEY = {c.key: c for c in CLASSES}
+# A point no area of the map holds (a gap between polygons) is drawn as pasture: today's ground.
+BY_KEY = {**{c.key: c for c in CLASSES}, UNKNOWN: CLASSES[0]}
 BY_MATERIAL = {c.material: c for c in CLASSES}
-LETTERS = {c.material: c.letter for c in CLASSES}
+# What `mesh.terrain_meshes` needs for each material: its mesh-name letter, its texture's repeat in metres, and
+# whether that's warped.
+MESHES = {c.material: (c.letter, c.tile_m, c.warp) for c in CLASSES}
 # Materials that only exist with a vegetation map: one of these in a track means it has the grass pack.
-PACK_MATERIALS = tuple(c.material for c in CLASSES if c.key != UNKNOWN)
+PACK_MATERIALS = tuple(c.material for c in CLASSES if c.material != "terrain")
 # The mown verge strip and a single-lane gravel road's grass strip: configuration A wherever the pack is on.
 VERGE_MATERIALS = ("grass", "gravel_narrow")
 CANOPY_FROM_M = scenery.NEAR_M  # 250 m: where made-up trees thin to their far bands
 CANOPY_BLEND_M = 60.0
+# A triangle takes the class of a point up to this far from its centre near the road, in a direction and at a
+# distance fixed by where it is, so a class's edge is dithered over about twice this. Further out it grows with the
+# terrain's lattice (4 m near the road, 32 m far out), up to five times as much.
+EDGE_DITHER_M = 6.0
 
 # TASVEG 5.0 VEGCODEs by class (157 codes, labels from theLIST's REST renderer). Codes not named here go by their
 # group's first letter (`tasveg_class`).
 _TASVEG = {
-    PASTURE: "FAL FAC FUM",  # agricultural land, pasture with native canopy, extra-urban miscellaneous
-    SHORT: "FUR AUS ASS ASP HCM",  # urban lawns, saltmarsh, succulent saline herbland, sphagnum, cushion moor
+    # Agricultural land, pasture with native canopy, extra-urban miscellaneous, urban areas: today's ground.
+    PASTURE: "FAL FAC FUM FUR",
+    SHORT: "AUS ASS ASP HCM",  # saltmarsh, succulent saline herbland, sphagnum peatland, cushion moorland
     # Poa, Themeda and lowland grassland, grassy sedgeland, coastal grass and herbfield, rockplate grassland,
     # marram grass, highland grassy sedgeland.
     TUSSOCK: "GPL GPH GTL GCL GSL GHC GRP FMG MGH",
@@ -122,9 +143,20 @@ def tasveg_areas(communities: Iterable) -> list[tuple[shapely.Geometry, str]]:
     return [(c.polygon, tasveg_class(c.code)) for c in communities]
 
 
-def _unit_hash(xy: np.ndarray) -> np.ndarray:
-    """A number in [0, 1) for each point, fixed by where it is: dithers a change of class without a generator."""
-    return np.modf(np.abs(np.sin(xy[:, 0] * 12.9898 + xy[:, 1] * 78.233)) * 43758.5453)[0]
+def _unit_hash(xy: np.ndarray, salt: float = 0.0) -> np.ndarray:
+    """A number in [0, 1) for each point, fixed by where it is (and `salt`): dithers a change of class without a
+    generator."""
+    return np.modf(np.abs(np.sin(xy[:, 0] * 12.9898 + xy[:, 1] * 78.233 + salt)) * 43758.5453)[0]
+
+
+def dithered(xy: np.ndarray, dist: np.ndarray) -> np.ndarray:
+    """Each point moved up to EDGE_DITHER_M (more far from the road) in a direction fixed by where it is: where a
+    class is looked up, so the classes' edges come out ragged."""
+    xy = np.asarray(xy, dtype=float).reshape(-1, 2)
+    reach = EDGE_DITHER_M * np.clip(np.asarray(dist, dtype=float) / 60.0, 1.0, 5.0)
+    angle = 2 * np.pi * _unit_hash(xy, 1.7)
+    r = reach * np.sqrt(_unit_hash(xy, 5.3))  # even over the disc
+    return xy + np.column_stack([np.cos(angle), np.sin(angle)]) * r[:, None]
 
 
 class GroundMap:
@@ -154,10 +186,11 @@ class GroundMap:
         return out
 
     def materials(self, xy: np.ndarray, dist: np.ndarray) -> np.ndarray:
-        """The terrain material at each point, `dist` metres from the centreline: its class's, with forest far
-        from the road drawn as canopy (CANOPY_FROM_M, dithered over CANOPY_BLEND_M)."""
+        """The terrain material at each point, `dist` metres from the centreline: the class of a point near it
+        (`dithered`), with forest far from the road drawn as canopy (CANOPY_FROM_M, dithered over
+        CANOPY_BLEND_M)."""
         xy = np.asarray(xy, dtype=float).reshape(-1, 2)
-        keys = self.classes(xy)
+        keys = self.classes(dithered(xy, dist))
         far = np.clip((np.asarray(dist, dtype=float) - CANOPY_FROM_M) / CANOPY_BLEND_M + 0.5, 0.0, 1.0)
         keys[(keys == FOREST) & (_unit_hash(xy) < far)] = CANOPY
         found, code = np.unique(keys.astype(str), return_inverse=True)
@@ -200,25 +233,29 @@ GROUPS = (
     ((grassfx.BRACKEN, None, 0.6), (grassfx.BRACKEN_BROWN, 0.5, 0.6)),
 )
 
-# The base [GRASS_FX] is pasture: medium, untidy, green, with the odd rank tussock. Grass grows where the ground's
-# colour passes CSP's default mask (green-ish, mid-dark), so pasture's dry patches stay short of it.
-BASE = {"SHAPE_SIZE": "2", "SHAPE_TIDY": "0.3", "SHAPE_CUT": "0", "TEXTURE_BASE_CHANCE": "1",
-        "TEXTURE_GROUP_0_CHANCE": "0.05"}
+# Every configuration names all four groups' chances, those it doesn't use as 0: what CSP does with a chance left
+# out isn't documented.
+NO_PIECES = {f"TEXTURE_GROUP_{g}_CHANCE": "0" for g in range(4)}
+# The base [GRASS_FX] is pasture and towns: CSP's default shape (no SHAPE_ keys) and its base blades only, as on a
+# track without the pack, where they look the same and cost no more (in game, 9 Nov 2026: SHAPE_SIZE 2 and a 5%
+# chance of tussock pieces here, with a greener ground, made Grasstree Hill 5.4% slower).
+BASE = {"TEXTURE_BASE_CHANCE": "1", **NO_PIECES}
 CONFIGURATIONS = {
-    # A: the mown verge, lawn and short herbland: cut every six weeks, short and tidy just after.
-    "A": {"TRIM_PERIOD": "42", "SHAPE_SIZE": "0.6, 1.2", "SHAPE_CUT": "1, 0.4", "SHAPE_TIDY": "1, 0.5",
-          "TEXTURE_BASE_CHANCE": "1"},
+    # A: the mown verge and short herbland: cut every six weeks, short and tidy just after. Never under CSP's default
+    # size, since "Higher size value lowers density": it's the grass nearest the car, where Grass FX draws most.
+    "A": {"TRIM_PERIOD": "42", "SHAPE_SIZE": "1, 1.3", "SHAPE_CUT": "1, 0.4", "SHAPE_TIDY": "1, 0.5",
+          "TEXTURE_BASE_CHANCE": "1", **NO_PIECES},
     # B: native tussock grassland: tall clumps on straw to blue-green ground, so a mask that takes in straw but
     # not bare soil.
     "B": {"SHAPE_SIZE": "3.5", "SHAPE_TIDY": "0", "MASK_MAIN_THRESHOLD": "0.2", "MASK_RED_THRESHOLD": "0.3",
-          "MASK_MAX_LUMINANCE": "0.5", "TEXTURE_BASE_CHANCE": "1", "TEXTURE_GROUP_0_CHANCE": "1"},
+          "MASK_MAX_LUMINANCE": "0.5", "TEXTURE_BASE_CHANCE": "1", **NO_PIECES, "TEXTURE_GROUP_0_CHANCE": "1"},
     # C: buttongrass moorland, sedgeland and wetland: olive and tan grow too; dark peat stays bare, by luminance.
     "C": {"SHAPE_SIZE": "3", "SHAPE_TIDY": "0", "MASK_MAIN_THRESHOLD": "-1", "MASK_RED_THRESHOLD": "0",
           "MASK_MIN_LUMINANCE": "0.05", "MASK_MAX_LUMINANCE": "1", "TEXTURE_BASE_CHANCE": "0.5",
-          "TEXTURE_GROUP_1_CHANCE": "1", "TEXTURE_GROUP_2_CHANCE": "0.3"},
+          **NO_PIECES, "TEXTURE_GROUP_1_CHANCE": "1", "TEXTURE_GROUP_2_CHANCE": "0.3"},
     # D: bracken and rough regrowth: fronds and rank grass.
-    "D": {"SHAPE_SIZE": "2.5", "SHAPE_TIDY": "0", "TEXTURE_BASE_CHANCE": "1", "TEXTURE_GROUP_3_CHANCE": "1",
-          "TEXTURE_GROUP_0_CHANCE": "0.3"},
+    "D": {"SHAPE_SIZE": "2.5", "SHAPE_TIDY": "0", "TEXTURE_BASE_CHANCE": "1",
+          **NO_PIECES, "TEXTURE_GROUP_0_CHANCE": "0.3", "TEXTURE_GROUP_3_CHANCE": "1"},
 }
 MASK_BLUR = "2"
 
