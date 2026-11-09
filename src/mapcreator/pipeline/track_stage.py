@@ -211,10 +211,13 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         _write_text(data / "lighting.ini", package.lighting_ini(), encoding="ascii")
         _write_text(data / "groove.ini", package.groove_ini(), encoding="ascii")
         _write_text(data / "crew.ini", package.crew_ini(), encoding="ascii")
-        # The AI at AI_GRAVEL_PACE over unsealed road up to the finish, then ramped down over the run-off after it,
-        # to all but stopped where its line ends. The hints are fractions of the racing line's own length, which is
-        # shorter than the road's. A sealed track gets the run-off ramp alone, as before.
-        hints = ai_line.pace_hints(road.length, finish_distance(road.length), line=line,
+        # The AI at AI_GRAVEL_PACE over unsealed road up to the finish, slower into bends it would take faster than
+        # the road allows (a crest, a steep descent, no banking: #63), then ramped down over the run-off after the
+        # finish, to all but stopped where its line ends. The hints are fractions of the racing line's own length,
+        # which is shorter than the road's. A sealed track with no such bend gets the run-off ramp alone, as before.
+        # The bends are found from the line as written, as the validator reads it back.
+        bends = ai_line.bend_hints(ai_line.read(layout_dir / "ai" / "fast_lane.ai"), ai_line.road_banking(road, line))
+        hints = ai_line.pace_hints(road.length, finish_distance(road.length), line=line, bends=bends,
                                    unsealed=unsealed_runs(c["s"], unsealed, reverse=lay.reverse))
         _write_text(data / "ai_hints.ini", package.ai_hints_ini(hints), encoding="ascii")
 
@@ -246,6 +249,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             "slowest_kmh": round(float(line.extra[:, 0].min() * 3.6), 1),
             "ai_tightest_radius_m": round(float(line.extra[:, 4].min()), 1),
             "road_tightest_radius_m": round(float(bend_r.min()), 1),
+            # Each risky bend's hint: metres along the AI line where its full pace holds, and the pace.
+            "bend_hints": [[round(b.start), round(b.end), b.pace] for b in bends],
         }
 
     power_geo = work.root / scenery_stage.STAGE / "power.geojson"

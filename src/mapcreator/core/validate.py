@@ -223,6 +223,73 @@ def vertical_checks(rep: Report, label: str, line: ai_line.AiLine) -> None:
             f"{1 / abs(k[i]):.0f} m vertical radius: {extra[i]:.2f} g extra at the AI's planned {v[i] * 3.6:.0f} km/h")
 
 
+def bend_hint_checks(rep: Report, label: str, line: ai_line.AiLine, road: RoadSurface, hints_ini: Path) -> None:
+    """A warning, never a failure, at each bend AC's AI would take faster than the road allows: over a crest, down
+    a steep grade, with no banking (`ai_line.bend_hints`, #63). It says where the bend is and what hint
+    `data/ai_hints.ini` holds there. The bends are found from the AI file, as the track stage found them, with the
+    banking read from the road's triangles (`_banking`). Only where the AI is over the grip on a level road:
+    elsewhere even 7% of banking away from the bend leaves the pace over 0.96, nowhere near BEND_TRIGGER."""
+    level = ai_line.bend_paces(line)
+    short = np.interp(np.asarray(line.length, dtype=float), level["s"], level["pace"]) < 1.0
+    short[1:] |= short[:-1].copy()
+    short[:-1] |= short[1:].copy()
+    bends = ai_line.bend_hints(line, _banking(line, road, short))
+    if not bends:
+        rep.passed.append(f"{label}: no bend the AI would take faster than the road allows")
+        return
+    written = _hint_ranges(hints_ini)
+    total = max(float(line.length[-1]), 1.0)
+    for b in bends:
+        over = [v for s0, s1, v in written if s0 * total < b.end and s1 * total > b.start]
+        if over and min(over) <= b.pace + 1e-6:
+            hint = f"a hint of {min(over):g} is written there"
+        else:
+            hint = f"no hint of {b.pace:g} is written there" + (f" (only {min(over):g})" if over else "")
+        why = ([f"over a {b.crest_radius_m:.0f} m crest"] if np.isfinite(b.crest_radius_m) else []) + [
+            f"{b.descent * 100:.1f}% downhill", f"{round(b.banking * 100, 1) + 0.0:.1f}% banking"]
+        corner = np.sqrt(ai_line.BEND_GRIP * ai_line.G * b.radius_m) * 3.6
+        rep.warnings.append(
+            f"{label}: the {b.radius_m:.0f} m bend at {b.start:.0f}-{b.end:.0f} m along the AI line ({', '.join(why)}): "
+            f"AC's AI may take it at {b.ai_kmh:.0f} km/h where the grip left allows {b.road_kmh:.0f} km/h "
+            f"({b.pace:g} of the {corner:.0f} km/h it works out for the radius); {hint}")
+
+
+BANKING_INSET_M = 0.25  # the banking is read this far inside each road edge, to be sure of hitting the road
+
+
+def _banking(line: ai_line.AiLine, road: RoadSurface, where: np.ndarray) -> np.ndarray:
+    """The road's banking beside each AI point, as its rise to the left per metre, from its triangles: straight
+    across the road's middle (`road_middle`), from just inside its right edge to just inside its left, the same
+    distance either side of the crown, so the crown cancels out as in `ai_line.road_banking`. Across the road, not
+    the line: in a tight bend the line's heading is several degrees off the road's, and on a steep grade that tilt
+    reads as banking. Only at the points `where` says: 0 elsewhere, and where the road isn't found."""
+    out = np.zeros(len(line.pos))
+    if len(line.pos) < 2:
+        return out
+    middle, _ = road_middle(line)
+    along = np.gradient(middle, axis=0)
+    left = np.column_stack([along[:, 1], -along[:, 0]]) / np.maximum(np.hypot(*along.T), 1e-9)[:, None]
+    half = (line.extra[:, 5] + line.extra[:, 6]) / 2 - BANKING_INSET_M
+    for i in np.flatnonzero(where & (half > 0)):
+        up = road.height(*(middle[i] + left[i] * half[i]))
+        down = road.height(*(middle[i] - left[i] * half[i]))
+        if up is not None and down is not None:
+            out[i] = (up - down) / (2 * half[i])
+    return out
+
+
+def _hint_ranges(path: Path) -> list[tuple[float, float, float]]:
+    """Each `[HINT_n]` in an ai_hints.ini as (START, END, VALUE); none if there's no file."""
+    if not path.exists():
+        return []
+    out = []
+    for block in re.split(r"^\[HINT_\d+\]\s*$", path.read_text(encoding="ascii"), flags=re.M)[1:]:
+        values = dict(re.findall(r"^(START|END|VALUE)=([-+.\deE]+)\s*$", block, flags=re.M))
+        if len(values) == 3:
+            out.append((float(values["START"]), float(values["END"]), float(values["VALUE"])))
+    return out
+
+
 def is_road_mesh(name: str) -> bool:
     """A physics mesh of the drivable road: sealed (1ROAD_###) or unsealed (1GRAVEL_###)."""
     return name[:1].isdigit() and any(k in name for k in ROAD_KEYS)
@@ -385,6 +452,7 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
         bend_checks(rep, label, line, allow_tight_bends=allow_tight_bends, radius=road_radius[1], at=road_radius[0])
     racing_line_checks(rep, label, line, road, middle_radius)
     vertical_checks(rep, label, line)
+    bend_hint_checks(rep, label, line, road, ai_path.parents[1] / "data" / "ai_hints.ini")
     for name in sorted(n for n in dummies if re.fullmatch(r"AC_START_\d+", n)):
         # The AI line's own direction where the car stands: a chord from the line's start would cut across
         # a hairpin there and fail a spawn that faces exactly the right way.

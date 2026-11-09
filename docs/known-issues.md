@@ -104,6 +104,18 @@ The AI line runs out-in-out over the whole road (`core/racing_line.py`, 4 Nov). 
 - **Spawns:** the grid and the hot-lap spawn are unchanged; the line stays on the centreline over them, and the AI should leave the grid as before.
 - **Track length:** `log.txt`'s `TRACK LENGTH` on Grasstree Hill and Lyell Highway against the line's real length (the last cumulative length in `fast_lane.ai`; Grasstree Hill forward: 12,737 m). With points 5 m apart, Lyell should read about 1.3% long, against 32.8% with 1 m points.
 
+## Crest bends (#63)
+
+On Lyell Highway forward, AC's AI put most of an 8-car field off the road at 0.72-0.80 km on lap 1, in all three races (9 Nov): 3-6 cars of 8, at 110-120 km/h. The bend is a 109-135 m left-hander that starts just over a crest (a 556-673 m vertical radius) and runs down an 8.5% grade, with no banking. The cars drifted right through it, 2-4 m right of the centreline at 720 m and 9-12 m at 785 m, and came to rest 8-18 m off the road at 790-800 m; the two or three that kept to the left got through. The AI line kept 2.6-3.2 m from both edges there.
+
+- **The fix:** a pace hint at such bends (`docs/ac-format.md`): 0.87 over 688-730 m along the line, easing in from 638 m and out to 780 m. The physics says 0.87; the issue suggested about 0.8 over 0.65-0.85 km. The game decides.
+- **No banking on coarse DEM stretches.** Lyell Highway is 92% coarse (not LiDAR), and those stretches get the crown and no superelevation (`section_stage`), because a coarse DEM can't see a road's camber. Real curves that tight are superelevated: Queensland's road design manual calls superelevating all horizontal curves "normal practice", wants curves under 2,000 m superelevated on a 100 km/h rural road (desirably; tighter ones may go without only with justification), and asks for curves in mountainous terrain to be fully superelevated (TMR, *Road Planning and Design Manual*, 2nd edition, Volume 3, Supplement to Austroads Guide to Road Design Part 3, July 2025: 7.7, 7.8 and Table 7.8). A design superelevation from the curvature (TMR's 2002 manual, chapter 11, equation 11.5, the linear method it says Austroads favours) would give that bend 6-7%, and the rule's pace there 0.91-0.92: no hint. Whether coarse stretches get one is the maintainer's call.
+- **To check in game** (8 Abarth 500s, AI level 100, 3 races, Lyell Highway forward):
+  - no car off at 0.72-0.80 km, and none in the other two forward bends (1.36-1.41 km and 32.67-32.71 km);
+  - the AI's time from gate to gate, against a build from main (about 0.7 s slower is expected);
+  - Brinktop Road's kink at 9.95 km and Grasstree Hill forward's 6 km bend as before: neither gets a hint.
+  - If 0.87 isn't enough, the trigger (`BEND_TRIGGER`) and the grip (`BEND_GRIP`) are the levers, not the bend.
+
 ## Scenery reach (600 m)
 
 Trees and buildings now stand within 600 m of the road (`core.reach`); they stopped at 250 m. Power-line supports still reach the terrain's edge less 5 m (695 m). None of it has been seen in game yet.
