@@ -39,7 +39,7 @@ services:
       # Finished tracks are uploaded to the bucket the web app links to, with the key in worker.env.
       MAPCREATOR_STORAGE: s3
       MAPCREATOR_S3_ENDPOINT: https://<account id>.r2.cloudflarestorage.com
-      MAPCREATOR_S3_BUCKET: mapcreator-tracks
+      MAPCREATOR_S3_BUCKET: <bucket>
       MAPCREATOR_DOWNLOAD_BASE: https://downloads.example.org
       # Roads (and buildings outside Tasmania) from the local OSM index, built elsewhere with
       # `python -m mapcreator.providers.osm.index build`. Overpass isn't on the egress allowlist.

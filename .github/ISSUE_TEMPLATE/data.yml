@@ -1,0 +1,24 @@
+name: Data or licence
+description: Wrong map data in a track, a missing or wrong credit, or a question about a data source's licence.
+labels: [data]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What's wrong
+      description: >-
+        Which source (see the track's ATTRIBUTION.txt or docs/data-sources.md) and what's wrong with it, or what the
+        licence question is. Roads come from OpenStreetMap, so a wrong road is often best fixed there.
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Where
+      description: The track id, or a place (a road name, or coordinates as latitude, longitude).
+  - type: textarea
+    id: source
+    attributes:
+      label: Source
+      description: >-
+        For a licence or attribution question, a link to the dataset's own licence statement or the licence text.
