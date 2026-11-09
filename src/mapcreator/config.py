@@ -41,6 +41,10 @@ class Settings:
     # Local COG mirror of NSW's State Vegetation Type Map, with its PCT table beside it (providers/nsw/svtm.py);
     # in NSW it types the made-up trees ahead of NVIS. Empty means NVIS types them there too.
     svtm_source: str = ""
+    # Where this code is published, such as a repository's web address. ATTRIBUTION.txt names it as the place to
+    # find how the OpenStreetMap data was selected (ODbL 4.6), so a fork points at its own code. Empty leaves the
+    # address out.
+    source_url: str = ""
 
 
 DEFAULT_TAS_DEM = (
@@ -76,4 +80,5 @@ def load() -> Settings:
         not in ("0", "false", "no", "off"),
         nvis_source=get("MAPCREATOR_NVIS", "nvis_source", ""),
         svtm_source=get("MAPCREATOR_SVTM", "svtm_source", ""),
+        source_url=get("MAPCREATOR_SOURCE_URL", "source_url", "").strip(),
     )

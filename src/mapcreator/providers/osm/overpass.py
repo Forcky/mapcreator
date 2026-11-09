@@ -23,12 +23,14 @@ DRIVABLE = (
     "motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|road|"
     "motorway_link|trunk_link|primary_link|secondary_link|tertiary_link"
 )
+# The ways a query keeps, before its bounding box. ATTRIBUTION.txt quotes it when the roads came from Overpass.
+ROADS_FILTER = f'way["highway"~"^({DRIVABLE})$"]'
 
 
 def query_for_bbox(south: float, west: float, north: float, east: float) -> str:
     return (
         "[out:json][timeout:180];\n"
-        f'way["highway"~"^({DRIVABLE})$"]({south:.6f},{west:.6f},{north:.6f},{east:.6f});\n'
+        f"{ROADS_FILTER}({south:.6f},{west:.6f},{north:.6f},{east:.6f});\n"
         "(._;>;);\nout body;\n"
     )
 

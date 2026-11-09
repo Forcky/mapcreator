@@ -18,6 +18,10 @@
 # a Geofabrik extract: python -m mapcreator.providers.osm.index build australia-latest.osm.pbf <index>
 # osm_index = "D:/mirror/osm/australia.sqlite"                             # MAPCREATOR_OSM_INDEX
 
+# Where the code you run is published. ATTRIBUTION.txt points there for how the OSM data was selected (ODbL 4.6).
+# Empty (the default) leaves the address out.
+# source_url = "https://example.org/your/mapcreator"                      # MAPCREATOR_SOURCE_URL
+
 # Without osm_index, roads come from Overpass: light development use only.
 # overpass_url = "https://overpass-api.de/api/interpreter"                # MAPCREATOR_OVERPASS_URL
 # user_agent = "mapcreator (+https://example.org/contact)"                 # MAPCREATOR_USER_AGENT

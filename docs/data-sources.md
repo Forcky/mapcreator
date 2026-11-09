@@ -8,6 +8,7 @@ Checked November 2026. Licences change, so recheck a source's own licence statem
   - NoDerivatives (ND) imagery can't become textures.
   - NonCommercial (NC) terms bind every downstream user.
   - Google, Esri, Bing and Mapbox terms forbid this use outright.
+- **Creative Commons BY:** both CC BY 4.0 (section 3(a)(1)(B)) and CC BY 3.0 AU (clause 4B) ask that changes to the data be marked, so every track's `ATTRIBUTION.txt` says the data was modified to build it (resampled, filtered and smoothed, and turned into 3D geometry).
 - **OpenStreetMap (ODbL):**
   - A track is a Produced Work, so it needs attribution.
   - The enriched centreline is shipped as `centreline.geojson` under ODbL.
@@ -71,5 +72,6 @@ ODbL obligations, checked against the licence text (opendatacommons.org, ODbL 1.
 
 - **§4.3, Produced Works.** Publicly using a Produced Work needs a notice that content came from the database and is available under the ODbL. Every track's `ATTRIBUTION.txt` carries the OSM lines: "Road centreline and tags" and, when OSM buildings or power lines were used, "Building footprints" or "Power lines".
 - **§4.6, Derivative Databases.** Treat the index as a Derivative Database: it is a filtered, rearranged copy of the extract. Publicly using a Derivative Database, or a Produced Work from one, means offering recipients either the whole Derivative Database or "the method of making the alterations to the Database (such as an algorithm)". The method is `providers/osm/index.py` in this repository, applied to the Geofabrik extract named in the index, and the centreline each track uses ships as `centreline.geojson` (with `power.geojson` for any OSM power lines).
-- **Still to do:** tracks don't yet point recipients at that method. Once this repository is published, `ATTRIBUTION.txt` should say where.
+- **How tracks point at the method:** `ATTRIBUTION.txt` says how the OpenStreetMap data was selected: with the index builder (`providers/osm/index.py`) from the extract the index names and its OSM data timestamp, or, without an index, with the Overpass filter (`providers/osm/overpass.py`). It gives the code's build version (`buildinfo.version()`) and, when `MAPCREATOR_SOURCE_URL` is set, where the code is published. A fork sets its own address.
+- **§4.2, the licence with the data.** `ATTRIBUTION.txt` gives the ODbL's address (https://opendatacommons.org/licenses/odbl/1-0/) next to `centreline.geojson` and `power.geojson`.
 - The index itself stays on the build machines and isn't published.

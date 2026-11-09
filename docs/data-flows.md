@@ -71,7 +71,7 @@ Each stage reads the folders before it and writes its own, so any stage can be r
 
 | Stage | Folder | Reads | Writes |
 |---|---|---|---|
-| route | `01_route` | job waypoints; OSM roads from the local index (Overpass in development) | `route.npz` (centreline in the region's metric CRS, and which run of OSM ways each segment is on), `runs.json` (each run's ways and tags), `route.geojson` |
+| route | `01_route` | job waypoints; OSM roads from the local index (Overpass in development) | `route.npz` (centreline in the region's metric CRS, and which run of OSM ways each segment is on), `runs.json` (each run's ways and tags), `route.geojson`, `osm_selection.json` (how the roads were selected: the index's extract and OSM timestamp, or the Overpass filter) |
 | profile | `02_profile` | the route and its tags (the road's mapped width sets the road strip's); the region's DEM, 800 m either side of the road; in Tasmania, theLIST's LiDAR index | `centreline.npz` (smoothed 3D centreline, grades, and which stations have fine elevation; corners at junctions rounded to 8 m first; where the mapped line runs up a cutting beside the road on LiDAR ground, the road strip's heights), profile plot when matplotlib is installed |
 | section | `03_section` | the centreline; OSM surface, width, lanes, `narrow` and `lane_markings`; the DEM across the road | `section.npz` (half-widths, camber, crown, and each station's surface and look: sealed or unsealed, one lane or two) |
 | mesh | `04_mesh` | centreline, section, DEM; WorldCover's permanent water | road, verge, terrain (700 m either side) and wall meshes, water surfaces (`water.json`: bodies, levels, LAKE or SEA), AC dummies; roadside furniture (guide posts, CAMs, speed signs) and its texture atlas |
@@ -137,3 +137,4 @@ Pipeline settings (`config.py`), from the environment or `config.local.toml`:
 | `MAPCREATOR_META_CANOPY` | `0` turns off the Meta/WRI canopy mask on WorldCover trees (on by default) |
 | `MAPCREATOR_CACHE_DIR`, `MAPCREATOR_WORK_DIR` | tile cache, and where the CLI writes work folders (the worker uses a temporary folder per job) |
 | `MAPCREATOR_OVERPASS_URL`, `MAPCREATOR_USER_AGENT` | development only |
+| `MAPCREATOR_SOURCE_URL` | where the code that builds the tracks is published; `ATTRIBUTION.txt` names it for how the OSM data was selected (ODbL 4.6). Empty (the default) leaves the address out |
