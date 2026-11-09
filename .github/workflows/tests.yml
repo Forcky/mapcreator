@@ -1,6 +1,7 @@
 name: tests
 
-# Every push and pull request: the whole test suite, including the check that nothing private is committed.
+# Every push and pull request: the whole test suite, including the check that nothing private is committed,
+# and a scan of every commit for secrets.
 on:
   push:
   pull_request:
@@ -13,8 +14,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: "3.12"
           cache: pip
@@ -22,3 +23,25 @@ jobs:
         run: pip install -e ".[service,s3,osm,dev]"
       - name: Test
         run: python -m pytest -q
+
+  # gitleaks (MIT) from its release, checked against the release's SHA-256. The same version as the pre-commit hook
+  # in .pre-commit-config.yaml. Running the binary needs no licence key and no token, whoever owns the repository.
+  gitleaks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          fetch-depth: 0  # the whole history, not just the last commit
+      - name: Install gitleaks
+        env:
+          VERSION: "8.30.1"
+          SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  # gitleaks_8.30.1_linux_x64.tar.gz
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          echo "${SHA256}  gitleaks.tar.gz" | sha256sum --check --strict
+          tar -xzf gitleaks.tar.gz gitleaks
+      - name: Scan every commit
+        run: $RUNNER_TEMP/gitleaks git . --redact --no-banner --verbose
