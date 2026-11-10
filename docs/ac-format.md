@@ -380,13 +380,13 @@ A procedural low-poly police car for each Australian jurisdiction, in that juris
 
   | Part | ksAmbient | ksDiffuse (by day) | ksSpecular | ksSpecularEXP |
   |---|---|---|---|---|
-  | body, white paint; the band | 0.4 | 0.6 | 0.12 | 40 |
-  | body, Tasmania's silver | 0.4 | 0.6 | 0.35 | 22 |
-  | lenses | 0.4 | 0.6 | 0.25 | 60 |
+  | body (white or silver paint) and the band | 0.4 | 0.6 | 0 | 40 |
+  | lenses | 0.4 | 0.6 | 0.05 | 200 |
 
   - ksDiffuse by day is the walls' 0.6, which a stage that doesn't look these up gives them anyway; the night adjustments start from it.
-  - Specular is low on the paint and the band. At night the headlights sit beside the eye, so a flat side facing them catches the highlight across its width, white on top of the chequer and the lettering. The first check track had 0.3.
-  - Tasmania's silver takes a broader, stronger sheen, so it reads as silver in sunlight.
+  - **No specular on the paint or the band**, which carry the lettering and the chequer. AC's `ksPerPixel` adds its specular on top of the texture, not through it, so it lifts black lettering as much as white paint (see "Night"). A stage that doesn't look these up gives them the walls' 0.05.
+  - Tasmania's silver comes from its albedo alone (164-173, against the white's 224).
+  - The lenses keep a small, tight glint.
 
 ### Night
 
@@ -402,13 +402,21 @@ A procedural low-poly police car for each Australian jurisdiction, in that juris
   - the bodies clipped to white over 36-47% of their area (1-18% by day);
   - the chequers turned pale or vanished, and the lettering went with them;
   - the lenses burned to white boxes, and from 12 m the bars showed steady red and blue, like a bar left on.
-- **The cause, most likely, is shared with any prop:** a near-white texture under the walls' ksDiffuse 0.6. Every material outside the track's own surfaces takes those fallback values. White at 246 under 0.6 reflects 3.7 times what the road does (95 under 0.42), taking the texture values as they are, or 11.5 times if the game decodes them from sRGB first. CSP's night exposure suits the dark road, so at close range in the beam the props go past the top of the tone curve: white clips, and saturated colours pale towards white. The check track's specular of 0.3 added a white highlight across the side facing the headlights, on top of the dark squares and the lettering.
+- **The causes, shared with any prop:**
+  - **A near-white texture under the walls' ksDiffuse 0.6.** Every material outside the track's own surfaces takes those fallback values.
+    - White at 246 under 0.6 reflects 3.7 times what the road does (95 under 0.42), taking the texture values as they are, or 11.5 times if the game decodes them from sRGB first.
+    - CSP's night exposure suits the dark road, so at close range in the beam the props go past the top of the tone curve: white clips, and saturated colours pale towards white.
+  - **Specular, added untextured.** `ksPerPixel` gives `txColor * (ksAmbient * ambient + ksDiffuse * light + ksEmissive) + ksSpecular * (N·H)^ksSpecularEXP * light`. That's Content Manager's re-implementation of the shader, `AcTools.Render/Shaders/Includes/DarkMaterial.Lighting.Simple.fx`, which the closure props' work found.
+    - At night the headlights sit beside the eye, so N·H is near 1 across a face square to them, and the specular lifts every texel alike, black lettering as much as white paint.
+    - At 0.12 and exponent 40 it came to about 40% of the white's light at the night 0.35, so the lettering's contrast fell from about 11:1 to under 3:1. Lowering the night diffuse made that share larger.
+- **Round 2** (night 0.35, 1.3 and 2.0, specular 0.12; in game 11 Nov): the bodies were as bright as by day but 24-31% near-white at 6 m, the chequers kept their dark squares but pale, and most lettering faded to pale lavender. The bars read as off from 12 m.
 - **What changed:**
   - white paint at 224 (was 246), and Tasmania's silver at 164-173;
-  - the body comes down to 0.35 at night (out of the beam it's lit by its ambient, which stays);
+  - the body comes down to 0.35 at night. Out of the beam it's lit by its ambient, which stays. That's the closure props' value too, so the two look alike side by side;
   - the band and the lenses get smaller boosts;
-  - specular on the paint and band at 0.12;
+  - no specular on the paint and band (0.3, then 0.12), and a small, tight glint on the lenses (0.25 at exponent 60, now 0.05 at 200). Without the specular, the hot spot on a white side loses about a quarter of its light;
   - the lenses are drawn as tinted, unlit plastic: each colour darkened and greyed, nothing near white.
+- White paint stays at 224 rather than the 200-210 the round 2 report suggested: whiter paint than that by day and the silver car no longer stands apart.
 - **The light bar is off, not emissive.** The track stage writes ksEmissive 0 for every material, so a glow would need a new property path. A steady glow would read as a bar left on that never flashes, and whether a track config can make a material flash is unverified.
 - The ini's description line still says "retroreflective furniture" for every entry, including the body's darker one.
 - All of it is to retest in game (`docs/known-issues.md`). Vanilla AC ignores the file, so there the car looks as by day.
@@ -427,6 +435,8 @@ A procedural low-poly police car for each Australian jurisdiction, in that juris
   - Each view is drawn in a drawing of its cell's size, so nothing spills into the next cell, at twice the size and scaled down for smooth edges. The lettering is Pillow's built-in Aileron (CC0), made bold with a stroke. Crests are drawn on a layer at four times their size.
   - **Cells aren't square in metres** (the sedan's side is about 405 px a metre along and 547 up; the front view 291 and 474). Lettering and crests are sized by each axis, so a word or crest has its proportions and size in metres in any view. The first atlases sized them by the horizontal scale alone: crests came out squashed into small ellipses, side lettering about a quarter short of its height, and bonnet lettering stretched about three and a half times across the car.
 - **Crests** are drawn 0.30-0.38 m across (0.50 m on the NT's bonnet), bigger than on most real cars, so they read at parking distance. Bold shapes with dark edges, a few big leaves to a wreath, no small lettering. In game the first ones (0.16-0.19 m) read only as roundels, apart from Queensland's (0.30 m). Tasmania's moves above the chequer on the rear door, where there's room for it.
+  - The ACT's star is drawn a darker silver edged in navy, with a thick navy ring round a bigger shield. Its pale silver star on white paint read only as its gold centre from 6 m.
+  - The tests ask each crest to stand clearly off its paint over at least 27% of its box (the ACT's now 39%, against 27% before).
 - **The band follows the shoulder.** Along the doors it runs between the livery's heights. Towards the nose and tail it drops with the belt line, keeping its depth (NSW's "sweeps down towards the headlight"), and the geometry's strip drops with it. Queensland's wedge keeps its foot instead.
 
 ### Budget
@@ -454,7 +464,7 @@ Current marked general-duties cars, from releases and dated photos (2019-2026). 
 | `sa` | South Australia Police | SUV | White. Three-row black/white chequer between yellow lines, breaking into scattered squares over the front guard | "POLICE" in tall black capitals keylined yellow across both doors; bonnet | Wattle wreath under a crown; light blue ring, white disc with a black and white piping shrike, wings spread. Front door | red on the driver's side, blue; POLICE centre |
 | `wa` | WA Police Force | SUV | White. Two-row blue/white chequer along the shoulder, a thin orange-red line above | "Police" on the doors | In one colour, as on the cars: eight-pointed star under a crown, banners, a black swan. Front door, near "Police" | red and blue |
 | `nt` | NT Police | SUV | White. Two-row blue/white chequer along the shoulder between ochre lines | "Police" on the front doors below the band; bonnet | Wreath with two desert roses under a crown; an ochre kangaroo standing; blue and gold scrolls. Bonnet | red and blue |
-| `act` | ACT Policing (AFP) | sedan | White. Three-row near-black/white chequer along the shoulder between lime lines, bigger squares on the front guard, lime flashes on the bumper | "Police" low on the rear door; ghosted grey on the bonnet | The AFP's: silver eight-pointed star and wreath under a crown; navy ring round the Commonwealth arms (a shield between a kangaroo and an emu); scroll. Front door, low | red and blue, POLICE centre |
+| `act` | ACT Policing (AFP) | sedan | White. Three-row near-black/white chequer along the shoulder between lime lines, bigger squares on the front guard, lime flashes on the bumper | "Police" low on the rear door; ghosted grey on the bonnet | The AFP's: an eight-pointed star under a crown, a navy ring round the Commonwealth arms' shield, a scroll; drawn bolder than the badge (a darker silver star edged in navy, a thick ring). Front door, mid-height (low on the real cars) | red and blue, POLICE centre |
 
 - **What the sources leave open**, drawn as a common Australian layout:
   - which side the red is on, except Victoria (blue on the driver's side) and SA (red);

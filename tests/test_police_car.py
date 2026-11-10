@@ -277,14 +277,13 @@ def test_a_second_body_has_its_own_names():
 
 
 def test_tasmania_reads_silver_and_the_rest_white():
-    """In sunlight the first silver (195) rendered as white (in game, 10 Nov 2026): it's darker now, with more sheen."""
+    """In sunlight the first silver (195) rendered as white (in game, 10 Nov 2026); at 164-173 it read as silver
+    (11 Nov). It's the albedo that does it: the paint has no specular."""
     tas = police_car.LIVERIES["tas"]
-    assert max(tas.paint) <= 175 and tas.metallic
+    assert max(tas.paint) <= 175
     assert all(police_car.LIVERIES[c].paint == police_car.WHITE for c in JURISDICTIONS if c != "tas")
     assert np.mean(police_car.WHITE) - np.mean(tas.paint) >= 50
-    silver = police_car.police_car("tas").kn5_properties["police_tas"]
-    white = police_car.police_car("vic").kn5_properties["police_vic"]
-    assert silver["ksSpecular"] > 2 * white["ksSpecular"] and silver["ksSpecularEXP"] < white["ksSpecularEXP"]
+    assert police_car.police_car("tas").kn5_properties["police_tas"]["ksSpecular"] == 0.0
 
 
 def test_night_values_keep_the_body_and_lenses_from_washing_out():
@@ -293,9 +292,19 @@ def test_night_values_keep_the_body_and_lenses_from_washing_out():
     night = police_car.NIGHT_DIFFUSE_BY_PART
     day = police_car.PAINT_PROPS["ksDiffuse"]
     assert night["body"] < day < night["retro"] < 2.0 and day < night["lens"] <= 2.0
-    # Little specular on the paint and the band: with the headlights beside the eye, a side facing them catches it.
-    assert police_car.PAINT_PROPS["ksSpecular"] <= 0.15
     assert max(police_car.WHITE) <= 230
+
+
+@pytest.mark.parametrize("code", JURISDICTIONS)
+def test_no_specular_on_the_lettering(code):
+    """AC's ksPerPixel adds specular untextured, so with the headlights beside the eye it lifted the black lettering
+    as much as the white paint (in game, 11 Nov 2026). None on the body and band; the lenses keep a small glint."""
+    car = police_car.police_car(code)
+    names = police_car.material_names(code)
+    assert car.kn5_properties[names["body"]]["ksSpecular"] == 0.0
+    assert car.kn5_properties[names["retro"]]["ksSpecular"] == 0.0
+    lens = car.kn5_properties[names["lens"]]
+    assert lens["ksSpecular"] <= 0.05 and lens["ksSpecularEXP"] >= 150
 
 
 def test_the_light_bar_is_drawn_switched_off():
@@ -310,11 +319,23 @@ def test_the_light_bar_is_drawn_switched_off():
     assert im[y0:y1, x0:x1].max(axis=2).max() < 200  # nothing near white, even the clear lens
 
 
+def crest_visible_area(code, n=128):
+    """The share of a crest's box that stands clearly off its paint: a colour distance of 60 or more."""
+    livery = police_car.LIVERIES[code]
+    img = Image.new("RGB", (n, n), livery.paint)
+    police_car.draw_crest(img, livery.crest, n / 2, n / 2, n, n)
+    return float((np.linalg.norm(np.asarray(img, float) - np.array(livery.paint, float), axis=2) >= 60).mean())
+
+
 @pytest.mark.parametrize("code", JURISDICTIONS)
-def test_crests_are_drawn_large(code):
+def test_crests_are_drawn_large_and_stand_off_the_paint(code):
+    """Each crest reads at parking distance (in game, 11 Nov 2026), so it's large and much of it contrasts with the
+    paint. The ACT's pale silver star on white read only as its gold centre: at 27% of its box it was the faintest,
+    and it's drawn bolder now."""
     livery = police_car.LIVERIES[code]
     size = livery.crest_side[2] if livery.crest_side else livery.crest_bonnet
     assert livery.crest in police_car.CRESTS and size >= 0.30
+    assert crest_visible_area(code) >= (0.35 if code == "act" else 0.27)
 
 
 def test_lettering_and_crests_keep_their_size_in_metres():
