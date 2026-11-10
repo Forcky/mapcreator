@@ -216,6 +216,8 @@ TYRES_FX_GAINS = {"DIRT_GAIN": "1.0", "DIRT_FADE_GAIN": "1.0", "GRASS_GAIN": "1.
 
 def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], version: str,
                    gravel_materials: list[str] = (), grassy_gravel: list[str] = (),
+                   bare_ground: list[str] = (),
+                   grass_fx: tuple[dict[str, str], list[tuple[str, dict[str, str]]]] | None = None,
                    dirt_colours: dict[str, str] | None = None,
                    water_materials: list[str] | None = None, water_type: str = "LAKE",
                    tree_list: str | None = None, tree_surfaces: list[str] | None = None,
@@ -227,6 +229,11 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
       - Gravel with a grass strip (`grassy_gravel`, single-lane) is a grass material too, so blades grow on the
         strip; gravel tracks in CSP's own configs list their road materials there the same way (karelia). Other
         gravel occludes, as the seal does.
+      - `grass_fx`, for a track with ground classes (`core.grass.grass_fx`), is the grass pack: keys [GRASS_FX]
+        gains (our atlas, the base configuration's shape) and the sections after it (texture groups,
+        configurations A-D, and the adjustments that give each class's materials theirs).
+      - `bare_ground` are ground materials Grass FX doesn't grow on (forest floor, bare sand and rock): rough for
+        Rain FX like the grass.
     - Rain FX puddles and soaks the seal and treats grass as rough. Gravel is road, so it gets puddles too
       (PUDDLES_MATERIALS is "the key part for physics for generating puddles"), and it's rough: ROUGH_MATERIALS
       "won't get any reflections", only darken when wet (cup.acstuff.club/docs/csp/tracks/rainfx).
@@ -257,6 +264,7 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
              ] if tree_list else []
     tyres = [("TYRES_FX", {**{k: f"'{v}'" for k, v in dirt_colours.items()}, **TYRES_FX_GAINS})] if dirt_colours else []
     occluding = list(road_materials) + [m for m in gravel_materials if m not in grassy_gravel]
+    pack_keys, pack_sections = grass_fx or ({}, [])
     retro = [("INCLUDE: common/conditions.ini", {})] + [
         (f"MATERIAL_ADJUSTMENT_{i}", {
             "ACTIVE": "1", "DESCRIPTION": "retroreflective furniture: brighter in the headlights at night",
@@ -265,10 +273,11 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
     text = ini(retro + water + [
         ("ABOUT", {"AUTHOR": "mapcreator", "VERSION": version}),
         ("GRASS_FX", {"GRASS_MATERIALS": ", ".join(list(grass_materials) + list(grassy_gravel)),
-                      "OCCLUDING_MATERIALS": ", ".join(occluding)}),
+                      "OCCLUDING_MATERIALS": ", ".join(occluding), **pack_keys}),
+        *pack_sections,
         ("RAIN_FX", {"PUDDLES_MATERIALS": ", ".join(list(road_materials) + list(gravel_materials)),
                      "SOAKING_MATERIALS": ", ".join(road_materials),
-                     "ROUGH_MATERIALS": ", ".join(list(grass_materials) + list(gravel_materials))}),
+                     "ROUGH_MATERIALS": ", ".join(list(grass_materials) + list(bare_ground) + list(gravel_materials))}),
     ] + tyres + trees)
     return text
 

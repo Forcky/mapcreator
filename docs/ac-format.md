@@ -45,8 +45,9 @@ A job with `"layouts": "both"` produces:
 |---|---|---|
 | `1ROAD_###` (sealed road) | ROAD | `road`: `road_marked` (edge lines and a dashed centre line), or `road_plain`: `road_plain` (edge lines only) on a single-lane seal |
 | `1GRAVEL_###` (unsealed road) | GRAVEL | `gravel`: `gravel_road` (two lanes), or `gravel_narrow`: `gravel_road_narrow` (one lane, with a grass strip) |
-| `1GRASS_V###L/R` (verge and skirt) | GRASS | `grass` |
+| `1GRASS_V###L/R` (verge and skirt; with ground classes, the 2 m verge alone) | GRASS | `grass` |
 | `1GRASS_T###` (terrain) | GRASS | `terrain`: `ground` |
+| `1GRASS_T###P`, `…S`, `…T` and so on (terrain and skirt, with ground classes: each class's own meshes, named by their first chunk) | GRASS | the class's, e.g. `terrain_moor`: `ground_moor` (see "Grass FX" below) |
 | `1WALL_RAIL_L/R###`, `1WALL_END_START/FINISH`, `1WALL_TRUNK_###` and `1WALL_POWER_n` (invisible, `isRenderable` 0), and `1WALL_BUILDINGS` | solid barrier (no KEY: any physics mesh named WALL) | |
 | `RAIL_*`, `BUILDING_ROOF_*`, `WATER_*`, `POWER_*`, `FURNITURE_*` | visual only (no leading digit) | |
 
@@ -71,6 +72,7 @@ A job with `"layouts": "both"` produces:
   - Runs shorter than 50 m join their neighbours here too, within one surface, so a short single-lane bridge keeps the road's centre line.
 - **Textures:** `u` runs 0 to 1 across the carriageway, so lines and wheel paths sit in the same place whatever the width. `road_marked` and `road_plain` repeat every 12 m along the road; the gravel textures every 24 m, at 512 x 2048 px (about 1 cm a pixel). The gravel has a pair of darker, compacted wheel paths per lane with fewer stones, loose ridges between and beside them, and a few potholes. The one-lane gravel adds a patchy grass strip about 0.3 m wide down the middle and green fringes at the edges, for CSP's Grass FX. The palette is the mean colours of the CC0 photo texture `gravel_ground_01` (Poly Haven), a grey-brown.
 - **Terrain:** `1GRASS_T###` reaches 700 m either side of the road, and the world ends there. It's one Delaunay surface over lattices of 4 m to 60 m out, 8 m to 140 m, 16 m to 300 m, then 32 m. Until #34 it ended at 300 m, and power towers further out stood on nothing.
+  - **Ground classes:** where the region has a vegetation map for the ground (TASVEG in Tasmania), each terrain triangle takes the class of the ground near its centre (dithered, below), and each class's triangles are gathered from consecutive 400 m chunks into meshes of about 24,000 triangles (or 3.2 km with at least a quarter of that), named by their first chunk and the class's letter (`1GRASS_T012P`). So a track has about as many terrain meshes as without classes: Grasstree Hill 32 (33 without, 167 with a mesh per class per chunk). The skirt beyond the 2 m verge joins the terrain and takes its class too, so under forest only the verge is mown grass. One capital letter never spells a second surface KEY. Without a map, the terrain is one `terrain` mesh per chunk, as before.
   - **Reach:** the distances beside the road are one set (`core.reach`). Trees and buildings stand within 600 m of the centreline (the scenery reach). The terrain reaches 100 m further, so nothing at the scenery's edge stands at the world's edge, and the DEM is read 100 m beyond that (800 m). Power-line supports stand anywhere on the terrain, out to 695 m (see "Power lines").
   - Until the scenery reach, trees and buildings stopped at 250 m and the hills beyond them were bare.
 - **Logic dummies:**
@@ -131,13 +133,13 @@ _EXT_PERLIN_PERSISTENCE=0.5
 
 Vanilla AC ignores this folder. `ext_config.ini` holds:
 
-- **Grass FX and Rain FX:** grass grows on the grass and terrain materials, and the road gets puddles.
+- **Grass FX and Rain FX:** grass grows on the grass and terrain materials, and the road gets puddles. With ground classes (Tasmania), Grass FX grows each class's own grass from our own atlas (see "Grass FX" below), and every ground material, grass or not, is rough for Rain FX.
   - The seal (`road`, `road_plain`) occludes grass, gets puddles and soaks.
   - Gravel gets puddles too and is rough (no reflections, only darker when wet). One-lane gravel (`gravel_narrow`) is also a grass material, so Grass FX grows blades on its grass strip (CSP's default colour mask grows grass only on green, mid-dark pixels); two-lane gravel occludes grass instead.
   - No tiling fix (`ksPerPixel_tilingfix`) on the gravel: it shifts the texture at random and would break the wheel paths.
 - **`[TYRES_FX]`**, only on a track with gravel: the colours of dust and of dirt on the tyres, as three pairs (`DIRT_COLOR_A/B` from the gravel texture, `GRASS_COLOR_A/B` from the grass, `SOIL_COLOR_A/B` from the terrain's bare earth). A is the texture's mean colour and B 0.55 of it. A track's own section switches CSP's generic one (`config/tracks/generic/generic.ini`) off entirely (CSP 0.2.4), so ours carries all three pairs and the generic's four gains (`DIRT_GAIN`, `DIRT_FADE_GAIN`, `GRASS_GAIN`, `GRASS_FADE_GAIN`) at 1.0.
 - **Water:** `[INCLUDE: common/materials_track.ini]` and `[Material_Water]` give the `water` material CSP's water shader, as `LAKE` or `SEA`. Vanilla AC shows a flat, glossy blue-green surface.
-- **Tree FX:** `[TREES]` with `LIST_0=trees/trees.txt` and `SURFACE_MATERIALS=terrain, grass`, so CSP stands each tree on the ground. These are the track's only trees: the KN5 has none, so vanilla AC shows none.
+- **Tree FX:** `[TREES]` with `LIST_0=trees/trees.txt` and `SURFACE_MATERIALS=terrain, grass` (with ground classes, every class's material before `grass`), so CSP stands each tree on the ground. These are the track's only trees: the KN5 has none, so vanilla AC shows none.
   - Models, all procedural (`core/treefx.py`): three dry eucalypts, two of them also with rough bark (`euc_tall_rough`, `euc_spread_rough`: the same geometry), a wattle, a tall wet-forest eucalypt (`euc_wet`), a tea-tree (`tea_tree`), a rainforest myrtle (`myrtle`) and a radiata pine (`pine`). A track ships only the models its trees use.
   - Every model carries the same four textures, byte for byte: one bark atlas (four columns: gum, stringybark, pine, grey rainforest bark) and one leaf atlas (3 × 3 sprays), with normal maps. A model picks its cells by UV. Around a branch a bark column is used once, so on thick trunks it's stretched across; it tiles every 2.4 m along the branch.
   - The gaming PC measured about 0.3% of frame rate per extra model (12 models against 4, same trees, 4 Nov 2026), and CSP's tree load time doubling. Whether CSP shares byte-identical textures across models is untested.
@@ -159,6 +161,60 @@ Vanilla AC ignores this folder. `ext_config.ini` holds:
   - The `configure:` lines at the top switch off CSP's own random variation.
   - No comment lines. CSP 0.2.11 read a `;` line without a colon as a model name, then loaded no trees at all (`Tree manifest is missing`).
 - **`<model>.bin`:** a zip of `tree.ini`, one `.mesh` per LOD and the DDS textures. The byte layout is in `core/treefx.py`. It was re-implemented from Content Manager's tree converter, which is the reference writer.
+
+### Grass FX (`core/grass.py`, `core/grassfx.py`)
+
+Where the region has a vegetation map for the ground (TASVEG in Tasmania), the terrain is split into ground classes, each a material with its own procedural ground texture (`textures.GROUND_COVERS`, 512 px DXT1), and Grass FX gets a configuration per class, assigned by material. That's how most of CSP's shipped track configs vary their grass, and it works on CSP 0.2.11. The ground's colour changes by class even where no grass is drawn, and Grass FX takes each blade's colour from the ground under it. Pasture and towns stay as they are without the pack.
+
+| Class | TASVEG codes | Material | Grass FX |
+|---|---|---|---|
+| Mown verge (the 2 m strip; and one-lane gravel's grass strip) | | `grass` (`gravel_narrow`) | A |
+| Short herbland: saltmarsh, sphagnum, cushion moor | `AUS`, `ASS`, `ASP`, `HCM` | `terrain_short` | A |
+| Pasture and towns, and a gap in the map | `FAL`, `FAC`, `FUM`, `FUR` (and other `F**`) | `terrain` (today's, `ground`) | base `[GRASS_FX]`: CSP's defaults |
+| Native tussock grassland | `GPL`, `GPH`, `GTL`, `GCL`, `GSL`, `GHC`, `GRP`, `FMG`, `MGH` (and other `G**`) | `terrain_tussock` | B |
+| Grassy dry woodland | `DVG`, `DMW`, `DGW` | `terrain_woodland` | B at 0.5 |
+| Buttongrass moorland, sedgeland, alpine | `MB*`, `MDS`, `MRR`, `MSW`, `HSE`, `HSW`, `HHE`, `HHW`, `HCH`, `HUE` (and other `M**`, `H**`) | `terrain_moor` | C |
+| Wetland | `ASF`, `ARS`, `AWU`, `FSM`, `AHF`, `AHL`, `AHS` (and other `A**`) | `terrain_wet` | C, on its own darker ground |
+| Bracken | `FPF` | `terrain_bracken` | D |
+| Regrowth, weeds, easements | `FRG`, `FWU`, `FPE` | `terrain_rough` | D at 0.6 |
+| Forest, plantation, scrub | other `D**`, `W**`, `R**`, `N**`, `S**`; `FPS`, `FPH`, `FPU` | `terrain_forest`; beyond 250 m, `terrain_canopy` | none |
+| Bare | `OSM`, `ORO`, `AAP`, `OAQ` | `terrain_bare` | none |
+
+- **Why these:** CSP allows four configurations besides the base ("only up to a D config is possible atm"), so wetland shares C with moorland, and its ground tells them apart. Wet forest, rainforest, plantations and scrub grow none; grassy dry woodland grows sparse tussock.
+- **Far forest:** forest more than 250 m from the road (`grass.CANOPY_FROM_M`, where made-up trees thin to their far bands) is a dark canopy green instead of leaf litter, dithered over 60 m, so far hills don't read as bare brown.
+- **Pasture and towns give way** (in game, 9 Nov 2026): they looked almost as without the pack, yet that's where it cost frame rate (Grasstree Hill 5.4% slower, worst on pasture). Their ground was greener, so CSP's colour mask grew grass on about 86% of it against today's 36% (by a proxy of the mask, whose formula isn't published), at `SHAPE_SIZE = 2` with a 5% chance of tussock pieces. Now they're today's `terrain` with CSP's default grass, and towns (`FUR`) are with them.
+- **Class edges are dithered:** a triangle takes the class of a point up to 6 m from its centre (`grass.EDGE_DITHER_M`; further out, more with the lattice, up to 30 m), in a direction fixed by where it is. On the axis-aligned lattice a mapped block's edge otherwise stepped into straight lines: a 0.65 ha blue gum patch (`DGL`) beside the road at Grasstree Hill's 11.5 km showed as a brown rectangle on the paddock.
+- **No rows:** each class's texture (pasture's aside) repeats every 16 m, with patches small beside the repeat, and where grass grows its texture coordinates are warped by up to 4 m in long, smooth waves of world position (`mesh.warped_uv`). With one big patch every 8 m, the repeat lined tussocks up in faint rows across Lyell Highway's moorland plain. The warp is a function of position alone, so meshes of a class meet without a seam. Forest, far canopy and bare ground grow no grass and aren't warped: warped coordinates deflate worse (about 3 MB more in each of Lyell Highway's KN5s if all its ground were).
+- **Without a map** (the mainland so far, or a failed TASVEG read) the terrain is one `terrain` material and Grass FX keeps CSP's defaults: the track is as before.
+
+Keys, all from CSP's Grass FX page (cup.acstuff.club/docs/csp/tracks/grass-fx) and used as in CSP's shipped track configs (acc-extension-config at commit `433c553`):
+
+- `[GRASS_FX]` gains `MASK_BLUR = 2` ("Adjustments will be blurred according to this parameter", 0-3; as `sakina_hill.ini`; it blends configurations across a class's edge, and changes nothing inside pasture), `TEXTURE = grass_fx/mapcreator.dds` and `TEXTURE_GRID = 8, 4` (a track's own atlas, "located next to config file", as `highforce.ini`'s), and for pasture's base configuration only `TEXTURE_BASE_CHANCE = 1` and every `TEXTURE_GROUP_n_CHANCE = 0`: CSP's default shape and its base blades, no pieces.
+- `[GRASS_FX_TEXTURE_GROUP_0]` to `_3` (tussock, buttongrass, rushes and sedges, bracken) list the atlas's pieces as `PIECE_n = column, row[, width, height]`, "columns index start at 1, but rows index start at 0", with `PIECE_n_CHANCE` and `PIECE_n_WIND` where they differ from CSP's defaults.
+- `[GRASS_FX_CONFIGURATION_A]` to `_D` set `SHAPE_SIZE`, `SHAPE_TIDY`, `SHAPE_CUT`, `TRIM_PERIOD` (A: cut every 42 days, two values per key for the start and end of the period), the colour mask (`MASK_*`: B takes in straw, C olive and tan but not dark peat), `TEXTURE_BASE_CHANCE` and all four `TEXTURE_GROUP_n_CHANCE` (those unused as 0: what CSP does with one left out isn't documented). No `SHAPE_SIZE` is under CSP's default of 1, since "Higher size value lowers density": A, the mown verge beside the car, is 1 to 1.3.
+- `[GRASS_FX_ADJUSTMENT_n]` give each configuration (and weight, as `MAP = B, 0.5`) the materials that take it. Numbered, as `sakina_hill.ini`'s are.
+- **Not used:** `TEXTURE_BASE_CHANCE = 0` and `COLOR_SAMPLE_MIP_LEVEL`, which work only from CSP 0.3.0 (0.2.11 is the baseline); `[EXTRA_FX] FORCE_GRASSFX_GBUFFER_PASS`, until tall grass is seen to look see-through against water; keys only seen in shipped configs (`HEIGHT_MULT`, `COLOR_FACTOR`, `EDGE_MULT`, `[GRASS_FX_AREA_n]`). No seasons: heights are fixed.
+- Every number is a starting point, to tune in game with CSP's Grass FX debug app (`docs/known-issues.md`).
+
+The atlas, `extension/grass_fx/mapcreator.dds` (`core/grassfx.py`): 8 x 4 cells of 256 px, 2048 x 1024, DXT5 with 9 mips, 2.8 MB, the same for every track.
+
+| Cells (column from 1, row from 0; size) | Piece | Colour |
+|---|---|---|
+| 1-8, 0 | Base blades: eight clumps of 12-20 | Green only |
+| 1, 1 and 3, 1 (2 x 1) | *Poa* tussock: a fountain of fine arching leaves | Green only |
+| 5, 1 | *Themeda* tuft with rust seed heads | Leaves green only, heads coloured |
+| 6, 1 | Rank grass gone to seed | Green only |
+| 7, 1 (2 x 1) | Bracken fronds | Coloured |
+| 1, 2 and 3, 2 (2 x 1) | Buttongrass hummock: a dense dome of wiry leaves | Green only |
+| 5, 2 (1 x 2) | Buttongrass hummock with flower stalks and buttons | Hummock green only, stalks and buttons coloured |
+| 6, 2 (1 x 2) | Tall rush clump | Green only |
+| 7, 2 (2 x 1) | Bracken, part browned | Coloured |
+| 1, 3 (2 x 1) | Sedge clump | Green only |
+| 3-4, 3 and 7-8, 3 | Spare | |
+
+- **Green only** is how CSP's own base blades are made: red and blue zero, a green shading over alpha, and CSP colours them from the ground. A piece with any red or blue keeps its own colour instead (CSP 0.3.0 changelog: "Customly colorized pieces (if color has red or blue component disabling surface color sync) don't fade to green with distance", so on 0.2.11 they do). In the pieces with coloured heads or stalks, every pixel that's leaf is made green only, so the antialiased edge where a stalk crosses a leaf doesn't keep its own bright green.
+- Blades are tapered strips, drawn at twice the size and scaled down with alpha premultiplied, rooted on each piece's bottom edge as CSP's are, and shaded darker towards the root (CSP's own run from about 205 at the root to 230 at the tip). Each mip level's transparent pixels take their piece's colour (green only where it's synced), so a blade's edge never filters towards black.
+- Our own generator, after the idea of CSP's MIT-licensed `ac-grass-gen`; no code from it is used.
 
 ## AI line (`ai/fast_lane.ai`, version 7)
 
