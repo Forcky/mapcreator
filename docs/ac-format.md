@@ -345,3 +345,57 @@ Built in the mesh stage, visual only, in `FURNITURE_n` meshes and a texture atla
   - One where OSM's `maxspeed` changes between two known values.
   - One near each layout's start (70 m in), where the limit there is known.
   - Unknown or non-km/h limits make no sign. The numerals use Pillow's built-in Aileron font (CC0).
+
+## Closure props (`core/closures.py`)
+
+The objects that close a side road off the stage, after Motorsport Australia's stage-rally rules (2026 Special Stage Rally standing regulations, art. 11.10 "Road Closure Standards"). **Standalone builders, not yet placed on tracks:** placement comes with the side-road stubs.
+
+- **Levels**, by the side road's class:
+  - **major** (trunk to tertiary): course tape at the mouth; barrier boards on yellow trestles across the full width, with a ROAD CLOSED sign in the middle and a slot behind them for a vehicle (its own module builds it); 25 m further in, a second tape and another ROAD CLOSED sign.
+  - **minor** (unclassified, residential, living street, `road`): the tape; one obstacle across the road, barrier boards or big square straw bales; the second tape and sign.
+  - **limited** (permit, forestry, destination): the tape and a sign.
+  - No arrows, chevrons or DETOUR signs (the maintainer's decision).
+- **Layout** (`closures.layout`), in metres from the mainline's edge line:
+
+  | | Tape | Obstacle | Second tape | ROAD CLOSED sign |
+  |---|---|---|---|---|
+  | major, minor | 4 | 12 | 37 | 37.6, behind the second tape; a major closure's boards carry one too |
+  | limited | 4 | | | 12 |
+  | overshoot stub (straight ahead where the route turns) | 4 | 27 | 52 | 52.6 (limited: 27) |
+
+  - MA asks for "a minimum of 25m" between the obstacle and the tape and sign.
+  - A stub under 45 m (60 m on an overshoot stub) has no second tape: the sign goes on the obstacle, in the middle of the boards or raised behind the bales. Under 15 m (30 m) there's no obstacle, only the tape and a lone sign as far in as fits.
+  - Nothing solid stands in an overshoot stub's first 25 m. A lone sign never stands nearer than 6 m (26 m overshooting); where it can't fit, there's only the tape.
+- **The local frame:** origin on the stub's centreline at the mainline's edge line; +z into the stub, +x to the right looking in, +y up; metres.
+  - `closures.closure(level, width, overshoot=, length=, obstacle=, ground=, seed=)` returns each element (`tape`, `obstacle`, `warning`: the second tape and its sign, `sign`: a lone sign) at its distance in, with its visual meshes (one per material) and a collider mesh, plus the vehicle slot.
+  - `width` is the width to close, centred on the centreline: normally the carriageway and its verges. It's a number, or a function of the distance in. `ground(x, z)` gives the cross-section (crown and verge fall) for the feet to stand on.
+  - The frame is left-handed, so `closures.place(kit, pose, frame, index)` maps it onto AC's axes by a mirror and rewinds the triangles. `pose` is the stub's centreline at the mouth (easting, northing, height, heading into the stub), or a function of the distance in, so on a bending or climbing stub each element stands square across the stub at its own distance.
+  - `closures.merge` packs many closures' meshes into a few under the vertex limit, one run per material.
+- **Collision:** no invisible wall in open air (the maintainer's concern).
+  - Each solid prop has its own box collider, exactly its visible extent: a board or sign with its trestles, from the front feet to the back feet; a bale, its own box. Each reaches from 1 m below the lowest ground under it to its top.
+  - The boards or bales abut across the width, so their colliders are the wall: it spans exactly the width, flush with the obstacle's front.
+  - Tape and stakes are visual only: cars break through them. A limited closure's lone sign stops a car only where it stands.
+  - Colliders are `1WALL_CLOSURE_*`: invisible, solid by the name, four sides and a top per box, wound outwards.
+- **Sizes and colours** (the code marks the guesses):
+  - Tape: 75 mm, red diagonal stripes on white (MA's Tape A), tied 1.0 m up on star pickets 0.3 m beyond the width and sagging up to 0.15 m, with an A4 warning tag.
+  - Barrier boards: up to 2.5 m long, cut equal to fill the width; 0.2 m deep, centred 1.0 m up; yellow and black stripes at 45 degrees on both faces, 0.1 m wide, mirrored either side of the middle and falling towards it. AS 1742.3's rule for the direction is paywalled; the US MUTCD (2009, section 6F.68) asks for stripes falling towards the middle "where no turns are intended" (`STRIPES_FALL_TO_MIDDLE`).
+  - Trestles: yellow (the NSW roads authority's G10 specification), A-frames of two flat legs with their feet 0.3 m either side of the board.
+  - ROAD CLOSED: AS 1742.3's T2-4, 1800 x 300 mm, black on white, double-sided so it reads from the stage.
+  - Straw bales: big squares, 0.9 m high, 1.2 m deep, up to 2.4 m long, twines along the top and down the ends.
+- **Two materials on one atlas** (`closures.atlas`: 1024 x 512, 0.35 MB as DXT1 with mips):
+  - `closure`: trestles, stakes, bales, edges and the tag;
+  - `closure_retro`: the boards' and signs' faces and the tape. At night it gets the furniture boards' boost (ksDiffuse 2, a `[MATERIAL_ADJUSTMENT_n]` as above): the track stage's `NIGHT_DIFFUSE` includes it.
+  - The tape, the stripes and the straw are bands the atlas's full width, so their texture coordinates run on past 1 and wrap.
+  - Every texture is drawn by our own code; the legend uses Pillow's built-in Aileron font (CC0), as the speed signs do.
+- **Budgets:** every element and level is held to `closures.BUDGET` at any width up to 14 m. The vehicle isn't counted.
+
+  | Closure, 8 m wide (14 m) | Vertices | Triangles | Collider vertices |
+  |---|---|---|---|
+  | major | 504 (784) | 280 (420) | 120 (160) |
+  | minor, boards | 548 (700) | 302 (378) | 100 (140) |
+  | minor, bales | 292 (316) | 174 (186) | 100 (140) |
+  | limited | 160 | 94 | 20 |
+
+  Per element: the tape 76 vertices, the second tape and its sign 160, a lone sign 84.
+- **Names when placed:** visual meshes `CLOSURE_*`, colliders `1WALL_CLOSURE_*`. Validation doesn't know them yet.
+- **To look at them:** `python scripts/closure_preview.py OUT_DIR` renders each case from the mainline (its colliders drawn in red) and writes a small test track, `mapcreator_closures`, to install with the harness. **To confirm in game:** the look by day and at night, and how the colliders feel.

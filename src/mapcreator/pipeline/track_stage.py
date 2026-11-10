@@ -12,7 +12,7 @@ import numpy as np
 
 from mapcreator import __version__, buildinfo
 from mapcreator.config import Settings
-from mapcreator.core import ai_line, furniture, grass, grassfx, kn5, package, textures, treefx, validate
+from mapcreator.core import ai_line, closures, furniture, grass, grassfx, kn5, package, textures, treefx, validate
 from mapcreator.core.layout import AI_END_SHORT_M, Layout, RoadModel, finish_distance, layouts_for, logic_dummies
 from mapcreator.core.scene import Scene
 from mapcreator.job import Job
@@ -37,6 +37,8 @@ MATERIAL_PROPS = {
     "power": {"ksAmbient": 0.4, "ksDiffuse": 0.55, "ksSpecular": 0.25, "ksSpecularEXP": 25.0},
 }
 ALPHA_REF = 0.5
+# Retroreflective materials and their ksDiffuse at night: the furniture's and the closure props'.
+NIGHT_DIFFUSE = {**furniture.NIGHT_DIFFUSE, **closures.NIGHT_DIFFUSE}
 
 
 PREVIEW_REACH_M = 1500.0
@@ -278,8 +280,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         water_materials=["water"] if "water" in mat_index else [], water_type=water_type or "LAKE",
         tree_list=tree_list[0] if tree_list else None,
         tree_surfaces=[*ground, "grass"] if "grass" in mat_index else ground,
-        retro_materials={m.name: (furniture.NIGHT_DIFFUSE[m.name], m.properties["ksDiffuse"])
-                         for m in mats if m.name in furniture.NIGHT_DIFFUSE}),
+        retro_materials={m.name: (NIGHT_DIFFUSE[m.name], m.properties["ksDiffuse"])
+                         for m in mats if m.name in NIGHT_DIFFUSE}),
         encoding="ascii")
     _write_centreline(track_dir, job, c, sec, region, lonlat, attributions)
 
