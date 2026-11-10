@@ -65,6 +65,9 @@ class AiLine:
     station: np.ndarray | None = None  # metres along the centreline
     offset: np.ndarray | None = None  # metres left of the centreline (+) or right (-)
     centre_radius: np.ndarray | None = None  # the centreline's radius there, as extra field 4 is the line's
+    # Each early apex the line keeps room for (`_racing`), as (start, end, least radius, short of room) in metres
+    # along the line; short where the road couldn't give EXIT_CLEARANCE_M, which then gets a hint (`exit_hints`).
+    exits: list[tuple[float, float, float, bool]] | None = None
 
 
 def radius_of(curvature: np.ndarray, step: float = PROFILE_M) -> np.ndarray:
@@ -343,11 +346,112 @@ def bend_hints(line: AiLine, banking: np.ndarray | None = None) -> list[BendHint
     return out
 
 
+def exit_hints(line: AiLine) -> list[BendHint]:
+    """A hint at each early apex where the road was too narrow for the exit clearance (`AiLine.exits`): 1 over
+    EXIT_OVERSPEED, rounded down, over the stretch, so the AI comes into the bend at about its corner speed and has
+    no overspeed to shed there. Distances are metres along the line, as `bend_hints`'."""
+    pace = math.floor(100 / EXIT_OVERSPEED) / 100
+    return [BendHint(start=a, end=b, pace=pace, at=a, radius_m=r, crest_radius_m=math.inf, descent=0.0, banking=0.0,
+                     ai_kmh=math.sqrt(BEND_GRIP * G * r) * 3.6 * EXIT_OVERSPEED,
+                     road_kmh=math.sqrt(BEND_GRIP * G * r) * 3.6)
+            for a, b, r, short in (line.exits or []) if short]
+
+
 def road_banking(road: RoadModel, line: AiLine) -> np.ndarray:
     """The road's banking beside each point of the line, as its rise to the left per metre (- to the right): the
     superelevation, half the difference of its two falls, so the crown doesn't count. The crown falls into a bend
     on its inside half and away from it on its outside half, and the AI and a car beside it use both."""
     return (np.interp(line.station, road.d, road.slope_right) - np.interp(line.station, road.d, road.slope_left)) / 2
+
+
+# Exit clearance. In game (10 Nov) AC's AI came into three of Lyell Highway reverse's bends, at 18.5, 24.4 and
+# 27.25 km, 13-17% over the line's corner speed, and slid up to 2.9 m outside the line while it shed that speed.
+# Where the line leaves room for that, it's harmless: at 18.5 km the line runs on the inside of the bend, 4.05 m
+# from the outside edge, and all 26 passes stayed on. At 27.25 km it apexed early: it crossed to the outside half
+# 10 m into the bend's tight part (68-73 m for 90 m, down 4-5%) and kept 2.0-2.5 m from the edge through it, and
+# 18 of the 22 cars that got there left the road at its outside. So where the line apexes early like that, it
+# keeps room for the slide instead: a later apex.
+EXIT_TIGHT = 1.1  # a bend's tight part: its radius within this share of its least
+EXIT_OPEN = 1.5  # the bend has opened where its radius is past this share of its least
+EXIT_HOLD_M = 50.0  # an early apex: the line on the outside half for at least this much of the tight part
+EXIT_AFTER_M = 30.0  # the room is kept this far past the tight part, unless the bend opens first
+EXIT_DRIFT_M = 3.0  # the most the cars slid outside the line on the road (2.9 m at 18.5 and at 27.25 km)
+CAR_HALF_WIDTH_M = 0.85  # half an Abarth 500 (1.7 m, as racing_line.EDGE_MARGIN_M is set for)
+EXIT_CLEARANCE_M = EXIT_DRIFT_M + CAR_HALF_WIDTH_M  # from the line to the outside edge
+EXIT_EASE_M = 20.0  # the room is kept from this far before the stretch to this far after, so the line eases over
+EXIT_SHORT_TOL_M = 0.1  # where the road can't give the room to within this, the bend gets a hint instead
+# What the AI came in at, over the line's corner speed; a hint of 1 over this takes the overspeed away.
+EXIT_OVERSPEED = 1.15
+
+
+@dataclass(frozen=True)
+class ExitStretch:
+    """Where the line apexes early on a descent and the AI's slide out of the bend needs EXIT_CLEARANCE_M of room
+    from the outside edge (`exit_stretches`). Distances are metres along the line."""
+
+    start: float  # the bend's tight part...
+    end: float  # ...to EXIT_AFTER_M past it, or where the bend opens
+    left: bool  # a left-hander: the room is kept from the right edge
+    room: float  # the least room the line leaves from the outside edge there
+    radius_m: float  # the bend's least radius
+
+
+def exit_stretches(s: np.ndarray, radius: np.ndarray, turn: np.ndarray, grade: np.ndarray, side_left: np.ndarray,
+                   side_right: np.ndarray) -> list[ExitStretch]:
+    """The bends where the line apexes early, every PROFILE_M of distances `s` along it, from its radius, turn,
+    grade and distances to the left and right edges (as fast_lane.ai holds them, so the validator finds them from
+    the file). A bend is a stretch of radius up to BEND_MAX_RADIUS_M; its tight part is where the radius is within
+    EXIT_TIGHT of its least. The line apexes early where it starts the tight part on the inside half and holds the
+    outside half for EXIT_HOLD_M or more of it, the road descends there on average, and the AI's corner speed at the
+    least radius is over racing_line.MARGIN_SLOW_KMH: slower, it keeps close to the line. Each stretch runs from the
+    tight part's start to EXIT_AFTER_M past its end, or to where the bend opens past EXIT_OPEN of its least radius,
+    whichever comes first; `room` is the least the line leaves from the outside edge over it."""
+    out = []
+    if len(s) < 3:
+        return out
+    r = uniform_filter1d(np.asarray(radius, dtype=float), 5, mode="nearest")
+    middle = (side_right - side_left) / 2  # the line's offset from the road's middle, + left
+    bend = np.r_[False, r <= BEND_MAX_RADIUS_M, False].astype(np.int8)
+    for i0, i1 in zip(np.flatnonzero(np.diff(bend) == 1), np.flatnonzero(np.diff(bend) == -1)):
+        least = float(r[i0:i1].min())
+        if math.sqrt(BEND_GRIP * G * least) * 3.6 <= racing_line.MARGIN_SLOW_KMH:
+            continue
+        tight = np.flatnonzero(r[i0:i1] <= EXIT_TIGHT * least) + i0
+        t0, t1 = int(tight[0]), int(tight[-1])
+        left = bool(np.median(turn[t0:t1 + 1]) > 0)
+        outward = -middle if left else middle  # + toward the bend's outside
+        later = np.flatnonzero(outward[t0:t1 + 1] > 0)
+        if outward[t0] >= 0 or not len(later) or s[t1] - s[t0 + later[0]] < EXIT_HOLD_M:
+            continue
+        if np.mean(grade[t0:t1 + 1]) >= 0:
+            continue
+        end = t1
+        while end + 1 < len(s) and s[end + 1] - s[t1] <= EXIT_AFTER_M and r[end + 1] <= EXIT_OPEN * least:
+            end += 1
+        room = side_right if left else side_left
+        out.append(ExitStretch(start=float(s[t0]), end=float(s[end]), left=left,
+                               room=float(np.min(room[t0:end + 1])), radius_m=least))
+    return out
+
+
+def _exit_clearance(road: RoadModel, traced: "_Traced"):
+    """The traced line's early apexes (`exit_stretches`) short of EXIT_CLEARANCE_M, each with the stations along the
+    road it spans, and the room to keep from each edge of the road for them, per sample of the road:
+    EXIT_CLEARANCE_M from the outside edge over each stretch and EXIT_EASE_M either side of it, 0 elsewhere."""
+    a = np.interp(traced.arc_p, traced.arc_fine, traced.a_fine)
+    side_left = np.interp(traced.d_p, road.d, road.half_left) - a
+    side_right = np.interp(traced.d_p, road.d, road.half_right) + a
+    found = []
+    clear_left, clear_right = np.zeros(len(road.d)), np.zeros(len(road.d))
+    for x in exit_stretches(traced.arc_p, radius_of(traced.curv_p), np.sign(traced.curv_p), traced.grade_p,
+                            side_left, side_right):
+        if x.room >= EXIT_CLEARANCE_M:
+            continue
+        d0, d1 = (float(v) for v in np.interp([x.start, x.end], traced.arc_p, traced.d_p))
+        span = (road.d >= d0 - EXIT_EASE_M) & (road.d <= d1 + EXIT_EASE_M)
+        (clear_right if x.left else clear_left)[span] = EXIT_CLEARANCE_M
+        found.append((x, d0, d1))
+    return found, (clear_left, clear_right)
 
 
 class _Traced:
@@ -416,12 +520,15 @@ MARGIN_TOL_M = 0.05
 
 
 def _racing(road: RoadModel, centre: CubicSpline, first: float, last: float) -> _Traced:
-    """The racing line, traced, with each edge margin suited to the line's own planned speed."""
-    def solve(margin, start=None):
+    """The racing line, traced, with each edge margin suited to the line's own planned speed, and room from the
+    outside edge where it would apex early (`exit_stretches`): solved once more with that room kept. Each such
+    stretch is kept on the traced line (`exits`), marked short where the road was too narrow to give the room, for
+    a hint there (`exit_hints`)."""
+    def solve(margin, start=None, clearance=None):
         return racing_line.offsets(road.d, road.e, road.n, road.heading, road.curvature, road.half_left,
                                    road.half_right, hold_until=racing_line.HOLD_START_M,
                                    hold_from=finish_distance(road.length) - racing_line.HOLD_BEFORE_FINISH_M,
-                                   margin=margin, start=start)
+                                   margin=margin, start=start, clearance=clearance)
 
     def margins(traced: _Traced) -> np.ndarray:
         return np.interp(road.d, traced.d_p, racing_line.edge_margin(traced.margin_speeds()))
@@ -437,6 +544,22 @@ def _racing(road: RoadModel, centre: CubicSpline, first: float, last: float) -> 
             break
         margin = want if i < MARGIN_ROUNDS - 1 else np.maximum(margin, want)
         traced = _Traced(road, centre, solve(margin, traced.off), first, last)
+    traced.exits = []
+    if traced.lateral is None:
+        return traced
+    found, clearance = _exit_clearance(road, traced)
+    if found:
+        # The stretches are kept as found on the line before the room: on the line with it, there's no early apex.
+        traced = _Traced(road, centre, solve(margin, traced.off, clearance), first, last)
+        a = np.interp(traced.arc_p, traced.arc_fine, traced.a_fine)
+        room_left = np.interp(traced.d_p, road.d, road.half_left) - a
+        room_right = np.interp(traced.d_p, road.d, road.half_right) + a
+        traced.exits = []
+        for x, d0, d1 in found:
+            span = np.flatnonzero((traced.d_p >= d0) & (traced.d_p <= d1))
+            room = (room_right if x.left else room_left)[span]
+            short = bool(room.min() < EXIT_CLEARANCE_M - EXIT_SHORT_TOL_M)
+            traced.exits.append((float(traced.arc_p[span[0]]), float(traced.arc_p[span[-1]]), x.radius_m, short))
     return traced
 
 
@@ -490,8 +613,11 @@ def build(road: RoadModel, frame: LocalFrame, step: float = AI_POINT_SPACING_M, 
     extra[:, 13:16] = fwd
     extra[:, 17] = grade
     road_step = float(np.median(np.diff(road.d))) if len(road.d) > 1 else 1.0
+    # The early apexes kept room for, from metres along the traced line to metres along the points written.
+    exits = [(float(np.interp(a0, arc, cumulative)), float(np.interp(a1, arc, cumulative)), r, short)
+             for a0, a1, r, short in getattr(line, "exits", [])]
     return AiLine(pos=pos, length=cumulative, extra=extra, station=d, offset=a,
-                  centre_radius=tightest_near(d, road.d, radius_of(road.curvature, road_step)))
+                  centre_radius=tightest_near(d, road.d, radius_of(road.curvature, road_step)), exits=exits)
 
 
 def tightest_near(points: np.ndarray, grid: np.ndarray, values: np.ndarray) -> np.ndarray:

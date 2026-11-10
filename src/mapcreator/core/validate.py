@@ -268,6 +268,35 @@ def bend_hint_checks(rep: Report, label: str, line: ai_line.AiLine, road: RoadSu
             f"radius); {hint}")
 
 
+def exit_clearance_checks(rep: Report, label: str, line: ai_line.AiLine, hints_ini: Path) -> None:
+    """A warning, never a failure, wherever the line apexes early on a descent (`ai_line.exit_stretches`) and leaves
+    less than ai_line.EXIT_CLEARANCE_M from the outside edge for the AI's slide out of the bend: the track stage
+    keeps that room, so a line written by it shows none unless the road was too narrow, and then it says what hint
+    `data/ai_hints.ini` holds there. Found from the AI file every metre: its radius, turn, grade and side distances."""
+    s0 = np.asarray(line.length, dtype=float)
+    if len(s0) < 3:
+        return
+    s = np.append(np.arange(0.0, s0[-1], ai_line.PROFILE_M), s0[-1])
+
+    def at(k):
+        return np.interp(s, s0, line.extra[:, k])
+
+    found = [x for x in ai_line.exit_stretches(s, np.maximum(at(4), 1.0), np.sign(at(8)), at(17), at(5), at(6))
+             if x.room < ai_line.EXIT_CLEARANCE_M - ai_line.EXIT_SHORT_TOL_M]
+    if not found:
+        rep.passed.append(f"{label}: no early apex short of {ai_line.EXIT_CLEARANCE_M:g} m from the outside edge")
+        return
+    written = _hint_ranges(hints_ini)
+    total = max(float(s0[-1]), 1.0)
+    for x in found:
+        over = [v for a, b, v in written if a * total < x.end and b * total > x.start]
+        hint = f"a hint of {min(over):g} is written there" if over else "no hint is written there"
+        rep.warnings.append(
+            f"{label}: the line apexes early in the {x.radius_m:.0f} m bend at {x.start:.0f}-{x.end:.0f} m along it, "
+            f"on a descent, and leaves {x.room:.1f} m from the outside edge, where the AI's slide out of it needs "
+            f"{ai_line.EXIT_CLEARANCE_M:g} m; {hint}")
+
+
 BANKING_INSET_M = 0.25  # the banking is read this far inside each road edge, to be sure of hitting the road
 
 
@@ -467,6 +496,7 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
     racing_line_checks(rep, label, line, road, middle_radius)
     vertical_checks(rep, label, line)
     bend_hint_checks(rep, label, line, road, ai_path.parents[1] / "data" / "ai_hints.ini")
+    exit_clearance_checks(rep, label, line, ai_path.parents[1] / "data" / "ai_hints.ini")
     for name in sorted(n for n in dummies if re.fullmatch(r"AC_START_\d+", n)):
         # The AI line's own direction where the car stands: a chord from the line's start would cut across
         # a hairpin there and fail a spawn that faces exactly the right way.

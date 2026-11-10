@@ -34,6 +34,8 @@ Where this differs from the paper:
   the line, so the caller solves, works out the speeds and the margins, and solves again (`ai_line.build`).
 - On the inside of a tight bend the line stays within `INSIDE_FRACTION` of the bend's radius of the
   centreline, so its points never cross the bend's centre.
+- Where the AI slides wide out of a bend, the caller can ask for more room from one edge than the margin
+  (`clearance`, from `ai_line.exit_clearance`), past the centreline if need be: a later apex.
 - It needs no QP library. The curvature limits go into an augmented Lagrangian (multipliers updated
   between rounds), and each round is minimised within the bounds by a projected Newton method (`_newton`)
   on a banded, five-wide Hessian: each step is one banded Cholesky solve, so a long road costs little more
@@ -110,12 +112,19 @@ def _smoothstep(x: np.ndarray) -> np.ndarray:
 
 def bounds(s: np.ndarray, half_left: np.ndarray, half_right: np.ndarray, curvature: np.ndarray,
            hold_until: float, hold_from: float, step: float,
-           margin: np.ndarray | float = EDGE_MARGIN_M) -> tuple[np.ndarray, np.ndarray]:
+           margin: np.ndarray | float = EDGE_MARGIN_M,
+           clearance: tuple[np.ndarray, np.ndarray] | None = None) -> tuple[np.ndarray, np.ndarray]:
     """(lo, hi) for n at each station: the road's edges less `margin` (never past the centreline: a road too
     narrow for it keeps the line in the middle), never past INSIDE_FRACTION of a bend's radius on its inside,
-    and 0 (the centreline) before `hold_until` and after `hold_from`."""
+    and 0 (the centreline) before `hold_until` and after `hold_from`. `clearance`, the room to keep from the
+    left and the right edge at each station (0 for none), may hold the line past the centreline, on the other
+    side; where the road is too narrow for it and the margin on that other side too, the margin holds."""
     hi = np.maximum(half_left - margin, 0.0)
     lo = -np.maximum(half_right - margin, 0.0)
+    if clearance is not None:
+        clear_left, clear_right = clearance
+        hi = np.where(clear_left > 0, np.maximum(np.minimum(hi, half_left - clear_left), lo), hi)
+        lo = np.where(clear_right > 0, np.minimum(np.maximum(lo, clear_right - half_right), hi), lo)
     k = np.abs(curvature)
     inside = INSIDE_FRACTION / np.maximum(k, 1e-9)
     hi = np.where(curvature > 0, np.minimum(hi, inside), hi)
@@ -271,14 +280,16 @@ def _newton(problem: _Round, lo, hi, x0) -> tuple[np.ndarray, int]:
 def offsets(d: np.ndarray, e: np.ndarray, n: np.ndarray, heading: np.ndarray, curvature: np.ndarray,
             half_left: np.ndarray, half_right: np.ndarray, *, hold_until: float, hold_from: float,
             step: float = STEP_M, margin: np.ndarray | float = EDGE_MARGIN_M,
-            start: Offsets | None = None) -> Offsets:
+            start: Offsets | None = None,
+            clearance: tuple[np.ndarray, np.ndarray] | None = None) -> Offsets:
     """The minimum-curvature line's offsets at stations `step` apart, for a road sampled at distances `d`.
 
     `hold_until` and `hold_from` (metres along the road) bound the stretch the line may leave the centreline;
     outside it the offset is 0. `margin` is the room kept from each edge, one value or one per sample of the
     road (`edge_margin` of the planned speed there). `start`, a line already found at the same stations, is
     where the solve begins, with its multipliers: a re-solve after the margins change then takes far fewer
-    steps (Grasstree Hill: 180 for the first solve, then 49 and 19).
+    steps (Grasstree Hill: 180 for the first solve, then 49 and 19). `clearance` is the room to keep from the
+    left and the right edge, one value per sample of the road each, past the centreline if need be (`bounds`).
     """
     s = np.arange(d[0], d[-1] + 1e-9, step)
     if len(s) < 5:
@@ -292,7 +303,8 @@ def offsets(d: np.ndarray, e: np.ndarray, n: np.ndarray, heading: np.ndarray, cu
     p = np.column_stack([f(e) - e[0], f(n) - n[0]])  # near the origin, for precision
     nrm = np.column_stack([-np.sin(h), np.cos(h)])
     room = f(np.broadcast_to(np.asarray(margin, dtype=float), np.shape(d)))
-    lo, hi = bounds(s, f(half_left), f(half_right), f(curvature), hold_until, hold_from, step, room)
+    clear = None if clearance is None else (f(clearance[0]), f(clearance[1]))
+    lo, hi = bounds(s, f(half_left), f(half_right), f(curvature), hold_until, hold_from, step, room, clear)
     # The centreline's own curvature, measured as the line's is: the limit is its tightest nearby.
     centre = np.abs(_menger(p))
     limit = np.maximum(maximum_filter1d(centre, 2 * max(int(round(LIMIT_NEAR_M / step)), 1) + 1, mode="nearest"),

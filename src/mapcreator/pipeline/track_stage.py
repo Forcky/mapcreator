@@ -215,8 +215,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         # the road allows (a crest, a steep descent, no banking: #63), then ramped down over the run-off after the
         # finish, to all but stopped where its line ends. The hints are fractions of the racing line's own length,
         # which is shorter than the road's. A sealed track with no such bend gets the run-off ramp alone, as before.
-        # The bends are found from the line as written, as the validator reads it back.
+        # The bends are found from the line as written, as the validator reads it back. Where the line apexes early
+        # and the road is too narrow for the room the AI's slide out of the bend needs, the bend gets a hint too.
         bends = ai_line.bend_hints(ai_line.read(layout_dir / "ai" / "fast_lane.ai"), ai_line.road_banking(road, line))
+        bends += ai_line.exit_hints(line)
         hints = ai_line.pace_hints(road.length, finish_distance(road.length), line=line, bends=bends,
                                    unsealed=unsealed_runs(c["s"], unsealed, reverse=lay.reverse))
         _write_text(data / "ai_hints.ini", package.ai_hints_ini(hints), encoding="ascii")
@@ -251,6 +253,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             "road_tightest_radius_m": round(float(bend_r.min()), 1),
             # Each risky bend's hint: metres along the AI line where its full pace holds, and the pace.
             "bend_hints": [[round(b.start), round(b.end), b.pace] for b in bends],
+            # Each early apex the line keeps room from the outside edge for: metres along the AI line, and whether
+            # the road was too narrow for it (then it's hinted above).
+            "exit_clearance": [[round(a), round(b), short] for a, b, _, short in line.exits or []],
         }
 
     power_geo = work.root / scenery_stage.STAGE / "power.geojson"
