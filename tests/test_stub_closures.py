@@ -218,7 +218,7 @@ def test_merged_meshes_carry_the_validator_s_names_under_the_vertex_limit():
     assert set(p.materials) == {"closure", "closure_retro", *police_car.material_names("tas").values()}
     assert p.stats["by_level"] == {"limited": 1, "major": 1, "minor (bales)": 1}
     body = p.materials["police_tas"]
-    assert body.properties["ksSpecular"] == police_car.SILVER_PROPS["ksSpecular"]
+    assert body.properties["ksSpecular"] == police_car.PAINT_PROPS["ksSpecular"]
     assert body.night_diffuse == police_car.NIGHT_DIFFUSE_BY_PART["body"]
     assert set(p.textures) == {closures.TEXTURE, "police_tas"}
 
