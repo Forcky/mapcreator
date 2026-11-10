@@ -15,7 +15,8 @@ section   03_section   sealed or unsealed (OSM surface, short runs merged), widt
                        width), crown; the side roads' stubs, planned (stubs.json)
 mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, the side roads' 100 m stubs joined to the road by
                        their flares, adaptive terrain corridor (in ground classes from TASVEG in Tasmania, for Grass
-                       FX), guard rails and furniture (none in side roads' mouths), AC dummies
+                       FX), guard rails and furniture (none in side roads' mouths), each stub's closure and police cars
+                       at some major ones (closures.json), AC dummies
 scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), typed by TASVEG in Tasmania, trunk colliders, buildings from footprints (none on a side road's first 100 m or its stub)
 track     05_track     numpy KN5 writer (timing gates clear of side roads' mouths), DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,
                        centreline.geojson (ODbL), the zip
@@ -45,8 +46,8 @@ Geofabrik extract (.osm.pbf) ──build once (pyosmium)──▶ index (SQLite)
 ```
 src/mapcreator/
   core/        centreline, profile, section, mesh, scene, scenery, sprites, textures, roadside, kn5, ai_line,
-               layout, package, validate, grass, grassfx, junctions and stubs (data-agnostic: arrays and geometry
-               in, meshes and files out)
+               layout, package, validate, grass, grassfx, junctions, stubs, closures, police_car and stub_closures
+               (data-agnostic: arrays and geometry in, meshes and files out)
   providers/   one package per source; each declares its licence and attribution
                base, raster (windowed reads and tile cache)
                tas_list/: 2 m DEM, canopy height model, building footprints (Tasmania)

@@ -166,13 +166,13 @@ In Tasmania the terrain is split into ground classes from TASVEG, each with its 
 
 ## Side-road junctions
 
-The route stage finds the real side roads that meet the route; each gets its first 100 m drawn as road, joined to the mainline by a corner flare either side, and nothing stands in its mouth or on its stub (`docs/ac-format.md`, "Side-road junctions" and "Side roads' stubs"). The closures (tape, an obstacle, the vehicle) come next and stand on the stubs.
+The route stage finds the real side roads that meet the route; each gets its first 100 m drawn as road, joined to the mainline by a corner flare either side, and nothing stands in its mouth or on its stub (`docs/ac-format.md`, "Side-road junctions" and "Side roads' stubs"). Each stub is closed off the stage, with police cars at some of the major closures ("Closures on the stubs").
 
 - **To check in game** (Grasstree Hill, Brinktop Road, and an acute junction):
   - **the seams:** drive slowly across each mouth, on and off the edge, along the mainline's edge across the mouth, across the stub's first full row (about 8-30 m in) and along each flare's verge. No bump, no gap to fall through, no ground showing through the asphalt, no flicker where two surfaces meet. Grasstree Hill: Sugarloaf Road (1.34 km, right), the unnamed gravel road at 5.51 km (right, 54°: a long flare on its acute side, closing round a grass gore), Back Tea Tree Road (9.50 km, left, 76°) and Cold Blow Road (12.48 km, left, gravel); Brinktop Road: the Franklin and Edward Street crossroads (0.18 km), Bridge Street (0.50 km, right), Parramore Street (0.84 km, right);
   - **the edge lines** break across each mouth, from one flare's tangent point to the other's, and taper back over a metre either side; the throat is plain asphalt (or loose gravel), and the stub has its own lines from its first full row;
   - **the terrain at the mouths:** the ground meets the flares' verges and the stubs' skirts without a step or a cliff, and a stub climbing or falling away from the road (Sugarloaf Road drops about 12%) reads as a road, not a ramp;
-  - **driving into a stub:** a car that runs wide can turn in on the flare and drive the stub to its end, where the asphalt stops square and the side road carries on as ground. The closures will stop it 12 m in; whether the stub's end shows past them is to judge then;
+  - **driving into a stub:** a car that runs wide can turn in on the flare and drive the stub to its end, where the asphalt stops square and the side road carries on as ground. Only straw bales and police cars stop it now (below); whether the stub's end shows past the closures is to judge;
   - the timing gates: only Brinktop Road's start gate moves, 0.5 m back, clear of Percy Street's flare;
   - as before: nothing stands in a side road's mouth or on its stub, the guide posts either side of a mouth read naturally, and a rail ending at a mouth doesn't look cut off.
 - **Flares are 8 m corners,** the route's own corner radius, and longer on the acute side. Real rural Tasmanian junctions may be wider (heavy vehicles) or tighter (minor roads). The mouth's margin (5 m either side of the flares) and the 3 m band are as before.
@@ -200,6 +200,28 @@ The route stage finds the real side roads that meet the route; each gets its fir
   - The stubs' rows are a metre apart for their first 20 m and 2 m beyond: about 40% fewer stub vertices than 1 m rows all the way (Grasstree Hill: 4,800 against 7,500 with ground classes, 7,000 against 11,600 without).
   - Further savings if it's too heavy: rows 4 m apart past 40 m (the stubs are nearly straight out there), no skirt on the stubs (the terrain fills to their verges), or 60 m stubs on dense town roads.
   - Frame rate: the stubs add a few meshes per 400 m (packed by material), and fewer vertices than the trees do. To measure with the harness's `probe-points` at Olinda (about 6.8 km on Mount Dandenong Tourist Road) against a `junctions: none` build.
+- **The closures and police cars** (`core/stub_closures.py`), to check in game, by day and at night (CSP, headlights on):
+  - **looks:** the tape across each mouth, spanning the throat where the flares widen it; the boards or bales a metre onto each verge; the second tape and sign behind; on a skewed junction the whole closure further in, its tape at least 3.5 m from the edge. At night the boards, signs and tape glint like the reflectors from 25 m and more without burning out at 8-12 m (`closure_retro` 1.3), and the cars don't wash out (their own night values, `ac-format.md`, "Police cars");
+  - **a major closure at 20 and 60 km/h:** the car passes the tape and the boards (passable) and stops at the police car behind them, at its body;
+  - **bales:** at 20 and 60 km/h the car stops at the straw, and doesn't slip through a 6 cm gap or glance off round the end onto the flare;
+  - **the overshoot stub:** Gunning Street (Brinktop Road, 0.44 km, left), straight ahead where the route turns about 107 degrees: nothing solid before 27 m;
+  - **the AI:** it never leaves its line, so it never meets a closure; check it drives Brinktop Road and Mount Dandenong Tourist Road as before;
+  - **frame rate:** at Olinda (Mount Dandenong Tourist Road, about 6.8 km), against a `junctions: none` build. The closure props cost nothing measurable on their check track (164 fps facing a major closure against 160), nor 16 cars on theirs.
+- **Which majors get a car** is a greedy pick: biggest road first, then no other within 2 km. Mount Dandenong Tourist Road's 13 major closures get 5 cars, not the cap's 6: the 2 km rule leaves no room for a sixth. The other majors keep their boards and their empty slot.
+- **A closure moves in on a skewed junction** (61 of Mount Dandenong Tourist Road's 66), so its tape keeps 3.5 m from the edge. On the shallowest junctions (under about 35 degrees off the road) that's 18-26 m in, past the flare: whether that reads naturally from the road is to judge in game.
+- **Closures' cost** (the same laptop builds, on top of the stubs; vertices are visual and collider, KN5 each layout):
+
+| Road | Closures: major / minor with bales / minor with boards / limited | Cars (jurisdiction) | Added vertices (collider) | Mesh-stage vertices | KN5, each layout |
+|---|---|---|---|---|---|
+| Grasstree Hill | 8: 3 / 3 / 2 / 0 | 2 (Tas) | 5,136 (316) | 425,301 → 430,753 (+1.3%) | 30.2 → 31.5 MB (+4.4%) |
+| Brinktop Road | 14: 3 / 5 / 6 / 0, one overshoot | 2 (Tas) | 7,676 (496) | 317,207 → 325,379 (+2.6%) | 22.4 → 23.9 MB (+6.5%) |
+| Esperance Coast Road | 10: 1 / 4 / 5 / 0 | 1 (Tas) | 5,288 (328) | 706,449 → 712,065 (+0.8%) | 45.4 → 46.8 MB (+2.9%) |
+| Lower Swamp Road | 3: 0 / 3 / 0 / 0 | none | 912 (180) | 210,416 → 211,508 (+0.5%) | 15.6 → 16.0 MB (+2.6%) |
+| Lyell Highway | 3: 0 / 0 / 2 / 1 | none | 1,124 (0) | 1,893,671 → 1,894,795 (+0.1%) | 122.7 → 123.1 MB (+0.3%) |
+| Mount Dandenong Tourist Road | 66: 13 / 21 / 32 / 0 | 5 (Vic) | 36,012 (1,800) | 472,967 → 510,779 (+8.0%) | 33.6 → 36.5 MB (+8.6%) |
+
+  - Most of a small road's growth is the two textures: the closures' atlas (0.35 MB) and, with a car, the jurisdiction's (0.7 MB). The rest is geometry, about 550 vertices a closure and 560 a car.
+  - With the stubs, Mount Dandenong Tourist Road comes to 431,150 → 510,779 mesh-stage vertices (+18%) and 30.6 → 36.5 MB, under the research's estimate (+22%, 5-7 MB).
 
 ## Power lines
 

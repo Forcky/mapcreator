@@ -5,7 +5,8 @@ into ground classes (`core.grass`): a material each, so Grass FX grows each clas
 takes its colour. The map is read out to the terrain's edge. Without one, the terrain is one material as before.
 
 Side roads' stubs (`core.stubs`) come from the section stage's plan: each its own ribbon, joined to the road by its
-flares, with the road's verge and skirt cut across its mouth and the terrain leaving room for it.
+flares, with the road's verge and skirt cut across its mouth and the terrain leaving room for it. Each is closed off
+the stage, with police cars at some of the major closures (`core.stub_closures`).
 """
 
 from __future__ import annotations
@@ -17,8 +18,9 @@ from dataclasses import asdict
 import numpy as np
 
 from mapcreator.config import Settings
-from mapcreator.core import furniture, grass, junctions, mesh, reach, roadside, stubs
+from mapcreator.core import furniture, grass, junctions, mesh, police_car, reach, roadside, stub_closures, stubs
 from mapcreator.core import water as water_core
+from mapcreator.core.layout import layouts_for
 from mapcreator.core.scene import LocalFrame, Material, Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import profile_stage, route_stage, section_stage
@@ -29,6 +31,8 @@ STAGE = "04_mesh"
 # Terrain reaches this far either side of the road: the world's edge, 100 m beyond the scenery (`core.reach`).
 # Beyond 300 m its lattice is coarse (mesh.OUTER_LATTICE_M). The DEM corridor covers it (profile_stage).
 TERRAIN_CORRIDOR_M = reach.TERRAIN_M
+# The closures on the side roads' stubs, one record each (`core.stub_closures`; the format is in docs/ac-format.md).
+CLOSURES = "closures.json"
 
 log = logging.getLogger(__name__)
 
@@ -160,6 +164,22 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         textures[furniture.MATERIAL] = str(out / "furniture.png")
         atlas.image.save(textures[furniture.MATERIAL])
     meshes += roadside.end_walls(c["s"], c["xy"], c["z"], c["heading"], dem.sample, frame)
+    # Each stub closed off the stage, and police cars at some of the major closures (`core.stub_closures`), standing
+    # on the ground just built.
+    closed = None
+    (out / CLOSURES).unlink(missing_ok=True)
+    if plan:
+        top = stub_closures.TopSurface(meshes, frame, stub_closures.areas(plan))
+        lonlat = region.to_lonlat().transform(c["xy"][::50, 0], c["xy"][::50, 1])
+        closed = stub_closures.place(plan, found, c, sec, frame, top,
+                                     jurisdiction=police_car.jurisdiction_for(region, list(zip(*lonlat))),
+                                     reverses=tuple(lay.reverse for lay in layouts_for(job.layouts.value)))
+        meshes += closed.meshes
+        for name, image in closed.textures.items():
+            textures[name] = str(out / f"{name}.png")
+            image.save(textures[name])
+        work.write_json(STAGE, CLOSURES, {"version": 1, "closures": closed.records})
+        junction_stats["closures"] = closed.stats
 
     used = {m.material for m in meshes}
     scene = Scene(
@@ -176,6 +196,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             **({"water": Material("water", texture="water")} if water else {}),
             # The furniture's materials (plain, reflectors, the boards' faces) all draw on the one atlas.
             **{name: Material(name, furniture.MATERIAL) for name in sorted({m.material for m in furn})},
+            # The closures' (closure, closure_retro) and the police cars' (with their own KN5 and night values).
+            **(closed.materials if closed is not None else {}),
         },
         textures=textures,
     )
@@ -192,8 +214,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
 
     by_kind: dict[str, list[int]] = {}
     for m in meshes:
-        kind = m.name.split("_")[0] + ("_T" if "_T" in m.name else "_V" if "_V" in m.name else
-                                       "_J" if "_J" in m.name else "")
+        kind = m.name.split("_")[0] + ("" if not m.name[:1].isdigit() else "_T" if "_T" in m.name else
+                                       "_V" if "_V" in m.name else "_J" if "_J" in m.name else "")
         by_kind.setdefault(kind, []).append(len(m.positions))
     return {
         "meshes": len(meshes),
