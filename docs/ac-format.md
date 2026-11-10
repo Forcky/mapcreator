@@ -353,7 +353,7 @@ A procedural low-poly police car for each Australian jurisdiction, in that juris
 - **Drawn here, from shapes.** The body, the chequer, the lettering and each crest are our own renditions, simplified. No image of a real crest or livery is copied, traced or embedded. The liveries were researched from the services' releases, news reports and dated photos; images were viewed for reference only. The sources are in `THIRD_PARTY_NOTICES.md` ("Design references").
 - **Entry point:** `police_car(code, body=None)` returns a `PoliceCar` with:
   - `meshes`: `scene.Mesh`, the type furniture hands the KN5 writer, one per material, in the car's own frame;
-  - `collider`, `materials` (`scene.Material`), `textures` (texture name to its Pillow image, to save as a PNG the way the mesh stage saves `furniture.png`) and `night_diffuse`.
+  - `collider`, `materials` (`scene.Material`), `textures` (texture name to its Pillow image, to save as a PNG the way the mesh stage saves `furniture.png`), `kn5_properties` (each material's KN5 values) and `night_diffuse` (each material's ksDiffuse at night).
 - **Local frame:** the origin is the car's centre on the ground, +z forward, +x to the car's right, +y up, metres. The tyres touch y = 0 and the light bar is the top.
   - With x right, y up and z forward the frame is left-handed. `place(car, position, forward, up=(0, 1, 0), index=0)` maps it onto AC's axes with the car's right on its right (right = forward × up), so nothing comes out mirrored, rewinds each triangle to the KN5's rule, and names the copy `..._<index>`. `up` tilts the car on a slope.
   - `merge(meshes)` joins placed cars by material, under the vertex limit, so six cars draw as three meshes and one collider mesh.
@@ -370,15 +370,42 @@ A procedural low-poly police car for each Australian jurisdiction, in that juris
 
 - All three materials draw on one texture, `police_<code>`, so up to six cars of a track share one atlas. A body other than the jurisdiction's own adds its name (`police_nsw_sedan`), since its atlas differs.
 - **The collider** is a box the size of the body: its full width and length, from 0.5 m below the ground (for a slope) to the roof. Four sides and a top, wound outwards like the trunk colliders, `isRenderable` 0. It's a `WALL` physics mesh (no surface KEY), so the car carries its own collision, as the closure answers ask (no wall in open air).
-- **KN5 values:** `MATERIAL_PROPS` (ksAmbient 0.4, ksDiffuse 0.6, ksSpecular 0.3, ksSpecularEXP 40) is for the track stage's `MATERIAL_PROPS` under `police`. Without it the materials take the walls' values, which have the same ksDiffuse.
+- **KN5 values** (`kn5_properties`, by material; the track stage keys its `MATERIAL_PROPS` by a name's first word, so it needs to look these up by the full name):
+
+  | Part | ksAmbient | ksDiffuse (by day) | ksSpecular | ksSpecularEXP |
+  |---|---|---|---|---|
+  | body, white paint; the band | 0.4 | 0.6 | 0.12 | 40 |
+  | body, Tasmania's silver | 0.4 | 0.6 | 0.35 | 22 |
+  | lenses | 0.4 | 0.6 | 0.25 | 60 |
+
+  - ksDiffuse by day is the walls' 0.6, which a stage that doesn't look these up gives them anyway; the night adjustments start from it.
+  - Specular is low on the paint and the band. At night the headlights sit beside the eye, so a flat side facing them catches the highlight across its width, white on top of the chequer and the lettering. The first check track had 0.3.
+  - Tasmania's silver takes a broader, stronger sheen, so it reads as silver in sunlight.
 
 ### Night
 
-- **The band catches the headlights.** The chequer is retroreflective film on the real cars. Its faces are their own material, `_retro`, and `night_diffuse` gives ksDiffuse 2 at night: the furniture boards' value, through the same `retro_materials` path in `ext_config.ini` (a `[MATERIAL_ADJUSTMENT_n]` with `CONDITION = NIGHT_SMOOTH`). The rest of the paint and the lettering stay as by day.
-- **The light bar is off, and retroreflective.** Its lenses (`_lens`) get ksDiffuse 4 at night, between paint and a guide post reflector's 12, so they catch the headlights without reading as lit. It isn't emissive:
-  - the track stage writes ksEmissive 0 for every material, so a glow would need a new property path or a night adjustment on ksEmissive;
-  - a steady glow would read as a bar left on that never flashes, and whether a track config can make a material flash is unverified.
-- Both values are to tune in game (`docs/known-issues.md`). Vanilla AC ignores the file, so there the car looks as by day.
+`night_diffuse` gives each material's ksDiffuse at night. It goes through the furniture's `retro_materials` path in `ext_config.ini`: a `[MATERIAL_ADJUSTMENT_n]` with `CONDITION = NIGHT_SMOOTH`, and `VALUE_0_OFF` 0.6 by day.
+
+| Part | Night ksDiffuse | First check track |
+|---|---|---|
+| body (`police_<code>`) | 0.35 | 0.6 (no adjustment) |
+| band (`_retro`) | 1.3 | 2.0 |
+| lenses (`_lens`) | 2.0 | 4.0 |
+
+- **Why these values.** In game (10 Nov 2026), side-on in the beam at about 6 m, the first values washed out:
+  - the bodies clipped to white over 36-47% of their area (1-18% by day);
+  - the chequers turned pale or vanished, and the lettering went with them;
+  - the lenses burned to white boxes, and from 12 m the bars showed steady red and blue, like a bar left on.
+- **The cause, most likely, is shared with any prop:** a near-white texture under the walls' ksDiffuse 0.6. Every material outside the track's own surfaces takes those fallback values. White at 246 under 0.6 reflects 3.7 times what the road does (95 under 0.42), taking the texture values as they are, or 11.5 times if the game decodes them from sRGB first. CSP's night exposure suits the dark road, so at close range in the beam the props go past the top of the tone curve: white clips, and saturated colours pale towards white. The check track's specular of 0.3 added a white highlight across the side facing the headlights, on top of the dark squares and the lettering.
+- **What changed:**
+  - white paint at 224 (was 246), and Tasmania's silver at 164-173;
+  - the body comes down to 0.35 at night (out of the beam it's lit by its ambient, which stays);
+  - the band and the lenses get smaller boosts;
+  - specular on the paint and band at 0.12;
+  - the lenses are drawn as tinted, unlit plastic: each colour darkened and greyed, nothing near white.
+- **The light bar is off, not emissive.** The track stage writes ksEmissive 0 for every material, so a glow would need a new property path. A steady glow would read as a bar left on that never flashes, and whether a track config can make a material flash is unverified.
+- The ini's description line still says "retroreflective furniture" for every entry, including the body's darker one.
+- All of it is to retest in game (`docs/known-issues.md`). Vanilla AC ignores the file, so there the car looks as by day.
 
 ### Body and texture
 
@@ -392,6 +419,8 @@ A procedural low-poly police car for each Australian jurisdiction, in that juris
   - the top (bonnet lettering and crest read from in front of the car), the front and the rear;
   - a wheel, the tread, glass, plain paint, and the light bar from in front, from behind (so its lettering reads both ways) and from above.
   - Each view is drawn in a drawing of its cell's size, so nothing spills into the next cell, at twice the size and scaled down for smooth edges. The lettering is Pillow's built-in Aileron (CC0), made bold with a stroke. Crests are drawn on a layer at four times their size.
+  - **Cells aren't square in metres** (the sedan's side is about 405 px a metre along and 547 up; the front view 291 and 474). Lettering and crests are sized by each axis, so a word or crest has its proportions and size in metres in any view. The first atlases sized them by the horizontal scale alone: crests came out squashed into small ellipses, side lettering about a quarter short of its height, and bonnet lettering stretched about three and a half times across the car.
+- **Crests** are drawn 0.30-0.38 m across (0.50 m on the NT's bonnet), bigger than on most real cars, so they read at parking distance. Bold shapes with dark edges, a few big leaves to a wreath, no small lettering. In game the first ones (0.16-0.19 m) read only as roundels, apart from Queensland's (0.30 m). Tasmania's moves above the chequer on the rear door, where there's room for it.
 - **The band follows the shoulder.** Along the doors it runs between the livery's heights. Towards the nose and tail it drops with the belt line, keeping its depth (NSW's "sweeps down towards the headlight"), and the geometry's strip drops with it. Queensland's wedge keeps its foot instead.
 
 ### Budget
@@ -412,8 +441,8 @@ Current marked general-duties cars, from releases and dated photos (2019-2026). 
 
 | Code | Service | Body | Paint and band | Lettering | Crest (our rendition), where | Light bar |
 |---|---|---|---|---|---|---|
-| `tas` | Tasmania Police | SUV | Silver. Two-row blue/white chequer low on the doors, a lime line on top, across the tailgate | "Police" above the line on the front doors; tailgate | Rayed gold star under a crown; blue ring and disc with a gold lion walking. Small, rear door, below the chequer | blue and red, POLICE centre |
-| `nsw` | NSW Police Force | SUV | White. Two-row blue/white chequer along the shoulder, dropping to the headlight | "Police" large and low across both doors; bonnet; "000 EMERGENCY" on the rear quarter | Laurel wreath and white ring under a crown; brown eagle with the state's shield in a light blue disc; scroll. Front door, ahead of "Police" | blue, clear, red |
+| `tas` | Tasmania Police | SUV | Silver (164-173). Two-row blue/white chequer low on the doors, a lime line on top, across the tailgate | "Police" above the line on the front doors; tailgate | Rayed gold star under a crown; blue disc with a gold lion walking. Rear door, above the chequer (on the real cars smaller, below it) | blue and red, POLICE centre |
+| `nsw` | NSW Police Force | SUV | White. Two-row blue/white chequer along the shoulder, dropping to the headlight | "Police" large and low across both doors; bonnet; "000 EMERGENCY" (0.085 m) on the rear quarter | Laurel wreath and white ring under a crown; brown eagle with the state's shield in a light blue disc; scroll. Front door, ahead of "Police" | blue, clear, red |
 | `vic` | Victoria Police | SUV | White. Three-row blue/white chequer at door-handle height, "131 444" and "000" panels set into it | "Police" low round the B-pillar; bonnet | In one colour, as on the cars: wreath, five-pointed star point down, crown, Southern Cross. Front door, ahead of "Police" | blue on the driver's side, red |
 | `qld` | Queensland Police Service | sedan | White. The 2023 design: large blue/white squares in a wedge on the lower body, two rows behind the front wheel rising to four at the rear axle; orange-red lines along its top and the sill | "POLICE" in capitals, blue keylined white and orange-red, on the front door | White eight-pointed cross edged red on a wreath, under a crown; blue ring, navy disc with a small crown; scroll. Large, rear door | blue and red |
 | `sa` | South Australia Police | SUV | White. Three-row black/white chequer between yellow lines, breaking into scattered squares over the front guard | "POLICE" in tall black capitals keylined yellow across both doors; bonnet | Wattle wreath under a crown; light blue ring, white disc with a black and white piping shrike, wings spread. Front door | red on the driver's side, blue; POLICE centre |

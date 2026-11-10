@@ -48,7 +48,9 @@ def test_every_jurisdiction_builds(code):
     # One texture for all three materials, and the night list names the band and the lenses.
     assert {mat.texture for mat in car.materials.values()} == set(car.textures) == {names["body"]}
     assert car.textures[names["body"]].size == (police_car.ATLAS, police_car.ATLAS)
-    assert car.night_diffuse == {names["retro"]: 2.0, names["lens"]: 4.0}
+    assert car.night_diffuse == {names["body"]: 0.35, names["retro"]: 1.3, names["lens"]: 2.0}
+    assert set(car.kn5_properties) == set(car.materials)
+    assert all(props["ksDiffuse"] == 0.6 for props in car.kn5_properties.values())  # the walls' value, by day
 
 
 @pytest.mark.parametrize("code", JURISDICTIONS)
@@ -174,7 +176,7 @@ def test_six_cars_cost_in_a_kn5(tmp_path):
     placed = [m for k in range(6) for m in police_car.place(car, (k * 10.0, 0.0, 0.0), (0.0, 0.0, 1.0), index=k)]
     meshes = police_car.merge(placed)
     tex = {f"{name}.dds": textures.to_dds(im) for name, im in car.textures.items()}
-    mats = [kn5.Kn5Material(name, properties=police_car.MATERIAL_PROPS, textures={"txDiffuse": f"{m.texture}.dds"})
+    mats = [kn5.Kn5Material(name, properties=car.kn5_properties[name], textures={"txDiffuse": f"{m.texture}.dds"})
             for name, m in car.materials.items()]
     index = {m.name: i for i, m in enumerate(mats)}
     kmeshes = [kn5.Kn5Mesh(m.name, index[m.material], m.positions, m.normals, m.uvs, m.triangles,
@@ -217,6 +219,82 @@ def test_a_second_body_has_its_own_names():
     assert police_car.police_car("nsw").textures.keys().isdisjoint(car.textures)
     with pytest.raises(ValueError):
         police_car.police_car("xyz")
+
+
+def test_tasmania_reads_silver_and_the_rest_white():
+    """In sunlight the first silver (195) rendered as white (in game, 10 Nov 2026): it's darker now, with more sheen."""
+    tas = police_car.LIVERIES["tas"]
+    assert max(tas.paint) <= 175 and tas.metallic
+    assert all(police_car.LIVERIES[c].paint == police_car.WHITE for c in JURISDICTIONS if c != "tas")
+    assert np.mean(police_car.WHITE) - np.mean(tas.paint) >= 50
+    silver = police_car.police_car("tas").kn5_properties["police_tas"]
+    white = police_car.police_car("vic").kn5_properties["police_vic"]
+    assert silver["ksSpecular"] > 2 * white["ksSpecular"] and silver["ksSpecularEXP"] < white["ksSpecularEXP"]
+
+
+def test_night_values_keep_the_body_and_lenses_from_washing_out():
+    """At 6 m in the beam the body (0.6, unadjusted) clipped to white, the band at 2.0 lost its chequer and the lenses
+    at 4.0 burned white (in game, 10 Nov 2026)."""
+    night = police_car.NIGHT_DIFFUSE_BY_PART
+    day = police_car.PAINT_PROPS["ksDiffuse"]
+    assert night["body"] < day < night["retro"] < 2.0 and day < night["lens"] <= 2.0
+    # Little specular on the paint and the band: with the headlights beside the eye, a side facing them catches it.
+    assert police_car.PAINT_PROPS["ksSpecular"] <= 0.15
+    assert max(police_car.WHITE) <= 230
+
+
+def test_the_light_bar_is_drawn_switched_off():
+    def lum(c):
+        return float(np.dot(c, [0.2126, 0.7152, 0.0722]))
+
+    for colour in (police_car.RED, police_car.BLUE):
+        tint = police_car.lens_tint(colour)
+        assert lum(tint) < lum(colour) and max(tint) < 0.75 * max(colour)
+    im = np.asarray(police_car.atlas("vic", "suv"), float)
+    x0, y0, x1, y1 = CELLS["bar_front"]
+    assert im[y0:y1, x0:x1].max(axis=2).max() < 200  # nothing near white, even the clear lens
+
+
+@pytest.mark.parametrize("code", JURISDICTIONS)
+def test_crests_are_drawn_large(code):
+    livery = police_car.LIVERIES[code]
+    size = livery.crest_side[2] if livery.crest_side else livery.crest_bonnet
+    assert livery.crest in police_car.CRESTS and size >= 0.30
+
+
+def test_lettering_and_crests_keep_their_size_in_metres():
+    """The cells aren't square in metres (the sedan's side is about 405 px a metre along and 547 up), so lettering is
+    sized by each axis: the same word comes out the same height and proportions in any view."""
+    shape = police_car.SUV
+    ratios = []
+    for name in ("side_r", "front", "top"):
+        view = police_car.views(shape)[name]
+        x0, y0, x1, y1 = (v * police_car.SUPERSAMPLE for v in CELLS[name])
+        img = Image.new("RGB", (x1 - x0, y1 - y0), (255, 255, 255))
+        a, b = (view.a0 + view.a1) / 2, (view.b0 + view.b1) / 2
+        rotate = 90 if name == "top" else 0
+        police_car._label(img, view, "Police", a, b, 0.08, (0, 0, 0), rotate=rotate)
+        ys, xs = np.nonzero(np.asarray(img.convert("L")) < 128)
+        sa, sb = police_car._scale(view, 0), police_car._scale(view, 1)
+        across, up = (xs.max() - xs.min()) / sa, (ys.max() - ys.min()) / sb
+        cap, length = (up, across) if rotate == 0 else (across, up)
+        assert cap == pytest.approx(0.08, rel=0.08)
+        ratios.append(length / cap)
+    assert max(ratios) / min(ratios) < 1.08
+    # A crest is square in metres, so drawn into a 100 x 60 px box it's stretched by exactly that against a square.
+    def aspect(w, h):
+        img = Image.new("RGB", (200, 200), (255, 255, 255))
+        police_car.draw_crest(img, "qld", 100, 100, w, h)
+        ys, xs = np.nonzero(np.asarray(img.convert("L")) < 250)
+        return (xs.max() - xs.min()) / (ys.max() - ys.min())
+
+    assert aspect(100, 60) / aspect(100, 100) == pytest.approx(100 / 60, rel=0.06)
+
+
+def test_nsw_emergency_number_is_large_enough_to_read():
+    """At 0.045 m it wasn't legible at 6 m; Victoria's "131 444", at about 0.09 m, was (in game, 10 Nov 2026)."""
+    (text, _, _, cap), = police_car.LIVERIES["nsw"].extra
+    assert text == "000 EMERGENCY" and cap >= 0.08
 
 
 @pytest.mark.parametrize("lon, lat, code", [

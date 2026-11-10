@@ -27,11 +27,13 @@ lettering reads forwards on both), the top, the front, the rear, a wheel, glass 
 its UVs by projection onto its view. Drawn at twice the size and scaled down, so the edges are smooth. The lettering
 uses Pillow's built-in Aileron font (CC0), made bold with a stroke.
 
-**Night.** The livery band is retroreflective film on the real cars, so its faces have a material of their own
-(`<base>_retro`), brightened at night by CSP like the furniture's boards (`night_diffuse`, for
-`package.ext_config_ini`'s `retro_materials`). The light bar is off: its lenses (`<base>_lens`) are brightened the
-same way, a little more, so they catch the headlights without glowing on their own. The track stage writes
-`ksEmissive` 0 for every material, and a steady glow would read as a bar left on that never flashes.
+**Night.** `night_diffuse` gives each part's ksDiffuse at night, for `package.ext_config_ini`'s `retro_materials`
+(by day all three are 0.6). The livery band is retroreflective film on the real cars, so its faces are a material of
+their own (`<base>_retro`) and get a boost. The light bar is off: its lenses (`<base>_lens`) are drawn as tinted,
+unlit plastic and get a boost too, so they catch the headlights without glowing on their own; the track stage writes
+`ksEmissive` 0 for every material, and a steady glow would read as a bar left on that never flashes. The plain body
+comes down at night: white paint under the walls' ksDiffuse 0.6 reflects several times what the road does, and in the
+headlights at close range it clipped to white. `kn5_properties` gives each part's KN5 values.
 """
 
 from __future__ import annotations
@@ -208,7 +210,11 @@ def views(body: Body) -> dict[str, View]:
 # -- liveries ----------------------------------------------------------------------------------------------------
 
 RGB = tuple[int, int, int]
-WHITE: RGB = (246, 246, 244)
+# White paint at 224, not 246: near-white under the track stage's ksDiffuse 0.6 reflects several times what the road
+# does, and clipped to white in the headlights at night (in game, 10 Nov 2026). Silver at 164-173, darker than first
+# drawn (195): in sunlight 195 rendered the same as the white.
+WHITE: RGB = (224, 224, 222)
+SILVER_PAINT: RGB = (164, 168, 173)
 RED: RGB = (214, 24, 32)
 BLUE: RGB = (24, 64, 214)
 
@@ -230,6 +236,7 @@ class Livery:
     word_colour: RGB
     word_side: tuple[float, float, float, float]  # along, height, cap height, longest
     paint: RGB = WHITE
+    metallic: bool = False  # the paint takes a broader, stronger sheen (Tasmania's silver)
     pattern: str = "sillitoe"  # small squares, or "wedge": large squares rising from front to rear (Queensland)
     wedge: tuple[int, int] = (2, 4)  # rows at the wedge's front (behind the front wheel) and rear (the rear axle)
     wedge_edge: RGB | None = None  # a line along the wedge's top
@@ -482,13 +489,20 @@ def _collider(body: Body, material: str) -> Mesh:
 
 COLLIDER_MESH = "1WALL_POLICE"
 VISUAL_MESH = "POLICE"
-# KN5 material values for the placing stage's MATERIAL_PROPS (keyed by the name's first word, "police"): the
-# furniture's ksDiffuse (0.6, which the night adjustment raises) and a car's gloss.
-MATERIAL_PROPS = {"ksAmbient": 0.4, "ksDiffuse": 0.6, "ksSpecular": 0.3, "ksSpecularEXP": 40.0}
-# ksDiffuse at night for `ext_config_ini(retro_materials=...)`, by part. The band takes the furniture boards' 2 (a large
-# coloured face with a pattern; more bleaches it); the lenses 4, between paint and a guide post reflector's 12, so
-# they catch the headlights without reading as lit. To tune in game.
-NIGHT_DIFFUSE_BY_PART = {"retro": 2.0, "lens": 4.0}
+# KN5 material values, by part (`PoliceCar.kn5_properties`, for the track stage, which keys its MATERIAL_PROPS by
+# the name's first word and would otherwise give every part the walls' values). ksDiffuse stays the walls' 0.6 by day,
+# which the night adjustments start from. Specular is low on the paint and the band: at night the headlights sit
+# beside the eye, so a flat side facing them catches the highlight across its width, white on top of the chequer and
+# the lettering (in game at 0.3, 10 Nov 2026). Tasmania's silver gets a broader, stronger sheen so it reads as silver.
+PAINT_PROPS = {"ksAmbient": 0.4, "ksDiffuse": 0.6, "ksSpecular": 0.12, "ksSpecularEXP": 40.0}
+SILVER_PROPS = {"ksAmbient": 0.4, "ksDiffuse": 0.6, "ksSpecular": 0.35, "ksSpecularEXP": 22.0}
+LENS_PROPS = {"ksAmbient": 0.4, "ksDiffuse": 0.6, "ksSpecular": 0.25, "ksSpecularEXP": 60.0}
+# ksDiffuse at night, by part, for `ext_config_ini(retro_materials=...)` ([MATERIAL_ADJUSTMENT_n], CONDITION =
+# NIGHT_SMOOTH; by day each goes back to 0.6). In game (10 Nov) the first values washed out at 6 m in the beam: the
+# plain body (0.6, no adjustment) clipped to white over 36-47% of it, the band at 2.0 lost its chequer, and the lenses
+# at 4.0 burned white and read as a bar left on from 12 m. Now the body comes down at night, the band takes a smaller
+# boost and the lenses half theirs (they're also drawn darker, as switched-off lenses). To retest in game.
+NIGHT_DIFFUSE_BY_PART = {"body": 0.35, "retro": 1.3, "lens": 2.0}
 
 
 @dataclass
@@ -500,6 +514,7 @@ class PoliceCar:
     materials: dict[str, Material]
     textures: dict[str, Image.Image]  # texture name -> its image, drawn here (saved as the stage saves furniture's)
     night_diffuse: dict[str, float] = field(default_factory=dict)  # material -> ksDiffuse at night
+    kn5_properties: dict[str, dict[str, float]] = field(default_factory=dict)  # material -> KN5 values by day
 
     @property
     def vertices(self) -> int:
@@ -537,7 +552,9 @@ def police_car(code: str, body: str | None = None) -> PoliceCar:
         jurisdiction=code, body=shape, meshes=meshes, collider=_collider(shape, mats["body"]),
         materials={m: Material(m, texture) for m in sorted({m.material for m in meshes})},
         textures={texture: atlas(code, shape.name).copy()},
-        night_diffuse={mats[part]: v for part, v in NIGHT_DIFFUSE_BY_PART.items()})
+        night_diffuse={mats[part]: v for part, v in NIGHT_DIFFUSE_BY_PART.items()},
+        kn5_properties={mats["body"]: dict(SILVER_PROPS if livery.metallic else PAINT_PROPS),
+                        mats["retro"]: dict(PAINT_PROPS), mats["lens"]: dict(LENS_PROPS)})
 
 
 def place(car: PoliceCar, position, forward, up=(0.0, 1.0, 0.0), index: int = 0) -> list[Mesh]:
@@ -676,9 +693,9 @@ GLASS = (30, 36, 46)
 DARK = (24, 24, 26)
 TYRE = (28, 28, 30)
 RIM = (170, 174, 178)
-HEADLIGHT = (226, 230, 234)
+HEADLIGHT = (214, 218, 222)
 TAIL = (176, 22, 26)
-PLATE = (236, 236, 228)
+PLATE = (220, 220, 212)
 HOUSING = (44, 46, 52)
 SHUT_LINE_M = 0.006  # door shut lines
 B_PILLAR = -0.25  # z of the pillar between the doors, on both bodies
@@ -688,21 +705,22 @@ def _font(size: float) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default(size=max(int(size), 4))
 
 
-def _text(img: Image.Image, text: str, centre, height: float, colour, *, max_width: float | None = None,
-          stretch: float = 1.0, rotate: int = 0, bold: float = 0.07, outlines=()) -> None:
-    """`text` with its ink `height` canvas px tall, centred on `centre`, at most `max_width` wide and `stretch` times
-    as wide as the font draws it, turned `rotate` degrees anticlockwise. Bold by a stroke of `bold` of the size;
-    `outlines` are keylines round it, widest first: (colour, extra stroke as a fraction of the size)."""
+def _text(img: Image.Image, text: str, centre, cap_px: float, colour, *, max_len_px: float | None = None,
+          len_per_cap: float = 1.0, stretch: float = 1.0, rotate: int = 0, bold: float = 0.07, outlines=()) -> None:
+    """`text` with its ink `cap_px` tall, centred on `centre`, turned `rotate` degrees anticlockwise. The cells
+    aren't square in metres, so `len_per_cap` is the pixels per metre along the text over those across it; the
+    font's proportions are kept in metres (times `stretch`), at most `max_len_px` long. Bold by a stroke of `bold`
+    of the size; `outlines` are keylines round it, widest first: (colour, extra stroke as a fraction of the size)."""
     size = 160
     font = _font(size)
     layers = [(tuple(c), int(size * (bold + w))) for c, w in outlines] + [(tuple(colour), int(size * bold))]
     widest = max(s for _, s in layers)
     left, top, right, bottom = font.getbbox(text, stroke_width=widest)
     _, ink_top, _, ink_bottom = font.getbbox(text, stroke_width=layers[-1][1])
-    k = height / (ink_bottom - ink_top)
-    w, h = (right - left) * k * stretch, (bottom - top) * k
-    if max_width is not None and w > max_width:
-        w, h = max_width, h * max_width / w
+    k = cap_px / (ink_bottom - ink_top)
+    w, h = (right - left) * k * stretch * len_per_cap, (bottom - top) * k
+    if max_len_px is not None and w > max_len_px:
+        w, h = max_len_px, h * max_len_px / w
     for fill, stroke in layers:
         mask = Image.new("L", (right - left, bottom - top), 0)
         ImageDraw.Draw(mask).text((-left, -top), text, fill=255, font=font, stroke_width=stroke, stroke_fill=255)
@@ -711,6 +729,31 @@ def _text(img: Image.Image, text: str, centre, height: float, colour, *, max_wid
             mask = mask.rotate(rotate, expand=True, resample=Image.Resampling.BICUBIC)
         x0, y0 = int(round(centre[0] - mask.width / 2)), int(round(centre[1] - mask.height / 2))
         img.paste(Image.new("RGB", mask.size, fill), (x0, y0), mask)
+
+
+def _scale(view: View, axis: int = 0) -> float:
+    """Canvas px per metre along the view's first (0) or second (1) axis."""
+    p0 = view.px(0.0, 0.0)
+    p1 = view.px(1.0, 0.0) if axis == 0 else view.px(0.0, 1.0)
+    return abs(p1[axis] - p0[axis])
+
+
+def _label(img: Image.Image, view: View, text: str, a: float, b: float, cap_m: float, colour, *,
+           max_len_m: float | None = None, stretch: float = 1.0, outlines=(), rotate: int = 0,
+           bold: float = 0.07) -> None:
+    """Lettering on a view, in metres: `cap_m` tall, at most `max_len_m` long, centred on (a, b). Upright it runs
+    along the view's first axis; turned 90 degrees, along its second (the bonnet's, read from in front)."""
+    sa, sb = _scale(view, 0), _scale(view, 1)
+    cap_s, len_s = (sb, sa) if rotate == 0 else (sa, sb)
+    _text(img, text, view.px(a, b), cap_m * cap_s, colour, max_len_px=None if max_len_m is None else max_len_m * len_s,
+          len_per_cap=len_s / cap_s, stretch=stretch, rotate=rotate, bold=bold,
+          outlines=[(c, w * 0.6) for c, w in outlines])
+
+
+def _crest(img: Image.Image, view: View, name: str, a: float, b: float, size_m: float, rotate: int = 0) -> None:
+    """Crest `name`, `size_m` across, centred on (a, b) of a view."""
+    x, y = view.px(a, b)
+    draw_crest(img, name, x, y, size_m * _scale(view, 0), size_m * _scale(view, 1), rotate)
 
 
 def _poly(d: ImageDraw.ImageDraw, view: View, pts, fill) -> None:
@@ -724,13 +767,6 @@ def _rect(d: ImageDraw.ImageDraw, view: View, a0, b0, a1, b1, fill) -> None:
 def _ellipse(d: ImageDraw.ImageDraw, view: View, a, b, ra, rb, fill) -> None:
     (x0, y0), (x1, y1) = view.px(a - ra, b - rb), view.px(a + ra, b + rb)
     d.ellipse([min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)], fill=tuple(fill))
-
-
-def _scale(view: View, axis: int = 0) -> float:
-    """Canvas px per metre along the view's first (0) or second (1) axis."""
-    p0 = view.px(0.0, 0.0)
-    p1 = view.px(1.0, 0.0) if axis == 0 else view.px(0.0, 1.0)
-    return abs(p1[axis] - p0[axis])
 
 
 def _shade(colour, k: float) -> RGB:
@@ -841,15 +877,14 @@ def _draw_side(img: Image.Image, d: ImageDraw.ImageDraw, view: View, body: Body,
     b0, b1 = band_heights(body, livery)
     mid = body.cabin
     along, height = _side_frame(body)
-    scale = _scale(view)
 
     _draw_band(d, view, body, livery)
     _draw_stripes(d, view, body, livery)
     for text, za, width in livery.panels:
         z = along(za)
         _rect(d, view, z + width / 2, b0, z - width / 2, b1, livery.paint)
-        _text(img, text, view.px(z, (b0 + b1) / 2), 0.5 * (b1 - b0) * scale, livery.colours[0],
-              max_width=0.85 * width * scale)
+        _label(img, view, text, z, (b0 + b1) / 2, 0.5 * (b1 - b0), livery.colours[0], max_len_m=0.85 * width,
+               bold=0.09)
     # Shut lines (under the arches, which cut them), the lower trim, the arches and the windows.
     line = _shade(livery.paint, 0.55)
     front_door = st[next(i for i, s in enumerate(st) if s.roof is not None) - 1].z + 0.12
@@ -875,14 +910,13 @@ def _draw_side(img: Image.Image, d: ImageDraw.ImageDraw, view: View, body: Body,
         _poly(d, view, list(shapely.Polygon(outer).buffer(-0.015, join_style="mitre").exterior.coords), colour)
     # Lettering and the crest.
     za, frac, cap, longest = livery.word_side
-    _text(img, livery.word, view.px(along(za), height(frac)), cap * scale, livery.word_colour,
-          max_width=longest * scale, stretch=livery.word_stretch,
-          outlines=[(c, w * 0.6) for c, w in livery.word_outline])
+    _label(img, view, livery.word, along(za), height(frac), cap, livery.word_colour, max_len_m=longest,
+           stretch=livery.word_stretch, outlines=livery.word_outline)
     for text, za, frac, cap in livery.extra:
-        _text(img, text, view.px(along(za), height(frac)), cap * scale, livery.word_colour)
+        _label(img, view, text, along(za), height(frac), cap, livery.word_colour, bold=0.09)
     if livery.crest and livery.crest_side:
         za, frac, size = livery.crest_side
-        draw_crest(img, livery.crest, *view.px(along(za), height(frac)), size * scale)
+        _crest(img, view, livery.crest, along(za), height(frac), size)
 
 
 def _draw_top(img: Image.Image, d: ImageDraw.ImageDraw, view: View, body: Body, livery: Livery) -> None:
@@ -895,12 +929,10 @@ def _draw_top(img: Image.Image, d: ImageDraw.ImageDraw, view: View, body: Body, 
     length = front - cowl
     # Read from in front of the car: the tops of the letters (and the crest) towards the windscreen.
     if livery.word_bonnet:
-        _text(img, livery.word, view.px(cowl + 0.62 * length, 0.0), 0.20 * _scale(view, 0), livery.word_bonnet,
-              max_width=1.15 * _scale(view, 1), stretch=livery.word_stretch, rotate=90,
-              outlines=[(c, w * 0.6) for c, w in livery.word_outline])
+        _label(img, view, livery.word, cowl + 0.80 * length, 0.0, 0.18, livery.word_bonnet, max_len_m=1.2,
+               stretch=livery.word_stretch, outlines=livery.word_outline, rotate=90)
     if livery.crest and livery.crest_bonnet:
-        draw_crest(img, livery.crest, *view.px(cowl + 0.3 * length, 0.0), livery.crest_bonnet * _scale(view, 0),
-                   rotate=90)
+        _crest(img, view, livery.crest, cowl + 0.38 * length, 0.0, livery.crest_bonnet, rotate=90)
 
 
 def _draw_end(img: Image.Image, d: ImageDraw.ImageDraw, view: View, body: Body, livery: Livery, end: str) -> None:
@@ -939,12 +971,17 @@ def _draw_end(img: Image.Image, d: ImageDraw.ImageDraw, view: View, body: Body, 
     if end == "rear" and livery.word_rear:
         cap = 0.075
         y = max(y1 + 0.03 + cap / 2, hi - 0.10) if livery.band_rear else (plate_y + 0.12 + top - 0.12) / 2
-        _text(img, livery.word, view.px(0.0, y), cap * _scale(view, 1), livery.word_colour,
-              max_width=0.70 * _scale(view, 0), stretch=livery.word_stretch,
-              outlines=[(c, w * 0.6) for c, w in livery.word_outline])
+        _label(img, view, livery.word, 0.0, y, cap, livery.word_colour, max_len_m=0.70, stretch=livery.word_stretch,
+               outlines=livery.word_outline)
 
 
-def _draw_cells(img: Image.Image, d: ImageDraw.ImageDraw, livery: Livery) -> None:
+def lens_tint(colour) -> RGB:
+    """A lens as it looks switched off: its colour darkened and greyed, so in the headlights it reads as tinted
+    plastic, not as a lit lamp."""
+    return tuple(int(round(0.55 * c + 0.45 * 60)) for c in colour)
+
+
+def _draw_cells(img: Image.Image, d: ImageDraw.ImageDraw, livery: Livery, body: Body) -> None:
     def box(cell):
         return [v * SUPERSAMPLE for v in CELLS[cell]]
 
@@ -966,20 +1003,27 @@ def _draw_cells(img: Image.Image, d: ImageDraw.ImageDraw, livery: Livery) -> Non
         a0 = k * 72 + 16
         d.pieslice([cx - 0.58 * r, cy - 0.58 * r, cx + 0.58 * r, cy + 0.58 * r], a0, a0 + 40, fill=(60, 62, 66))
     d.ellipse([cx - 0.16 * r, cy - 0.16 * r, cx + 0.16 * r, cy + 0.16 * r], fill=(120, 124, 128))
-    # The light bar: seven lenses, a clear one in the middle. From in front the car's right half is on the left.
-    left, right = livery.lightbar
+    # The light bar, switched off: seven tinted lenses with a pale reflector line, a clear one in the middle. From in
+    # front the car's right half is on the left.
+    left, right = (lens_tint(c) for c in livery.lightbar)
+    clear = (136, 140, 146)
+    w_m, _, h_m = body.bar
     for cell, order, k in (("bar_front", (right, left), 1.0), ("bar_back", (left, right), 1.0),
                            ("bar_top", (right, left), 0.8)):
         x0, y0, x1, y1 = box(cell)
         d.rectangle([x0, y0, x1, y1], fill=(36, 36, 40))
         w, segs = x1 - x0, 7
         for i in range(segs):
-            colour = order[0] if i < segs // 2 else order[1] if i > segs // 2 else (222, 226, 230)
-            d.rectangle([x0 + w * i / segs + 2 * SUPERSAMPLE, y0 + 3 * SUPERSAMPLE, x0 + w * (i + 1) / segs
-                         - 2 * SUPERSAMPLE, y1 - 4 * SUPERSAMPLE], fill=_shade(colour, k))
+            colour = order[0] if i < segs // 2 else order[1] if i > segs // 2 else clear
+            lx0, lx1 = x0 + w * i / segs + 2 * SUPERSAMPLE, x0 + w * (i + 1) / segs - 2 * SUPERSAMPLE
+            ly0, ly1 = y0 + 3 * SUPERSAMPLE, y1 - 4 * SUPERSAMPLE
+            d.rectangle([lx0, ly0, lx1, ly1], fill=_shade(colour, k))
+            d.rectangle([lx0, ly0 + 0.2 * (ly1 - ly0), lx1, ly0 + 0.3 * (ly1 - ly0)], fill=_shade(colour, 1.2 * k))
         if livery.bar_word and cell != "bar_top":
+            # The strip is w_m by h_m, so its pixels are wider in metres along than up.
+            per_m_along, per_m_up = w / w_m, (y1 - y0) / h_m
             _text(img, livery.bar_word, ((x0 + x1) / 2, (y0 + y1) / 2 - SUPERSAMPLE), 0.4 * (y1 - y0), (20, 30, 70),
-                  max_width=0.8 * w / segs)
+                  max_len_px=0.8 * w / segs, len_per_cap=per_m_along / per_m_up)
 
 
 @lru_cache(maxsize=None)
@@ -988,7 +1032,7 @@ def atlas(code: str, body: str) -> Image.Image:
     livery, shape = LIVERIES[code], BODIES[body]
     canvas = ATLAS * SUPERSAMPLE
     img = Image.new("RGB", (canvas, canvas), livery.paint)
-    _draw_cells(img, ImageDraw.Draw(img), livery)
+    _draw_cells(img, ImageDraw.Draw(img), livery, shape)
     # Each view in a drawing of its own cell's size, so nothing spills into the next cell.
     for name, draw in (("side_r", _draw_side), ("side_l", _draw_side), ("top", _draw_top),
                        ("front", lambda *a: _draw_end(*a, "front")), ("rear", lambda *a: _draw_end(*a, "rear"))):
@@ -1001,17 +1045,20 @@ def atlas(code: str, body: str) -> Image.Image:
 
 # -- crests ------------------------------------------------------------------------------------------------------
 # Our own simplified renditions, drawn from shapes: each badge's general form (its outline, crown, wreath, rings and
-# emblem) so that it reads as that service's from the roadside. Nothing is copied or traced. Coordinates are x right
-# and y up, from -1 to 1 across the crest's box.
+# emblem), drawn big and bold, so that at about 60 px on the door it still reads as that service's from the roadside.
+# Nothing is copied or traced. Coordinates are x right and y up, from -1 to 1 across the crest's box; the badge sits
+# a little low (CREST_Y) to leave room for the crown above it.
 
 GOLD = (204, 164, 52)
-GOLD_LIGHT = (232, 200, 104)
-GOLD_DARK = (150, 112, 30)
-SILVER = (214, 218, 222)
-GREY = (120, 126, 132)
-GREEN = (44, 120, 60)
+GOLD_LIGHT = (236, 204, 104)
+GOLD_DARK = (120, 86, 20)
+SILVER = (206, 210, 214)
+GREY = (70, 76, 84)
+GREEN = (30, 100, 48)
 CROWN_RED = (176, 30, 40)
 INK = (16, 24, 40)
+CREST_Y = -0.16
+CROWN_W = 0.44
 
 # Silhouettes, facing the viewer's left.
 LION = ((-0.95, 0.22), (-0.88, 0.42), (-0.70, 0.60), (-0.45, 0.48), (-0.35, 0.32), (0.45, 0.30), (0.68, 0.36),
@@ -1037,10 +1084,10 @@ EMU = ((-0.32, 0.80), (-0.18, 0.88), (-0.10, 0.80), (-0.08, 0.40), (0.05, 0.22),
 
 
 class _Pen:
-    """A crest's drawing: on a transparent layer four times the size it's pasted at."""
+    """A crest's drawing: on a square transparent layer, at several times the size it's pasted at."""
 
     def __init__(self, size_px: float):
-        self.n = max(int(round(size_px * 4)), 16)
+        self.n = max(int(round(size_px)), 16)
         self.img = Image.new("RGBA", (self.n, self.n), (0, 0, 0, 0))
         self.d = ImageDraw.Draw(self.img)
 
@@ -1087,63 +1134,50 @@ def _shield(x, y, w, h):
             (x - w / 2, y - 0.1 * h)]
 
 
-def _crown(p: _Pen, x, y, w, gold=GOLD, cap=CROWN_RED, jewel=None):
-    """A simplified crown `w` wide, its band's centre at (x, y): cap, arches, band, orb and cross."""
+def _crown(p: _Pen, w=CROWN_W, gold=GOLD, cap=CROWN_RED, jewel=None, x=0.0, y=None):
+    """A simplified crown `w` wide: cap, arches, band, orb and cross. By default at the top of the box."""
+    y = 0.98 - 0.98 * w if y is None else y
     jewel = jewel or cap
+    edge = _shade(gold, 0.55)
     p.circle(x, y + 0.30 * w, 0.40 * w, cap)
     p.line([(x - 0.5 * w, y + 0.1 * w), (x - 0.42 * w, y + 0.48 * w), (x - 0.2 * w, y + 0.66 * w), (x, y + 0.58 * w),
-            (x + 0.2 * w, y + 0.66 * w), (x + 0.42 * w, y + 0.48 * w), (x + 0.5 * w, y + 0.1 * w)], gold, 0.08 * w)
-    p.line([(x, y + 0.1 * w), (x, y + 0.6 * w)], gold, 0.07 * w)
-    p.poly([(x - 0.5 * w, y - 0.12 * w), (x + 0.5 * w, y - 0.12 * w), (x + 0.5 * w, y + 0.12 * w),
-            (x - 0.5 * w, y + 0.12 * w)], gold)
+            (x + 0.2 * w, y + 0.66 * w), (x + 0.42 * w, y + 0.48 * w), (x + 0.5 * w, y + 0.1 * w)], gold, 0.10 * w)
+    p.line([(x, y + 0.1 * w), (x, y + 0.6 * w)], gold, 0.09 * w)
+    p.poly([(x - 0.5 * w, y - 0.14 * w), (x + 0.5 * w, y - 0.14 * w), (x + 0.5 * w, y + 0.14 * w),
+            (x - 0.5 * w, y + 0.14 * w)], gold, edge, 0.02 * w)
     for k in (-0.3, 0.0, 0.3):
-        p.circle(x + k * w, y, 0.055 * w, jewel)
-    p.circle(x, y + 0.72 * w, 0.09 * w, gold)
-    p.poly([(x - 0.03 * w, y + 0.78 * w), (x + 0.03 * w, y + 0.78 * w), (x + 0.03 * w, y + 0.98 * w),
-            (x - 0.03 * w, y + 0.98 * w)], gold)
-    p.poly([(x - 0.09 * w, y + 0.86 * w), (x + 0.09 * w, y + 0.86 * w), (x + 0.09 * w, y + 0.92 * w),
-            (x - 0.09 * w, y + 0.92 * w)], gold)
+        p.circle(x + k * w, y, 0.065 * w, jewel)
+    p.circle(x, y + 0.72 * w, 0.10 * w, gold)
+    p.poly([(x - 0.04 * w, y + 0.78 * w), (x + 0.04 * w, y + 0.78 * w), (x + 0.04 * w, y + 0.98 * w),
+            (x - 0.04 * w, y + 0.98 * w)], gold)
+    p.poly([(x - 0.10 * w, y + 0.85 * w), (x + 0.10 * w, y + 0.85 * w), (x + 0.10 * w, y + 0.92 * w),
+            (x - 0.10 * w, y + 0.92 * w)], gold)
 
 
-def _wreath(p: _Pen, x, y, r, colour, leaves=8, start=-80.0, end=72.0, berries=None):
-    """Two sprays of leaves round a circle, from near the bottom up each side; `berries` dots between them."""
+def _wreath(p: _Pen, r, colour=GREEN, leaves=6, start=-76.0, end=64.0, berries=None, x=0.0, y=CREST_Y):
+    """Two sprays of a few big leaves round a circle, from near the bottom up each side; `berries` dots on them."""
+    edge = _shade(colour, 0.55)
     for side in (1, -1):
         for i, a in enumerate(np.linspace(start, end, leaves)):
             deg = a if side == 1 else 180 - a
             cx, cy = x + r * np.cos(np.radians(deg)), y + r * np.sin(np.radians(deg))
-            t = np.radians(deg + 90 - side * 25)
-            ell = [(cx + 0.17 * r * np.cos(u) * np.cos(t) - 0.07 * r * np.sin(u) * np.sin(t),
-                    cy + 0.17 * r * np.cos(u) * np.sin(t) + 0.07 * r * np.sin(u) * np.cos(t))
+            t = np.radians(deg + 90 - side * 22)
+            ell = [(cx + 0.25 * r * np.cos(u) * np.cos(t) - 0.11 * r * np.sin(u) * np.sin(t),
+                    cy + 0.25 * r * np.cos(u) * np.sin(t) + 0.11 * r * np.sin(u) * np.cos(t))
                    for u in np.linspace(0, 2 * np.pi, 14, endpoint=False)]
-            p.poly(ell, colour)
-            if berries and i % 2:
-                bx, by = x + 1.12 * r * np.cos(np.radians(deg)), y + 1.12 * r * np.sin(np.radians(deg))
-                p.circle(bx, by, 0.06 * r, berries)
+            p.poly(ell, colour, edge, 0.012)
+            if berries and i % 2 == 0:
+                bx, by = x + 1.17 * r * np.cos(np.radians(deg)), y + 1.17 * r * np.sin(np.radians(deg))
+                p.circle(bx, by, 0.085 * r, berries)
 
 
-def _ring(p: _Pen, x, y, r_out, r_in, fill, letters, n=26):
-    """A ring band, with a run of short marks round it standing in for its lettering, and a gap at the bottom."""
-    p.circle(x, y, r_out, fill)
-    mid, half = (r_out + r_in) / 2, (r_out - r_in) * 0.26
-    for k in range(n):
-        a = np.radians(-90 + 360 * (k + 0.5) / n)
-        if abs(np.degrees(a) + 90) < 28:
-            continue
-        p.line([(x + (mid - half) * np.cos(a), y + (mid - half) * np.sin(a)),
-                (x + (mid + half) * np.cos(a), y + (mid + half) * np.sin(a))], letters, (r_out - r_in) * 0.18)
-
-
-def _scroll(p: _Pen, x, y, w, h, fill, letters, n=7):
-    """A ribbon with folded ends and marks along it for its words."""
-    back = _shade(fill, 0.7)
+def _scroll(p: _Pen, y, w, h, fill, edge=INK):
+    """A plain ribbon with folded ends."""
+    back = _shade(fill, 0.6)
     for side in (1, -1):
-        p.poly([(x + side * w / 2, y + h * 0.3), (x + side * (w / 2 + 0.12), y + h * 0.1),
-                (x + side * (w / 2 + 0.08), y - h * 0.2), (x + side * (w / 2 + 0.12), y - h * 0.6),
-                (x + side * w * 0.42, y - h * 0.6)], back)
-    p.poly([(x - w / 2, y + h / 2), (x + w / 2, y + h / 2), (x + w / 2, y - h / 2), (x - w / 2, y - h / 2)], fill)
-    for k in range(n):
-        cx = x - w * 0.36 + w * 0.72 * k / max(n - 1, 1)
-        p.line([(cx - w * 0.035, y), (cx + w * 0.035, y)], letters, h * 0.3)
+        p.poly([(side * w / 2, y + h * 0.3), (side * (w / 2 + 0.12), y + h * 0.1), (side * (w / 2 + 0.08), y - h * 0.2),
+                (side * (w / 2 + 0.12), y - h * 0.6), (side * w * 0.42, y - h * 0.6)], back, edge, 0.01)
+    p.poly([(-w / 2, y + h / 2), (w / 2, y + h / 2), (w / 2, y - h / 2), (-w / 2, y - h / 2)], fill, edge, 0.012)
 
 
 def _rose(p: _Pen, x, y, r):
@@ -1154,169 +1188,164 @@ def _rose(p: _Pen, x, y, r):
 
 
 def _crest_tas(p: _Pen):
-    """A rayed star under a crown; a blue ring and disc with a gold lion walking, its forepaw raised."""
-    c = -0.12
-    blue = (11, 79, 151)
-    p.poly(_star(0, c, 0.82, 0.60, 16), GOLD, GOLD_DARK, 0.012)
-    p.poly(_star(0, c, 0.70, 0.52, 16, rot=90 + 180 / 16), GOLD_LIGHT)
-    _ring(p, 0, c, 0.50, 0.37, blue, GOLD_LIGHT)
-    p.circle(0, c, 0.37, _shade(blue, 0.75))
-    p.poly(_shape(LION, 0, c, 0.31), GOLD)
-    _crown(p, 0, 0.66, 0.46)
+    """A rayed gold star under a crown, round a blue disc with a gold lion walking, its forepaw raised."""
+    c = CREST_Y
+    p.poly(_star(0, c, 0.84, 0.62, 16), GOLD, GOLD_DARK, 0.03)
+    p.circle(0, c, 0.50, GOLD_DARK)
+    p.circle(0, c, 0.45, (11, 79, 151))
+    p.poly(_shape(LION, 0, c - 0.02, 0.40), GOLD_LIGHT, GOLD_DARK, 0.015)
+    _crown(p)
 
 
 def _crest_nsw(p: _Pen):
-    """A laurel wreath round a white ring under a crown; in a light blue disc, a brown eagle with the state's shield,
-    and a scroll below."""
-    c = -0.08
+    """A laurel wreath round a white ring under a crown; in a light blue disc a brown eagle, wings spread, with the
+    state's white shield and red cross on its breast; a white scroll below."""
+    c = CREST_Y
     blue = (0, 48, 135)
-    _wreath(p, 0, c, 0.66, GREEN)
-    _ring(p, 0, c, 0.58, 0.44, WHITE, blue)
-    p.circle(0, c, 0.44, (150, 196, 230))
-    p.poly(_shape(BIRD, 0, c - 0.08, 0.40), (120, 78, 40))
-    p.poly(_shape(BEAK, 0, c - 0.08, 0.40), GOLD)
-    sx, sy = 0, c + 0.10
-    p.poly(_shield(sx, sy, 0.17, 0.19), WHITE, (60, 60, 60), 0.008)
-    p.poly([(sx - 0.02, sy + 0.095), (sx + 0.02, sy + 0.095), (sx + 0.02, sy - 0.08), (sx - 0.02, sy - 0.08)],
+    _wreath(p, 0.66)
+    p.circle(0, c, 0.56, WHITE, blue, 0.035)
+    p.circle(0, c, 0.43, (140, 190, 228), blue, 0.02)
+    p.poly(_shape(BIRD, 0, c - 0.06, 0.44), (110, 70, 34), (50, 30, 12), 0.015)
+    p.poly(_shape(BEAK, 0, c - 0.06, 0.44), GOLD)
+    sx, sy = 0, c - 0.04
+    p.poly(_shield(sx, sy, 0.20, 0.22), WHITE, INK, 0.012)
+    p.poly([(sx - 0.025, sy + 0.11), (sx + 0.025, sy + 0.11), (sx + 0.025, sy - 0.09), (sx - 0.025, sy - 0.09)],
            CROWN_RED)
-    p.poly([(sx - 0.085, sy + 0.035), (sx + 0.085, sy + 0.035), (sx + 0.085, sy - 0.005), (sx - 0.085, sy - 0.005)],
+    p.poly([(sx - 0.10, sy + 0.045), (sx + 0.10, sy + 0.045), (sx + 0.10, sy - 0.005), (sx - 0.10, sy - 0.005)],
            CROWN_RED)
-    _crown(p, 0, 0.66, 0.42)
-    _scroll(p, 0, -0.84, 0.92, 0.15, WHITE, blue)
+    _crown(p)
+    _scroll(p, -0.88, 0.86, 0.16, WHITE, blue)
 
 
 def _crest_vic(p: _Pen, ink=(45, 44, 142)):
-    """In one colour, as on the cars: a wreath, a five-pointed star point down, a crown, the Southern Cross in the
-    centre, a scroll below."""
-    c = -0.06
-    _wreath(p, 0, c, 0.68, ink, leaves=9, start=-85, end=78)
-    star = _star(0, c, 0.62, 0.30, 5, rot=-90)
+    """In one colour, as on the cars: a wreath, a five-pointed star point down, a crown, and the Southern Cross in the
+    middle; a scroll below."""
+    c = CREST_Y + 0.04
+    _wreath(p, 0.70, ink, leaves=6, start=-82, end=70, y=c)
+    star = _star(0, c, 0.66, 0.31, 5, rot=-90)
     p.poly(star, ink)
     for x, y in star[::2]:
-        p.line([(0, c), (x, y)], WHITE, 0.012)
-    p.circle(0, c, 0.25, WHITE)
+        p.line([(0, c), (x, y)], WHITE, 0.025)
+    p.circle(0, c, 0.27, WHITE)
     p.circle(0, c, 0.21, ink)
-    southern_cross = ((0, 0.12, 0.03), (0.08, 0.02, 0.028), (0, -0.11, 0.032), (-0.09, 0.0, 0.026),
-                      (0.035, -0.035, 0.016))
-    for x, y, r in southern_cross:
+    for x, y, r in ((0, 0.12, 0.04), (0.09, 0.02, 0.035), (0, -0.11, 0.04), (-0.09, 0.0, 0.035)):
         p.circle(x, c + y, r, WHITE)
-    _crown(p, 0, 0.70, 0.40, gold=ink, cap=ink, jewel=WHITE)
-    _scroll(p, 0, -0.84, 0.88, 0.14, ink, WHITE)
+    _crown(p, gold=ink, cap=ink, jewel=WHITE)
+    _scroll(p, -0.88, 0.80, 0.15, ink, ink)
 
 
 def _crest_qld(p: _Pen):
-    """A white eight-pointed cross edged in red on a laurel wreath under a crown; a blue ring round a navy disc with
-    a small crown; a blue scroll."""
-    c = -0.08
+    """A white eight-pointed cross edged in red on a laurel wreath, under a crown; a blue ring round a navy disc with
+    a small gold crown; a blue scroll."""
+    c = CREST_Y
     blue = (14, 48, 136)
-    _wreath(p, 0, c, 0.70, GREEN)
-    p.poly(_cross_pattee(0, c, 0.68), CROWN_RED)
-    p.poly(_cross_pattee(0, c, 0.60), WHITE)
-    _ring(p, 0, c, 0.36, 0.26, blue, WHITE, n=20)
-    p.circle(0, c, 0.26, (14, 24, 64))
-    _crown(p, 0, c - 0.04, 0.24)
-    _crown(p, 0, 0.72, 0.40)
-    _scroll(p, 0, -0.86, 0.94, 0.14, blue, WHITE)
+    _wreath(p, 0.70)
+    p.poly(_cross_pattee(0, c, 0.76), CROWN_RED)
+    p.poly(_cross_pattee(0, c, 0.66), WHITE)
+    p.circle(0, c, 0.34, blue, WHITE, 0.02)
+    p.circle(0, c, 0.25, (14, 24, 64))
+    _crown(p, w=0.26, y=c - 0.07)
+    _crown(p)
+    _scroll(p, -0.88, 0.90, 0.15, blue)
 
 
 def _crest_sa(p: _Pen):
     """A golden wattle wreath under a crown; a light blue ring round a white disc with a black and white piping shrike,
     its wings spread."""
-    c = -0.10
-    _wreath(p, 0, c, 0.70, GREEN, berries=(242, 205, 40))
-    _ring(p, 0, c, 0.60, 0.44, (96, 164, 216), WHITE)
-    p.circle(0, c, 0.44, WHITE)
-    bird = _shape(BIRD, 0, c - 0.06, 0.38)
-    p.poly(bird, INK)
+    c = CREST_Y
+    _wreath(p, 0.70, berries=(242, 205, 40))
+    p.circle(0, c, 0.60, (80, 150, 210), INK, 0.025)
+    p.circle(0, c, 0.46, WHITE)
+    s = 0.46
+    p.poly(_shape(BIRD, 0, c - 0.06, s), INK)
     for mirror in (False, True):
-        p.poly(_shape(((0.24, 0.44), (0.46, 0.68), (0.54, 0.60), (0.32, 0.36)), 0, c - 0.06, 0.38, mirror), WHITE)
-    p.circle(0, c - 0.06 + 0.38 * 0.46, 0.035, WHITE)
-    p.poly(_shape(BEAK, 0, c - 0.06, 0.38), (150, 150, 150))
-    _crown(p, 0, 0.70, 0.42)
+        p.poly(_shape(((0.24, 0.44), (0.46, 0.68), (0.56, 0.58), (0.32, 0.34)), 0, c - 0.06, s, mirror), WHITE)
+    p.circle(0, c - 0.06 + s * 0.46, 0.045, WHITE)
+    p.poly(_shape(BEAK, 0, c - 0.06, s), (150, 150, 150))
+    _crown(p)
 
 
 def _crest_wa(p: _Pen, ink=(36, 52, 138)):
-    """In one colour, as on the cars: an eight-pointed star under a crown, banners above and below, a black swan in
-    the centre."""
-    c = -0.08
-    p.poly(_star(0, c, 0.84, 0.50, 8), ink)
-    p.circle(0, c, 0.47, WHITE)
-    p.circle(0, c, 0.42, ink)
-    p.circle(0, c, 0.33, WHITE)
-    p.poly(_shape(SWAN, 0, c - 0.02, 0.27), ink)
-    _scroll(p, 0, 0.40, 0.40, 0.13, ink, WHITE, n=2)
-    _scroll(p, 0, -0.58, 0.72, 0.15, ink, WHITE, n=6)
-    _crown(p, 0, 0.74, 0.38, gold=ink, cap=ink, jewel=WHITE)
+    """In one colour, as on the cars: an eight-pointed star under a crown, a black swan in the middle, a banner
+    below."""
+    c = CREST_Y
+    p.poly(_star(0, c, 0.84, 0.52, 8), ink)
+    p.circle(0, c, 0.50, WHITE)
+    p.circle(0, c, 0.45, ink)
+    p.circle(0, c, 0.36, WHITE)
+    p.poly(_shape(SWAN, 0, c - 0.02, 0.33), ink)
+    _scroll(p, -0.84, 0.70, 0.15, ink, ink)
+    _crown(p, gold=ink, cap=ink, jewel=WHITE)
 
 
 def _crest_nt(p: _Pen):
-    """A laurel wreath with two desert roses, under a crown; an ochre kangaroo standing in the middle; blue and gold
-    scrolls below."""
-    c = -0.04
-    _wreath(p, 0, c, 0.66, GREEN, start=-70, end=62)
-    for deg in (205, 335):
-        _rose(p, 0.66 * np.cos(np.radians(deg)), c + 0.66 * np.sin(np.radians(deg)), 0.12)
-    p.poly(_shape(KANGAROO, 0.04, c + 0.04, 0.50), (224, 122, 42), (120, 60, 20), 0.008)
-    _crown(p, 0, 0.74, 0.38)
-    _scroll(p, 0, -0.62, 0.92, 0.16, (31, 63, 143), WHITE)
-    _scroll(p, 0, -0.86, 0.64, 0.11, GOLD, INK, n=5)
+    """A laurel wreath with two desert roses, under a crown; an ochre kangaroo standing in the middle; a blue scroll
+    below."""
+    c = CREST_Y + 0.04
+    _wreath(p, 0.66, start=-66, end=60, y=c)
+    for deg in (210, 330):
+        _rose(p, 0.66 * np.cos(np.radians(deg)), c + 0.66 * np.sin(np.radians(deg)), 0.16)
+    p.poly(_shape(KANGAROO, 0.04, c + 0.04, 0.58), (224, 122, 42), (90, 44, 12), 0.022)
+    _crown(p)
+    _scroll(p, -0.84, 0.90, 0.17, (31, 63, 143))
 
 
 def _crest_act(p: _Pen):
-    """The AFP's: a silver eight-pointed star and wreath under a crown; a navy ring round the Commonwealth arms (a
-    shield between a kangaroo and an emu); a navy scroll."""
-    c = -0.08
+    """The AFP's: a silver eight-pointed star under a crown; a navy ring round the Commonwealth arms (a shield between
+    a kangaroo and an emu); a navy scroll."""
+    c = CREST_Y
     navy = (15, 26, 51)
-    p.poly(_star(0, c, 0.84, 0.52, 8), SILVER, GREY, 0.012)
-    _wreath(p, 0, c, 0.58, (150, 156, 162))
-    _ring(p, 0, c, 0.50, 0.35, navy, WHITE)
-    p.circle(0, c, 0.35, WHITE)
-    p.poly(_shield(0, c - 0.02, 0.16, 0.21), GOLD, GOLD_DARK, 0.008)
-    p.poly([(-0.08, c + 0.085), (0, c + 0.085), (0, c - 0.02), (-0.08, c - 0.02)], CROWN_RED)
-    p.poly(_shape(KANGAROO, -0.17, c - 0.02, 0.17, mirror=True), (150, 90, 40))
-    p.poly(_shape(EMU, 0.17, c - 0.02, 0.17), (70, 50, 36))
-    _crown(p, 0, 0.74, 0.40)
-    _scroll(p, 0, -0.84, 0.80, 0.14, navy, WHITE)
+    p.poly(_star(0, c, 0.84, 0.54, 8), SILVER, GREY, 0.035)
+    p.circle(0, c, 0.54, navy)
+    p.circle(0, c, 0.41, WHITE)
+    p.poly(_shield(0, c, 0.24, 0.30), GOLD, GOLD_DARK, 0.012)
+    p.poly([(-0.12, c + 0.15), (0, c + 0.15), (0, c - 0.0), (-0.12, c)], CROWN_RED)
+    p.poly(_shape(KANGAROO, -0.25, c - 0.02, 0.21, mirror=True), (150, 90, 40))
+    p.poly(_shape(EMU, 0.25, c - 0.02, 0.21), (70, 50, 36))
+    _crown(p)
+    _scroll(p, -0.86, 0.78, 0.15, navy)
 
 
 CRESTS = {"tas": _crest_tas, "nsw": _crest_nsw, "vic": _crest_vic, "qld": _crest_qld, "sa": _crest_sa,
           "wa": _crest_wa, "nt": _crest_nt, "act": _crest_act}
 
 
-def draw_crest(img: Image.Image, name: str, cx: float, cy: float, size: float, rotate: int = 0) -> None:
-    """Crest `name`, `size` px across, centred on (cx, cy) in `img`, turned `rotate` degrees anticlockwise."""
-    pen = _Pen(size)
+def draw_crest(img: Image.Image, name: str, cx: float, cy: float, w: float, h: float, rotate: int = 0) -> None:
+    """Crest `name` into a `w` by `h` px box centred on (cx, cy) in `img` (a crest is square in metres, and the cells'
+    pixels aren't), turned `rotate` degrees anticlockwise."""
+    pen = _Pen(4 * max(w, h))
     CRESTS[name](pen)
     layer = pen.img
     if rotate:
         layer = layer.rotate(rotate, resample=Image.Resampling.BICUBIC)
-    s = max(int(round(size)), 1)
-    small = layer.resize((s, s), Image.Resampling.LANCZOS)
-    img.paste(small.convert("RGB"), (int(round(cx - s / 2)), int(round(cy - s / 2))), small)
+    small = layer.resize((max(int(round(w)), 1), max(int(round(h)), 1)), Image.Resampling.LANCZOS)
+    img.paste(small.convert("RGB"), (int(round(cx - small.width / 2)), int(round(cy - small.height / 2))), small)
 
 
 # -- the liveries ------------------------------------------------------------------------------------------------
 # From the services' releases and dated photos, 2019-2026 (THIRD_PARTY_NOTICES.md lists the sources). Where the
 # sources leave it open (which side the light bar's red is on, what crosses the rear), a common Australian layout is
-# drawn and the docs say so.
+# drawn and the docs say so. Crests are drawn 0.30-0.38 m across, larger than on most real cars, so they read from
+# the road; Tasmania's moves above the chequer on the rear door to find the room.
 
 LIVERIES = {
     # Silver SUVs: a two-row chequer low on the doors with a lime line on top; "Police" above it on the front doors;
-    # the crest small on the rear door, below the chequer; a POLICE box in the bar (new liveries from April 2019).
+    # the crest on the rear door; a POLICE box in the bar (new liveries from April 2019).
     "tas": Livery("tas", "Tasmania Police", "suv", ((11, 79, 151), WHITE), 2, (0.36, 0.53), "Police", (11, 79, 151),
-                  (0.43, 0.68, 0.12, 0.9), paint=(195, 198, 202), stripes=(((212, 220, 0), 0.555, 0.025),),
-                  crest="tas", crest_side=(0.655, 0.20, 0.17), bar_word="POLICE"),
+                  (0.43, 0.68, 0.12, 0.9), paint=SILVER_PAINT, metallic=True,
+                  stripes=(((212, 220, 0), 0.555, 0.025),), crest="tas", crest_side=(0.655, 0.79, 0.30),
+                  bar_word="POLICE"),
     # White SUVs: a two-row chequer along the shoulder, dropping to the headlights; "Police" large and low across both
     # doors, the crest ahead of it; "Police" on the bonnet; "000 EMERGENCY" on the rear quarter.
     "nsw": Livery("nsw", "NSW Police Force", "suv", ((0, 48, 135), WHITE), 2, (0.79, 0.95), "Police", (0, 48, 135),
-                  (0.55, 0.32, 0.17, 1.3), word_bonnet=(0, 48, 135), extra=(("000 EMERGENCY", 0.84, 0.71, 0.045),),
-                  crest="nsw", crest_side=(0.365, 0.33, 0.19)),
+                  (0.55, 0.32, 0.17, 1.3), word_bonnet=(0, 48, 135), extra=(("000 EMERGENCY", 0.845, 0.72, 0.085),),
+                  crest="nsw", crest_side=(0.365, 0.33, 0.36)),
     # White SUVs: a three-row chequer at door-handle height with "131 444" and "000" panels set into it; "Police" low
     # round the B-pillar with the crest, in one colour, ahead of it; "Police" on the bonnet; blue on the driver's side.
     "vic": Livery("vic", "Victoria Police", "suv", ((45, 44, 142), WHITE), 3, (0.70, 0.93), "Police", (45, 44, 142),
                   (0.55, 0.34, 0.15, 1.2), word_bonnet=(45, 44, 142),
                   panels=(("131 444", 0.64, 0.40), ("000", 0.83, 0.24)),
-                  crest="vic", crest_side=(0.37, 0.35, 0.17)),
+                  crest="vic", crest_side=(0.37, 0.35, 0.33)),
     # White Camrys (RAV4s coming), in the 2023 high-visibility design: large squares in a wedge on the lower body,
     # rising to the rear, an orange-red line along its top and another along the sill; "POLICE" in keylined capitals
     # on the front door; the crest large on the rear door.
@@ -1324,7 +1353,7 @@ LIVERIES = {
                   (14, 48, 136), (0.44, 0.63, 0.115, 0.95), pattern="wedge", wedge=(2, 4), wedge_edge=(255, 75, 31),
                   stripes=(((255, 75, 31), 0.085, 0.02),), word_stretch=1.0,
                   word_outline=(((255, 75, 31), 0.10), (WHITE, 0.05)), band_rear=False,
-                  crest="qld", crest_side=(0.645, 0.65, 0.30)),
+                  crest="qld", crest_side=(0.645, 0.65, 0.38)),
     # White SUVs: a three-row black chequer between yellow lines, breaking up into scattered squares over the front
     # guard; "POLICE" in tall black capitals keylined yellow across both doors, and on the bonnet; red on the driver's
     # side of the bar, with a POLICE box.
@@ -1332,23 +1361,23 @@ LIVERIES = {
                  (0.585, 0.35, 0.17, 1.15), front="scatter", stripes=(((242, 215, 0), 0.865, 0.012),
                                                                        ((242, 215, 0), 0.595, 0.03)),
                  word_stretch=0.82, word_outline=(((242, 215, 0), 0.07),), word_bonnet=(20, 20, 24),
-                 crest="sa", crest_side=(0.345, 0.36, 0.18), lightbar=(BLUE, RED), bar_word="POLICE"),
+                 crest="sa", crest_side=(0.345, 0.36, 0.34), lightbar=(BLUE, RED), bar_word="POLICE"),
     # White SUVs: a two-row chequer along the shoulder with a thin orange-red line above; "Police" on the doors, the
     # crest in one colour near it.
     "wa": Livery("wa", "Western Australia Police Force", "suv", ((36, 52, 138), WHITE), 2, (0.76, 0.92), "Police",
                  (36, 52, 138), (0.55, 0.40, 0.14, 1.0), stripes=(((232, 80, 42), 0.945, 0.008),),
-                 crest="wa", crest_side=(0.375, 0.41, 0.16)),
+                 crest="wa", crest_side=(0.375, 0.42, 0.32)),
     # White 4WDs: a two-row chequer along the shoulder between ochre lines; "Police" on the front doors below it;
     # "Police" and the crest on the bonnet.
     "nt": Livery("nt", "Northern Territory Police", "suv", ((31, 63, 143), WHITE), 2, (0.72, 0.89), "Police",
                  (31, 63, 143), (0.44, 0.55, 0.13, 0.9), stripes=(((224, 122, 42), 0.915, 0.012),
                                                                    ((224, 122, 42), 0.695, 0.012)),
-                 word_bonnet=(31, 63, 143), crest="nt", crest_bonnet=0.34),
+                 word_bonnet=(31, 63, 143), crest="nt", crest_bonnet=0.50),
     # ACT Policing (AFP), white cars since May 2019: a three-row near-black chequer between lime lines, bigger squares
     # on the front guard, lime flashes on the bumper; "Police" low on the rear door, ghosted on the bonnet; the AFP's
     # crest low on the front door; a POLICE sign in the bar.
     "act": Livery("act", "ACT Policing (Australian Federal Police)", "sedan", ((15, 26, 51), WHITE), 3, (0.68, 0.90),
                   "Police", (15, 26, 51), (0.645, 0.32, 0.13, 0.85), front="enlarge",
-                  stripes=(((200, 220, 0), 0.925, 0.012), ((200, 220, 0), 0.655, 0.012)), word_bonnet=(172, 176, 182),
-                  corner_flash=(200, 220, 0), crest="act", crest_side=(0.42, 0.32, 0.17), bar_word="POLICE"),
+                  stripes=(((200, 220, 0), 0.925, 0.012), ((200, 220, 0), 0.655, 0.012)), word_bonnet=(160, 164, 170),
+                  corner_flash=(200, 220, 0), crest="act", crest_side=(0.42, 0.33, 0.34), bar_word="POLICE"),
 }

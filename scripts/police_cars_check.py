@@ -28,6 +28,7 @@ from PIL import Image
 from mapcreator.core import ai_line, kn5, package, police_car, textures
 from mapcreator.core.layout import RoadModel, logic_dummies
 from mapcreator.core.scene import LocalFrame, Mesh
+from mapcreator.pipeline import track_stage
 
 TRACK = "mapcreator_police_check"
 ROAD_M, HALF_W = 600.0, 3.2
@@ -171,13 +172,13 @@ def track(out: Path) -> Path:
     placed = []
     textures_png: dict[str, Image.Image] = {}
     retro: dict[str, tuple[float, float]] = {}
-    car_materials: list[str] = []
+    car_props: dict[str, dict] = {}
     for k, code in enumerate(police_car.JURISDICTIONS):
         car = police_car.police_car(code)
         textures_png.update(car.textures)
-        car_materials += list(car.materials)
+        car_props.update(car.kn5_properties)
         for name, night in car.night_diffuse.items():
-            retro[name] = (night, police_car.MATERIAL_PROPS["ksDiffuse"])
+            retro[name] = (night, car.kn5_properties[name]["ksDiffuse"])
         x = FIRST_CAR_M + k * SPACING_M
         forward = frame.to_ac(1.0, 0.0, 0.0) - frame.to_ac(0.0, 0.0, 0.0)  # east, the driving direction
         for side, north in ((0, HALF_W + VERGE_M), (1, -(HALF_W + VERGE_M))):
@@ -186,16 +187,16 @@ def track(out: Path) -> Path:
 
     tex = {"road_marked.dds": textures.to_dds(textures.LIBRARY["road_marked"]()),
            "grass.dds": textures.to_dds(textures.LIBRARY["grass"]())}
-    plain = {"ksAmbient": 0.36, "ksDiffuse": 0.44, "ksSpecular": 0.02, "ksSpecularEXP": 15.0,
-             "ksEmissive": (0.0, 0.0, 0.0), "ksAlphaRef": 0.0}
-    mats = [kn5.Kn5Material("road", properties=plain, textures={"txDiffuse": "road_marked.dds"}),
-            kn5.Kn5Material("grass", properties=plain, textures={"txDiffuse": "grass.dds"})]
+    # The road and grass take the values a built track gives them, so the night exposure is a built track's.
+    extra = {"ksEmissive": (0.0, 0.0, 0.0), "ksAlphaRef": 0.0}
+    mats = [kn5.Kn5Material(name, properties=track_stage.MATERIAL_PROPS[name] | extra,
+                            textures={"txDiffuse": f"{texture}.dds"})
+            for name, texture in (("road", "road_marked"), ("grass", "grass"))]
     for name, im in textures_png.items():
         tex[f"{name}.dds"] = textures.to_dds(im)
-    car_props = police_car.MATERIAL_PROPS | {"ksEmissive": (0.0, 0.0, 0.0), "ksAlphaRef": 0.0}
-    for name in sorted(set(car_materials)):
+    for name in sorted(car_props):
         texture = next(t for t in textures_png if name == t or name.startswith(t + "_"))
-        mats.append(kn5.Kn5Material(name, properties=car_props, textures={"txDiffuse": f"{texture}.dds"}))
+        mats.append(kn5.Kn5Material(name, properties=car_props[name] | extra, textures={"txDiffuse": f"{texture}.dds"}))
     index = {m.name: i for i, m in enumerate(mats)}
     kmeshes = [kn5.Kn5Mesh(m.name, index[m.material], m.positions, m.normals, m.uvs, m.triangles,
                            cast_shadows=m.renderable, renderable=m.renderable) for m in meshes]
