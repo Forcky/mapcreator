@@ -35,6 +35,9 @@ MATERIAL_PROPS = {
     "rail": {"ksAmbient": 0.4, "ksDiffuse": 0.55, "ksSpecular": 0.35, "ksSpecularEXP": 30.0},
     "water": {"ksAmbient": 0.25, "ksDiffuse": 0.35, "ksSpecular": 0.8, "ksSpecularEXP": 90.0},
     "power": {"ksAmbient": 0.4, "ksDiffuse": 0.55, "ksSpecular": 0.25, "ksSpecularEXP": 25.0},
+    # The closure props (closure and closure_retro): the walls' values with no specular, which lit their black legend
+    # in the headlights at night (`closures.KN5_PROPERTIES`).
+    "closure": closures.KN5_PROPERTIES,
 }
 ALPHA_REF = 0.5
 # Retroreflective materials and their ksDiffuse at night: the furniture's and the closure props'.
