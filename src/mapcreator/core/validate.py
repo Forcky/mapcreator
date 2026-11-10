@@ -225,10 +225,11 @@ def vertical_checks(rep: Report, label: str, line: ai_line.AiLine) -> None:
 
 def bend_hint_checks(rep: Report, label: str, line: ai_line.AiLine, road: RoadSurface, hints_ini: Path) -> None:
     """A warning, never a failure, at each bend AC's AI would take faster than the road allows: over a crest, down
-    a steep grade, with no banking (`ai_line.bend_hints`, #63). It says where the bend is and what hint
-    `data/ai_hints.ini` holds there. The bends are found from the AI file, as the track stage found them, with the
-    banking read from the road's triangles (`_banking`). Only where the AI is over the grip on a level road:
-    elsewhere even 7% of banking away from the bend leaves the pace over 0.96, nowhere near BEND_TRIGGER."""
+    a steep grade, with no banking, or braking for it over a crest (`ai_line.bend_hints`, #63). It says where the
+    bend is, the speeds, and what hint `data/ai_hints.ini` holds there. The bends are found from the AI file, as the
+    track stage found them, with the banking read from the road's triangles (`_banking`). Only where the car is over
+    the grip on a level road: elsewhere even 7% of banking away from the bend leaves the pace over 0.96, nowhere
+    near BEND_TRIGGER."""
     level = ai_line.bend_paces(line)
     short = np.interp(np.asarray(line.length, dtype=float), level["s"], level["pace"]) < 1.0
     short[1:] |= short[:-1].copy()
@@ -238,7 +239,8 @@ def bend_hint_checks(rep: Report, label: str, line: ai_line.AiLine, road: RoadSu
         rep.passed.append(f"{label}: no bend the AI would take faster than the road allows")
         return
     written = _hint_ranges(hints_ini)
-    total = max(float(line.length[-1]), 1.0)
+    s = np.asarray(line.length, dtype=float)
+    total = max(float(s[-1]), 1.0)
     for b in bends:
         over = [v for s0, s1, v in written if s0 * total < b.end and s1 * total > b.start]
         if over and min(over) <= b.pace + 1e-6:
@@ -247,11 +249,23 @@ def bend_hint_checks(rep: Report, label: str, line: ai_line.AiLine, road: RoadSu
             hint = f"no hint of {b.pace:g} is written there" + (f" (only {min(over):g})" if over else "")
         why = ([f"over a {b.crest_radius_m:.0f} m crest"] if np.isfinite(b.crest_radius_m) else []) + [
             f"{b.descent * 100:.1f}% downhill", f"{round(b.banking * 100, 1) + 0.0:.1f}% banking"]
+        where = f"at {b.start:.0f}-{b.end:.0f} m along the AI line ({', '.join(why)})"
+        if b.car_kmh is not None and b.car_kmh > b.ai_kmh + 1.0:
+            # Braking over a crest: the car is furthest over on the bend's way in, so the bend is named by its
+            # tightest radius over the hint, where the hint holds the AI's corner speed lowest.
+            tight = float(np.min(np.interp(np.arange(b.start, b.end + 0.5), s, line.extra[:, 4])))
+            corner = np.sqrt(ai_line.BEND_GRIP * ai_line.G * tight) * 3.6
+            rep.warnings.append(
+                f"{label}: the {tight:.0f} m bend {where}: braking over the crest before it, the car may reach the "
+                f"{b.radius_m:.0f} m radius on its way in at {b.car_kmh:.0f} km/h, where AC's AI plans "
+                f"{b.ai_kmh:.0f} km/h and the grip left allows {b.road_kmh:.0f} km/h ({b.pace:g} of the "
+                f"{corner:.0f} km/h the AI works out for its tightest radius); {hint}")
+            continue
         corner = np.sqrt(ai_line.BEND_GRIP * ai_line.G * b.radius_m) * 3.6
         rep.warnings.append(
-            f"{label}: the {b.radius_m:.0f} m bend at {b.start:.0f}-{b.end:.0f} m along the AI line ({', '.join(why)}): "
-            f"AC's AI may take it at {b.ai_kmh:.0f} km/h where the grip left allows {b.road_kmh:.0f} km/h "
-            f"({b.pace:g} of the {corner:.0f} km/h it works out for the radius); {hint}")
+            f"{label}: the {b.radius_m:.0f} m bend {where}: AC's AI may take it at {b.ai_kmh:.0f} km/h where the "
+            f"grip left allows {b.road_kmh:.0f} km/h ({b.pace:g} of the {corner:.0f} km/h it works out for the "
+            f"radius); {hint}")
 
 
 BANKING_INSET_M = 0.25  # the banking is read this far inside each road edge, to be sure of hitting the road

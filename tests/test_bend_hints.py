@@ -2,6 +2,7 @@
 crest, runs down a steep grade or has no banking, gets an `ai_hints.ini` section, and the validator warns about it."""
 
 import math
+import re
 
 import numpy as np
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from mapcreator.core import ai_line, layout, package, validate
 from mapcreator.core import section as sec
 from mapcreator.core.layout import RoadModel
+from mapcreator.core.scene import LocalFrame
 
 STEP = 5.0  # metres between points, as fast_lane.ai has them
 # Like Lyell Highway forward at 0.7 km (#63): a 120 m left-hander that starts over a crest (a 600 m vertical radius)
@@ -17,12 +19,13 @@ CREST = {"crest_r": 600.0, "descent": 0.1, "crest_from": 590.0}
 
 
 def bend_line(*, radius=120.0, bend_from=600.0, bend_len=160.0, crest_r=None, crest_from=570.0, descent=0.0,
-              hold=100.0, banking=0.0, total=1400.0, grades=None) -> tuple[ai_line.AiLine, np.ndarray]:
+              hold=100.0, banking=0.0, total=1400.0, grades=None, ease=0.0) -> tuple[ai_line.AiLine, np.ndarray]:
     """A stand-in AI line as the file holds it, points STEP apart: straight, a left-hand bend of `radius` from
-    `bend_from` for `bend_len` metres, straight again. From `crest_from` the grade falls from level to `descent`
-    over a crest of vertical radius `crest_r` (or at once, with none), holds it `hold` metres, then eases back to
-    level over a 1,000 m sag; or `grades` gives the grade as (metres, grades) to interpolate. And the road's rise
-    to the left beside each point, for `banking` into the bend."""
+    `bend_from` for `bend_len` metres, straight again, its curvature eased in and out over `ease` metres either
+    side (at once, with none). From `crest_from` the grade falls from level to `descent` over a crest of vertical
+    radius `crest_r` (or at once, with none), holds it `hold` metres, then eases back to level over a 1,000 m sag;
+    or `grades` gives the grade as (metres, grades) to interpolate. And the road's rise to the left beside each
+    point, for `banking` into the bend."""
     s = np.arange(0.0, total + STEP / 2, STEP)
     bend = (s >= bend_from) & (s <= bend_from + bend_len)
     over = descent * crest_r if crest_r else STEP
@@ -33,6 +36,10 @@ def bend_line(*, radius=120.0, bend_from=600.0, bend_len=160.0, crest_r=None, cr
     extra = np.zeros((len(s), ai_line.EXTRA_FIELDS))
     extra[:, 0] = 30.0
     extra[:, 4] = np.where(bend, radius, 1000.0)
+    if ease:
+        k = np.interp(s, [bend_from - ease, bend_from, bend_from + bend_len, bend_from + bend_len + ease],
+                      [1e-3, 1 / radius, 1 / radius, 1e-3])
+        extra[:, 4] = np.minimum(1 / k, 1000.0)
     extra[:, 5] = extra[:, 6] = 3.5
     extra[:, 8] = 1.0  # turning left (and + on the straights, as a file's sign of a tiny curvature can be)
     extra[:, 13] = 1.0
@@ -80,8 +87,10 @@ def test_a_bend_over_a_crest_and_down_a_steep_grade_gets_a_hint():
     assert 600 <= hint.start <= hint.at < hint.end <= 760  # where the bend is over the crest and descent
     assert 550 < hint.crest_radius_m < 700 and 0.03 < hint.descent <= 0.1 and hint.banking == 0.0
     assert hint.road_kmh < hint.ai_kmh
-    # The pace that brings the AI's corner speed down to what the grip left allows.
+    # The pace that brings the AI's corner speed down to what the grip left allows (and lower by as much as the car
+    # overshoots the AI's plan, here not at all: the crest is past the braking zone).
     corner = math.sqrt(ai_line.BEND_GRIP * ai_line.G * hint.radius_m) * 3.6
+    assert hint.car_kmh == pytest.approx(hint.ai_kmh)
     assert hint.pace == pytest.approx(hint.road_kmh / corner, abs=0.011)
 
 
@@ -131,6 +140,130 @@ def test_the_road_banking_leaves_the_crown_out():
         back = RoadModel.from_arrays(s, np.column_stack([s, flat]), flat, flat, flat, flat, np.full(len(s), 3.5),
                                      np.full(len(s), 3.5), left, right, True)
         assert ai_line.road_banking(back, line) == pytest.approx(np.full(3, -e))  # driven the other way
+
+
+# --- Braking for a bend over a crest (Lyell Highway reverse at 14.0 km, in game on 10 Nov) ------------------------
+
+# A straight, then over a 250 m crest from 500 m and down 15%, into a 45 m left-hander from 560 m eased in over the
+# 50 m before it: the braking zone runs over the crest, where the tyres carry only part of the car.
+OVER_THE_TOP = {"radius": 45.0, "bend_from": 560.0, "bend_len": 60.0, "ease": 50.0, "crest_r": 250.0,
+                "crest_from": 500.0, "descent": 0.15, "hold": 400.0}
+
+
+def test_the_car_keeps_to_the_plan_unless_a_crest_cuts_its_braking():
+    d = np.arange(0.0, 300.0)
+    curvature = np.where(d >= 200.0, 1 / 50.0, 1e-3)  # a straight, then a 50 m bend to brake for from 40 m/s
+    none = np.zeros(len(d))
+    # Level, downhill or uphill, the plan brakes at BRAKE plus g times the grade, less what cornering takes, and the
+    # car at least as hard: with no crest it keeps to the plan exactly.
+    for grade in (none, np.full(len(d), -0.1), np.full(len(d), 0.08)):
+        planned = ai_line.speed_profile(d, curvature, grade, v_max=40.0, mu=ai_line.BEND_GRIP)
+        assert np.array_equal(ai_line.arrival_speeds(d, planned, grade, none), planned)
+    # Over a 300 m crest from 130 m to 170 m, in the braking zone, the tyres carry 1 - v^2 / (R_v g) of the car,
+    # about half at 38 m/s: it brakes at that share of the rate and comes off the crest faster than planned.
+    planned = ai_line.speed_profile(d, curvature, none, v_max=40.0, mu=ai_line.BEND_GRIP)
+    assert planned[131] < planned[130] < 40.0  # braking there
+    crest = np.where((d >= 130.0) & (d < 170.0), 1 / 300.0, 0.0)
+    car = ai_line.arrival_speeds(d, planned, none, crest)
+    assert np.all(car >= planned) and np.array_equal(car[:131], planned[:131])
+    load = 1 - planned[130] ** 2 / (300.0 * ai_line.G)
+    assert 0.45 < load < 0.55
+    assert car[131] == pytest.approx(math.sqrt(planned[130] ** 2 - 2 * ai_line.BRAKE * load), abs=1e-9)
+    assert car[170] > planned[170] + 3.0
+    # Past the crest it brakes at the full rate again, and it's back on the plan in the bend.
+    assert np.array_equal(car[-50:], planned[-50:])
+
+
+def _with_hints(line, bends):
+    """The AI's plan with the bends' hints applied (a hint scales the corner speed sqrt(BEND_GRIP g R), as a radius
+    R pace^2 would), the car's speed braking for it, and the speed the grip allows, every metre."""
+    p = ai_line.bend_paces(line)
+    s = p["s"]
+    pace = np.ones(len(s))
+    for b in bends:
+        for a, e, q in b.sections(s[-1]):
+            pace[(s >= a) & (s < e)] = np.minimum(pace[(s >= a) & (s < e)], q)
+    grade = np.interp(s, line.length, line.extra[:, 17])
+    planned = ai_line.speed_profile(s, 1 / (p["radius"] * pace ** 2), grade, v_max=ai_line.BEND_TOP_KMH / 3.6,
+                                    mu=ai_line.BEND_GRIP)
+    car = ai_line.arrival_speeds(s, planned, grade, p["crest"])
+    allowed = np.sqrt(ai_line.G * (ai_line.BEND_GRIP - p["descent"])
+                      / (1 / p["radius"] + ai_line.BEND_GRIP * p["crest"]))
+    return s, car, allowed
+
+
+def test_braking_over_a_crest_into_a_steep_tight_bend_gets_a_hint_over_the_bend():
+    line, _ = bend_line(**OVER_THE_TOP)
+    paces = ai_line.bend_paces(line)
+    # The AI plans to reach its corner speed, but braking over the crest the car comes into the bend faster.
+    assert at(paces, 540, "car") > at(paces, 540, "speed") * 1.08
+    hints = ai_line.bend_hints(line)
+    assert len(hints) == 1
+    hint = hints[0]
+    # Over the bend, from where the car first comes in faster than the grip allows, not on the straight before.
+    assert 510 <= hint.start <= 530 and 550 <= hint.end <= 600 and hint.start <= hint.at < hint.end
+    assert hint.car_kmh > hint.ai_kmh + 5 and hint.road_kmh < hint.car_kmh
+    assert hint.radius_m < ai_line.BEND_MAX_RADIUS_M and hint.descent > 0.1 and hint.crest_radius_m < 700
+    # Low enough for the braking it has: with the hint, the car comes into the bend no faster than the grip allows,
+    # from where the hint eases in to where it ends; with none, it's over by a sixth.
+    s, car, allowed = _with_hints(line, hints)
+    held = (s >= hint.start - 2 * ai_line.BEND_RAMP_M) & (s <= hint.end) & (paces["radius"] < ai_line.BEND_MAX_RADIUS_M)
+    assert np.all(car[held] <= allowed[held])
+    s, car, allowed = _with_hints(line, [])
+    assert np.max(car[held] / allowed[held]) > 1.15
+    # The pace: what the grip allows over the AI's corner speed, lower by as much as the car overshoots its plan.
+    corner = math.sqrt(ai_line.BEND_GRIP * ai_line.G * hint.radius_m) * 3.6
+    assert hint.pace == pytest.approx(hint.road_kmh / corner * hint.ai_kmh / hint.car_kmh, abs=0.011)
+    assert 0.62 <= hint.pace < 0.8
+    # The same bend and descent with the crest well before the braking zone: the AI arrives as it planned, short of
+    # the grip only by the grade (a pace of 0.91), and gets no hint, as before.
+    line, _ = bend_line(**{**OVER_THE_TOP, "crest_from": 300.0})
+    assert ai_line.bend_hints(line) == []
+    assert at(ai_line.bend_paces(line), 590) == pytest.approx(math.sqrt(1 - 0.15 / ai_line.BEND_GRIP), abs=0.005)
+
+
+def _profiled_road(curvature, height, *, reverse: bool) -> RoadModel:
+    """A road 7 m wide with no banking, sampled every metre in its forward direction, turning as `curvature` (1/m,
+    + left) says and as high as `height`, as the layout driving it `reverse` or not sees it."""
+    k, z = np.asarray(curvature, dtype=float), np.asarray(height, dtype=float)
+    s = np.arange(len(k), dtype=float)
+    heading = np.concatenate([[0.0], np.cumsum((k[1:] + k[:-1]) / 2)])
+    mid = (heading[1:] + heading[:-1]) / 2
+    xy = np.vstack([[0.0, 0.0], np.column_stack([np.cumsum(np.cos(mid)), np.cumsum(np.sin(mid))])])
+    left, right = sec.half_slopes(np.zeros(len(s)))
+    return RoadModel.from_arrays(s, xy + [500_000.0, 5_200_000.0], z, heading, k, np.gradient(z, s),
+                                 np.full(len(s), 3.5), np.full(len(s), 3.5), left, right, reverse)
+
+
+def test_in_reverse_the_hint_lands_on_the_bend(tmp_path):
+    # Driven in reverse, metres r from the reverse start: over a 250 m crest from 500 m, down 15% from 537.5 m to
+    # 800 m, into a 45 m left-hander at 560-620 m eased in from 510 m and out to 670 m. Forward it's the same road
+    # from the other end: up 15% through a right-hander, then over the crest.
+    r = np.arange(0.0, 1401.0)
+    turn = np.interp(r, [510.0, 560.0, 620.0, 670.0], [0.0, 1 / 45.0, 1 / 45.0, 0.0])
+    grade = -np.interp(r, [500.0, 537.5, 800.0, 900.0], [0.0, 0.15, 0.15, 0.0])
+    height = 200.0 + np.concatenate([[0.0], np.cumsum((grade[1:] + grade[:-1]) / 2)])
+    placed = {}
+    for reverse in (False, True):
+        road = _profiled_road(-turn[::-1], height[::-1], reverse=reverse)
+        line = ai_line.build(road, LocalFrame(500_000.0, 5_200_000.0, 10.0), end_short_m=layout.AI_END_SHORT_M)
+        path = tmp_path / ("reverse" if reverse else "forward") / "fast_lane.ai"
+        ai_line.write(path, line)
+        bends = ai_line.bend_hints(ai_line.read(path), ai_line.road_banking(road, line))  # as the track stage does
+        finish = layout.finish_distance(road.length)
+        hints = ai_line.pace_hints(road.length, finish, line=line, bends=bends)
+        assert hints[-3:] == ai_line.runoff_hints(road.length, finish, line=line)
+        total = line.length[-1]
+        # Back from the spline fractions AC reads to metres along this layout's road.
+        placed[reverse] = [(*np.interp([a * total, b * total], line.length, line.station), q)
+                           for a, b, q in hints[:-3]]
+    assert placed[False] == []  # uphill into the bend: nothing
+    steps = placed[True]
+    assert len(steps) == 5
+    a, b, p = steps[2]
+    assert p < 0.8 and 505 <= a <= 530 and 550 <= b <= 600  # the full pace on the bend's way in, in reverse metres
+    assert steps[0][0] >= 450 and steps[-1][1] <= 650  # its ramps just before and into the bend
+    assert all(x[1] == pytest.approx(y[0], abs=0.01) for x, y in zip(steps, steps[1:]))
 
 
 # --- What the track writes ----------------------------------------------------------------------------------------
@@ -238,6 +371,27 @@ def test_the_validator_warns_where_a_bend_is_risky_and_says_the_hint_is_written(
     rep = validate.Report()
     validate.bend_hint_checks(rep, "forward", written, LevelRoad(), ini)
     assert rep.ok and len(rep.warnings) == 1 and rep.warnings[0].endswith(f"no hint of {bend.pace:g} is written there")
+
+
+def test_the_validator_says_when_a_crest_cuts_the_braking(tmp_path):
+    line, _ = bend_line(**OVER_THE_TOP, total=2400.0)
+    length = float(line.station[-1] + layout.AI_END_SHORT_M)
+    finish = layout.finish_distance(length)
+    written, ini = _layout(tmp_path, line, ai_line.pace_hints(length, finish, line=line,
+                                                              bends=ai_line.bend_hints(line)))
+    bend = ai_line.bend_hints(written)[0]
+    rep = validate.Report()
+    validate.bend_hint_checks(rep, "reverse", written, LevelRoad(), ini)
+    assert rep.ok and len(rep.warnings) == 1
+    warning = rep.warnings[0]
+    # Named by its tightest radius over the hint, not the radius on the way in where the car is furthest over.
+    tight = re.match(rf"reverse: the (\d+) m bend at {bend.start:.0f}-{bend.end:.0f} m along the AI line \(over a ",
+                     warning)
+    assert tight and 45 <= int(tight.group(1)) <= 50 < bend.radius_m
+    assert (f"braking over the crest before it, the car may reach the {bend.radius_m:.0f} m radius on its way in at "
+            f"{bend.car_kmh:.0f} km/h, where AC's AI plans {bend.ai_kmh:.0f} km/h and the grip left allows "
+            f"{bend.road_kmh:.0f} km/h ({bend.pace:g} of the ") in warning
+    assert warning.endswith(f"a hint of {bend.pace:g} is written there")
 
 
 def test_the_validator_passes_a_level_bend(tmp_path):
