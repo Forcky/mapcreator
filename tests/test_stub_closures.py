@@ -289,7 +289,6 @@ def mainline_mesh(c, sec):
 
 def checks(js, plan, p, c, sec, spawns=((0.0, 0.0),), extra=()):
     from mapcreator.core import junctions as jn
-    from mapcreator.pipeline.validate_stage import _stub_check
     by = stubs.by_junction(plan)
     out = []
     for m in jn.mouths(js, c["s"], c["xy"], c["heading"], sec["half_left"], sec["half_right"], stubs=by):
@@ -297,7 +296,8 @@ def checks(js, plan, p, c, sec, spawns=((0.0, 0.0),), extra=()):
         mouth = m.corridor().intersection(jn.side_band(m, c["s"], c["xy"], HALF + jn.MOUTH_BAND_M))
         st = by.get(m.junction["id"])
         out.append(validate.JunctionCheck(m.junction["name"], to_ac(mouth), to_ac(jn.side_road(m, c["s"], c["xy"])),
-                                          _stub_check(st, c, sec, FRAME) if st is not None else None))
+                                          validate.stub_check(st, c["s"], c["xy"], c["heading"], sec["half_left"],
+                                                              sec["half_right"], FRAME) if st is not None else None))
     data, dummies = kn5([mainline_mesh(c, sec), *p.meshes, *extra], spawns)
     rep = validate.Report()
     validate.closure_checks(rep, "main", data, dummies, out)
@@ -313,7 +313,7 @@ def test_the_validator_passes_placed_closures_and_cars():
     assert rep.failed == [] and len(rep.passed) == 7, rep.failed
 
 
-def test_the_validator_fails_solid_props_near_the_road_or_a_spawn_and_closures_off_their_stubs():
+def test_the_validator_fails_solid_props_near_the_road_or_a_spawn_and_warns_of_closures_off_their_stubs():
     js = [junction(300.0, 90.0, closure="major", highway="tertiary")]
     c, sec = road()
     plan, p = placed(js, c=c, sec=sec)
@@ -332,10 +332,12 @@ def test_the_validator_fails_solid_props_near_the_road_or_a_spawn_and_closures_o
     stray = Mesh("CLOSURE_9", "closure", car.positions + np.float32([500.0, 0, 0]), car.normals, car.uvs,
                  car.triangles)
     rep = checks(js2, plan, p, c, sec, extra=[stray])
-    assert any("stand on side roads' stubs" in f for f in rep.failed)
-    assert any("without a stub" in f for f in rep.failed)
+    # A side road's dressing: warnings, never failures (the mesh stage leaves out a stub whose closure is off it).
+    assert rep.failed == []
+    assert any("stand on side roads' stubs" in w for w in rep.warnings)
+    assert any("without a stub" in w for w in rep.warnings)
     rep = checks(js, plan, type(p)([m for m in p.meshes if not m.name.startswith("CLOSURE_")], {}, {}, []), c, sec)
-    assert any("every stub closed" in f for f in rep.failed)
+    assert rep.failed == [] and any("every stub closed" in w for w in rep.warnings)
 
 
 def test_with_no_closures_the_validator_adds_nothing():

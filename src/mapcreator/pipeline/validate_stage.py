@@ -84,36 +84,9 @@ def _roundabouts(job: Job, work: WorkDir) -> list[str]:
     return [f"{r.get('name') or 'unnamed'}, {r['radius_m']:.0f} m radius" for r in rings if r.get("on_route")]
 
 
-SEAM_OFFSET_M = 0.05  # the seam checks sample this far either side of where a stub's road meets another's
-
-
 def _stub_check(st: dict, c, sec, frame) -> validate.StubCheck:
-    """A stub (`core.stubs`) as the validator sees it, in AC x/z: its paved outline, points along its centreline, and
-    pairs of points either side of its seams with the mainline's edge (away from the flares' tangent points, where
-    the flare runs within centimetres of the edge) and with its own ribbon's first row."""
-    def ac(p):
-        p = np.asarray(p, float).reshape(-1, 2)
-        return frame.to_ac(p[:, 0], p[:, 1], np.zeros(len(p)))[:, [0, 2]]
-
-    side = junctions.SIDE_CODE[st["side"]]
-    sign = 1.0 if side == "L" else -1.0
-    half = sec["half_left" if side == "L" else "half_right"]
-    a, b = st["mouth"]["rows"]
-    rows = np.arange(a + 2, b - 1)
-    nrm = np.column_stack([-np.sin(c["heading"][rows]), np.cos(c["heading"][rows])]) * sign
-    edge = c["xy"][rows] + nrm * half[rows, None]
-    pairs = [np.stack([edge - SEAM_OFFSET_M * nrm, edge + SEAM_OFFSET_M * nrm], axis=1)]
-    r = st["rows"]
-    k = int(st["ribbon_from_m"])
-    hd = float(r["heading"][k])
-    u, n = np.array([np.cos(hd), np.sin(hd)]), np.array([-np.sin(hd), np.cos(hd)])
-    w = float(r["half_m"][k])
-    across = np.asarray(r["xy"][k], float) + np.outer(np.arange(-0.9 * w, 0.9 * w + 1e-9, 0.5), n)
-    pairs.append(np.stack([across - SEAM_OFFSET_M * u, across + SEAM_OFFSET_M * u], axis=1))
-    seams = np.concatenate(pairs)
-    centre = np.asarray(r["xy"], float)[1:-1:2]  # short of the end row, the mesh's very edge
-    paved = shapely.Polygon(ac(st["outline"])).buffer(0)
-    return validate.StubCheck(paved, ac(centre), ac(seams.reshape(-1, 2)).reshape(-1, 2, 2))
+    """A stub as the validator sees it (`validate.stub_check`), from the centreline's and cross-section's arrays."""
+    return validate.stub_check(st, c["s"], c["xy"], c["heading"], sec["half_left"], sec["half_right"], frame)
 
 
 def junction_checks(job: Job, work: WorkDir) -> list[validate.JunctionCheck]:
@@ -127,7 +100,7 @@ def junction_checks(job: Job, work: WorkDir) -> list[validate.JunctionCheck]:
     c = np.load(work.root / profile_stage.STAGE / "centreline.npz")
     sec = np.load(work.root / section_stage.STAGE / "section.npz")
     s, xy = c["s"], c["xy"]
-    plan = stubs.by_junction(section_stage.stubs(work, job))
+    plan = stubs.by_junction(mesh_stage.built_stubs(work, job))
 
     def to_ac(geom):
         return shapely.transform(geom, lambda p: frame.to_ac(p[:, 0], p[:, 1], np.zeros(len(p)))[:, [0, 2]])

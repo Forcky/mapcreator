@@ -363,11 +363,10 @@ def kn5_nodes(meshes):
 
 
 def stub_check(st, c, sec):
-    from mapcreator.pipeline.validate_stage import _stub_check
-    return _stub_check(st, c, sec, FRAME)
+    return validate.stub_check(st, c["s"], c["xy"], c["heading"], sec["half_left"], sec["half_right"], FRAME)
 
 
-def test_the_validator_passes_joined_stubs_and_fails_a_gap_or_ground_over_one():
+def test_the_validator_passes_joined_stubs_and_warns_of_a_gap_or_ground_over_one():
     c, sec, plan, rb, b = built([junction(300.0, 90.0)], dem_h=GROUND - 0.4)
     (st,) = plan
     meshes = (mesh.ribbon_meshes(rb, c["s"], FRAME, cut=b.cut, edge_break=b.edge_break) + b.meshes
@@ -380,7 +379,9 @@ def test_the_validator_passes_joined_stubs_and_fails_a_gap_or_ground_over_one():
     no_stub = [m for m in meshes if not m.name.startswith("1ROAD_J")]
     rep = validate.Report()
     validate.stub_checks(rep, "main", kn5_nodes(no_stub), [check])
-    assert any("drawn as road" in f for f in rep.failed) and any("no gap" in f for f in rep.failed)
+    # Warnings, not failures: the mesh stage leaves out a stub that fails these, so one is never a build's end.
+    assert rep.failed == []
+    assert any("drawn as road" in w for w in rep.warnings) and any("no gap" in w for w in rep.warnings)
     lifted = [m if not m.name.startswith("1GRASS_T") else
               type(m)(m.name, m.material, m.positions + np.float32([0, 2.0, 0]), m.normals, m.uvs, m.triangles)
               for m in meshes]
@@ -389,7 +390,111 @@ def test_the_validator_passes_joined_stubs_and_fails_a_gap_or_ground_over_one():
                                                            np.zeros((3, 2)), np.array([[0, 1, 2]]))], FRAME)
     rep = validate.Report()
     validate.stub_checks(rep, "main", kn5_nodes(lifted + extra_ground), [check])
-    assert any("no ground above" in f for f in rep.failed)
+    assert rep.failed == [] and any("no ground above" in w for w in rep.warnings)
+
+
+# -- a stub cut short, and leaving out a faulty stub as built ----------------------------------------------------------
+
+def test_a_stub_cut_short_keeps_its_throat_in_its_outline_whatever_the_rounding():
+    # Lyell Highway through Queenstown (Nov 2026): a side road cut short where it met another stub had its outline
+    # rebuilt from its rows as rounded for stubs.json. They missed the throat by 0.3 mm, the union came out in two
+    # pieces, and the outline kept the carriageway alone: the validator's samples in the throat found no road, and the
+    # closure's tape stood off the stub. Here the rows as written are pushed 3 mm along the stub, as rounding can.
+    c, sec = road()
+    m = stubs._Mainline(c, sec)
+    cand, _ = stubs._candidate(junction(300.0, 77.6), m, flat(), 1.0)
+    rows = cand.record["rows"]
+    hd = np.asarray(rows["heading"])
+    rows["xy"] = (np.asarray(rows["xy"]) + 0.003 * np.column_stack([np.cos(hd), np.sin(hd)])).tolist()
+    cut = stubs._clip(cand, 40)
+    outline = shapely.Polygon(cut.record["outline"])
+    assert outline.buffer(0.01).contains(cut.throat)
+    assert cut.record["ends"] == "clipped" and len(cut.record["rows"]["d"]) == cut.first + 40
+    assert outline.area == pytest.approx(cut.throat.area + 39 * 2 * cut.half, rel=0.02)
+
+
+def test_a_paved_outline_closes_a_hairline_gap_and_never_drops_a_part():
+    throat = shapely.box(0.0, 0.0, 6.0, 5.0)
+    rows = np.column_stack([np.full(21, 3.0), 5.0003 + np.arange(21.0)])  # 0.3 mm past the throat's edge
+    nrm = np.tile([-1.0, 0.0], (21, 1))
+    outline = stubs._paved_outline(throat, rows, nrm, 2.9)
+    assert outline.geom_type == "Polygon" and outline.area == pytest.approx(30.0 + 20 * 5.8, abs=0.1)
+    assert stubs._paved_outline(throat, rows + [0.0, 1.0], nrm, 2.9) is None  # a real gap: no outline, no stub
+
+
+def test_a_stub_cut_short_by_another_keeps_its_whole_paved_area_and_centreline():
+    c, sec = road()
+    hook = [[345.0, 0.0], [340.0, 30.0], [325.0, 45.0], [305.0, 50.0], [290.0, 50.0]]
+    js = [junction(300.0, 90.0, jid=0, highway="tertiary", closure="major"),
+          {**junction(345.0, 80.0, jid=1), "line": hook, "length_m": 90.0}]
+    p = stubs.plan(js, c, sec, flat())
+    (a, b) = p["stubs"]
+    assert b["ends"] == "clipped" and b["length_m"] < 85
+    for st in (a, b):
+        outline = shapely.Polygon(st["outline"])
+        assert outline.buffer(0.05).contains(shapely.MultiPoint(st["rows"]["xy"]))
+        assert outline.buffer(0.05).contains(shapely.MultiPoint([q[:2] for f in st["flares"].values()
+                                                                 for q in f["points"]]))
+
+
+def test_faults_find_a_stub_whose_outline_misses_its_throat_and_a_closure_off_its_stub():
+    c, sec, plan, rb, b = built([junction(300.0, 90.0)], dem_h=GROUND - 0.4)
+    ground = (mesh.ribbon_meshes(rb, c["s"], FRAME, cut=b.cut, edge_break=b.edge_break) + b.meshes
+              + mesh.terrain_meshes(rb, 150.0, flat(GROUND - 0.4), FRAME, extra=b.footprint))
+    assert stubs.faults(plan, ground, [], c, sec, FRAME) == {}
+    (st,) = plan
+    first = int(st["ribbon_from_m"])
+    xy, n, w = np.asarray(st["rows"]["xy"])[first:], cl_normals(st)[first:], st["width_m"] / 2
+    broken = {**st, "outline": np.vstack([xy + w * n, (xy - w * n)[::-1]]).round(2).tolist()}  # the carriageway alone
+    found = stubs.faults([broken], ground, [], c, sec, FRAME)
+    assert "not_drawn" in found[0] and "seam" in found[0]
+    stray = mesh.soup_meshes("CLOSURE_000_TAPE", "closure", [(np.array([[400.0, 60.0, 11.0], [401.0, 60.0, 11.0],
+                                                                       [400.0, 61.0, 11.0]]), np.zeros((3, 2)),
+                                                              np.array([[0, 1, 2]]))], FRAME)
+    on_stub = mesh.soup_meshes("CLOSURE_000_TAPE", "closure", [(np.array([[299.0, 20.0, 11.0], [301.0, 20.0, 11.0],
+                                                                         [300.0, 21.0, 11.0]]), np.zeros((3, 2)),
+                                                                np.array([[0, 1, 2]]))], FRAME)
+    assert stubs.faults(plan, ground, on_stub, c, sec, FRAME) == {}
+    assert stubs.faults(plan, ground, stray, c, sec, FRAME) == {0: ["closure_off"]}
+
+
+def cl_normals(st):
+    hd = np.asarray(st["rows"]["heading"])
+    return np.column_stack([-np.sin(hd), np.cos(hd)])
+
+
+def test_settle_leaves_out_a_faulty_stub_and_builds_again_without_it():
+    plan = [{"junction": k, "name": f"Road {k}", "station_m": 100.0 * k} for k in (1, 2, 3)]
+    builds = []
+
+    def build(sts):
+        builds.append([s["junction"] for s in sts])
+        return builds[-1]
+
+    kept, result, dropped = stubs.settle(plan, build, lambda sts, r: {2: ["seam"]} if 2 in r else {})
+    assert [s["junction"] for s in kept] == [1, 3] and result == [1, 3] and builds == [[1, 2, 3], [1, 3]]
+    assert dropped == [{"junction": 2, "name": "Road 2", "reason": "build_check", "faults": ["seam"]}]
+    # A check that never comes clean: after the last rebuild every stub goes, and the build has none.
+    builds.clear()
+    kept, result, dropped = stubs.settle(plan, build, lambda sts, r: {r[0]: ["hole"]} if r else {}, rebuilds=1)
+    assert kept == [] and result == [] and builds[-1] == []
+    assert sorted(d["junction"] for d in dropped) == [1, 2, 3]
+    assert stubs.settle([], build, lambda sts, r: {1: ["x"]})[0] == []
+
+
+def test_the_later_stages_read_the_stubs_as_built(tmp_path):
+    from mapcreator.pipeline import mesh_stage
+
+    work = WorkDir(tmp_path / "work")
+    work.write_json(route_stage.STAGE, route_stage.JUNCTIONS, {"version": 1, "junctions": [junction(300.0, 90.0)]})
+    work.write_json(section_stage.STAGE, section_stage.STUBS, {"version": 1, "stubs": [{"junction": 0}, {"junction": 1}],
+                                                               "skipped": []})
+    job = Job(track_id="t", waypoints=HOBART)
+    assert [s["junction"] for s in mesh_stage.built_stubs(work, job)] == [0, 1]  # before the mesh stage
+    work.write_json(mesh_stage.STAGE, mesh_stage.STUBS, {"version": 1, "stubs": [{"junction": 0}], "skipped": [
+        {"junction": 1, "name": None, "reason": "build_check", "faults": ["seam"]}]})
+    assert [s["junction"] for s in mesh_stage.built_stubs(work, job)] == [0]
+    assert mesh_stage.built_stubs(work, Job(track_id="t", waypoints=HOBART, junctions="none")) == []
 
 
 # -- the section stage, and `junctions: none` --------------------------------------------------------------------------

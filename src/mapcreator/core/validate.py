@@ -596,13 +596,57 @@ def _grid_in(area: shapely.Geometry, step: float) -> np.ndarray:
     return pts[shapely.contains_xy(area, pts[:, 0], pts[:, 1])]
 
 
-def stub_checks(rep: Report, label: str, data: dict, junctions: list[JunctionCheck]) -> None:
-    """Side roads' stubs (`core.stubs`): each drawn as road along its centreline; joined to the mainline's road and its
-    own ribbon with no gap and no step across the seam; no hole in the ground round it (road, verge, skirt and
-    terrain); and no ground above its road."""
-    stubs = [(j.label, j.stub) for j in junctions if j.stub is not None]
+SEAM_OFFSET_M = 0.05  # the seam checks sample this far either side of where a stub's road meets another's
+# What `stub_failures` finds wrong with a stub, and how the report says it.
+STUB_FAULTS = {"not_drawn": "drawn as road along their centrelines", "seam": "joined to the road with no gap or step "
+               f"over {SEAM_STEP_M * 100:.0f} cm", "hole": f"no hole in the ground within {STUB_GROUND_REACH_M:.0f} m",
+               "ground_above": "no ground above their road"}
+
+
+def stub_check(st: dict, s, xy, heading, half_l, half_r, frame) -> StubCheck:
+    """A stub (stubs.json's record, `core.stubs`) as the checks see it, in AC x/z: its paved outline, points along its
+    centreline, and pairs of points either side of its seams with the mainline's edge (away from the flares' tangent
+    points, where the flare runs within centimetres of the edge) and with its own ribbon's first row. `s`, `xy`,
+    `heading`, `half_l` and `half_r` are the centreline's and cross-section's arrays."""
+    def ac(p):
+        p = np.asarray(p, float).reshape(-1, 2)
+        return frame.to_ac(p[:, 0], p[:, 1], np.zeros(len(p)))[:, [0, 2]]
+
+    left = st["side"] == "left"
+    sign = 1.0 if left else -1.0
+    half = np.asarray(half_l if left else half_r, float)
+    heading, xy = np.asarray(heading, float), np.asarray(xy, float)
+    a, b = st["mouth"]["rows"]
+    rows = np.arange(a + 2, b - 1)
+    nrm = np.column_stack([-np.sin(heading[rows]), np.cos(heading[rows])]) * sign
+    edge = xy[rows] + nrm * half[rows, None]
+    pairs = [np.stack([edge - SEAM_OFFSET_M * nrm, edge + SEAM_OFFSET_M * nrm], axis=1)]
+    r = st["rows"]
+    k = int(st["ribbon_from_m"])
+    hd = float(r["heading"][k])
+    u, n = np.array([np.cos(hd), np.sin(hd)]), np.array([-np.sin(hd), np.cos(hd)])
+    w = float(r["half_m"][k])
+    across = np.asarray(r["xy"][k], float) + np.outer(np.arange(-0.9 * w, 0.9 * w + 1e-9, 0.5), n)
+    pairs.append(np.stack([across - SEAM_OFFSET_M * u, across + SEAM_OFFSET_M * u], axis=1))
+    seams = np.concatenate(pairs)
+    centre = np.asarray(r["xy"], float)[1:-1:2]  # short of the end row, the mesh's very edge
+    paved = shapely.Polygon(ac(st["outline"])).buffer(0)
+    return StubCheck(paved, ac(centre), ac(seams.reshape(-1, 2)).reshape(-1, 2, 2))
+
+
+def mesh_nodes(meshes) -> dict:
+    """Scene meshes (`core.scene.Mesh`, in AC axes) as a KN5's nodes read back (`kn5.read`), for the checks that read
+    one: the mesh stage checks its stubs with them before anything is written."""
+    return {"nodes": [{"class": 2, "name": m.name, "vertices": {"pos": np.asarray(m.positions)},
+                       "indices": np.asarray(m.triangles).ravel(), "renderable": int(m.renderable)} for m in meshes]}
+
+
+def stub_failures(data: dict, stubs: list[tuple[object, StubCheck]]) -> dict[object, list[str]]:
+    """What's wrong with each stub, by its key: `STUB_FAULTS`' keys, none if it's sound. Each is drawn as road along
+    its centreline; joined to the mainline's road and its own ribbon with no gap and no step across the seam; has no
+    hole in the ground round it (road, verge, skirt and terrain); and no ground above its road."""
     if not stubs:
-        return
+        return {}
     boxes = np.array([j.paved.buffer(STUB_GROUND_REACH_M + 2.0).bounds for _, j in stubs])
 
     def triangles(select) -> np.ndarray:
@@ -619,29 +663,39 @@ def stub_checks(rep: Report, label: str, data: dict, junctions: list[JunctionChe
 
     road = _Cover(triangles(is_road_mesh))
     ground = _Cover(triangles(lambda n: n[:1].isdigit() and "GRASS" in n))
-    missing, gaps, holes, above = [], [], [], []
-    for name, st in stubs:
+    out: dict[object, list[str]] = {}
+    for key, st in stubs:
+        faults = []
         if np.isnan(road.top(st.centre)).any():
-            missing.append(name)
+            faults.append("not_drawn")
         a, b = road.top(st.seams[:, 0]), road.top(st.seams[:, 1])
         if np.isnan(a).any() or np.isnan(b).any() or (np.abs(a - b) > SEAM_STEP_M).any():
-            gaps.append(name)
+            faults.append("seam")
         around = _grid_in(st.paved.buffer(STUB_GROUND_REACH_M), STUB_SAMPLE_M)
         if (np.isnan(road.top(around)) & np.isnan(ground.top(around))).any():
-            holes.append(name)
+            faults.append("hole")
         on = _grid_in(st.paved.buffer(-0.05), STUB_SAMPLE_M)
         r, g = road.top(on), ground.top(on)
         if (np.isfinite(g) & np.isfinite(r) & (g > r + STUB_GROUND_CLEAR_M)).any():
-            above.append(name)
-    n = len(stubs)
-    rep.check(not missing, f"{label}: {n} side-road stubs drawn as road along their centrelines"
-              + (f" (not {'; '.join(missing[:5])})" if missing else ""))
-    rep.check(not gaps, f"{label}: stubs joined to the road with no gap or step over {SEAM_STEP_M * 100:.0f} cm"
-              + (f" ({'; '.join(gaps[:5])})" if gaps else ""))
-    rep.check(not holes, f"{label}: no hole in the ground within {STUB_GROUND_REACH_M:.0f} m of a stub"
-              + (f" ({'; '.join(holes[:5])})" if holes else ""))
-    rep.check(not above, f"{label}: no ground above a stub's road"
-              + (f" ({'; '.join(above[:5])})" if above else ""))
+            faults.append("ground_above")
+        out[key] = faults
+    return out
+
+
+def stub_checks(rep: Report, label: str, data: dict, junctions: list[JunctionCheck]) -> None:
+    """Side roads' stubs (`core.stubs`), as `stub_failures` judges them. Warnings, not failures: the mesh stage has
+    already left out every stub that fails these on its own meshes (`core.stubs.faults`), so a fault found here
+    is one the two disagree on, in a side road's dressing, and a stub never costs a track its build."""
+    stubs = [(j.label, j.stub) for j in junctions if j.stub is not None]
+    if not stubs:
+        return
+    found = stub_failures(data, stubs)
+    for fault, what in STUB_FAULTS.items():
+        bad = [name for name, faults in found.items() if fault in faults]
+        if bad:
+            rep.warnings.append(f"{label}: side-road stubs not {what}: {'; '.join(bad[:5])}")
+        else:
+            rep.passed.append(f"{label}: {len(stubs)} side-road stubs {what}")
 
 
 def junction_checks(rep: Report, label: str, data: dict, dummies: dict, junctions: list[JunctionCheck], *,
@@ -694,8 +748,10 @@ def closure_checks(rep: Report, label: str, data: dict, dummies: dict, junctions
                    meshes: bool = True) -> None:
     """The closures on the stubs and their police cars (`core.stub_closures`): their colliders invisible, nothing solid
     within SOLID_ROAD_CLEARANCE_M of the road's edge (its own road meshes, not the stubs') or SOLID_SPAWN_CLEARANCE_M
-    of a spawn; and with the junctions known, every closure on a stub, every stub closed, and none on a side road
-    that has no stub. `meshes` False checks the spawns alone (another layout of the same meshes)."""
+    of a spawn: failures, since they're about driving the road. With the junctions known, every closure on a stub,
+    every stub closed, and none on a side road that has no stub: warnings, since they're about a side road's dressing,
+    which never costs a track its build (the mesh stage leaves out a stub whose closure stands off it,
+    `core.stubs.faults`). `meshes` False checks the spawns alone (another layout of the same meshes)."""
     nodes = [n for n in data["nodes"] if n["class"] == 2]
     visual = [n for n in nodes if n["name"].startswith(CLOSURE_MESHES)]
     solid = {what: [n for n in nodes if n["name"].startswith(prefix)] for what, prefix in CLOSURE_COLLIDERS}
@@ -736,16 +792,22 @@ def closure_checks(rep: Report, label: str, data: dict, dummies: dict, junctions
     paved = shapely.union_all([j.stub.paved for j in stubs])
     zone = paved.buffer(CLOSURE_ON_STUB_M)
     off = int((~shapely.contains_xy(zone, every[:, 0], every[:, 1])).sum())
-    rep.check(off == 0, f"{label}: closures and police cars stand on side roads' stubs"
+    _dressing(rep, off == 0, f"{label}: closures and police cars stand on side roads' stubs"
               + (f" ({off} vertices off them)" if off else ""))
     xz = _xz([n for n in visual if n["name"].startswith("CLOSURE_")])
     bare = [j.label for j in stubs if not shapely.contains_xy(j.stub.paved, xz[:, 0], xz[:, 1]).any()]
-    rep.check(not bare, f"{label}: every stub closed ({len(stubs)})" + (f" (not {'; '.join(bare[:5])})" if bare else ""))
+    _dressing(rep, not bare, f"{label}: every stub closed ({len(stubs)})"
+              + (f" (not {'; '.join(bare[:5])})" if bare else ""))
     skipped = [j for j in junctions if j.stub is None]
     hit = [j.label for j in skipped
            if shapely.contains_xy(shapely.union(j.mouth, j.road).difference(zone), every[:, 0], every[:, 1]).any()]
-    rep.check(not hit, f"{label}: no closure on a side road without a stub"
+    _dressing(rep, not hit, f"{label}: no closure on a side road without a stub"
               + (f" ({'; '.join(hit[:5])})" if hit else ""))
+
+
+def _dressing(rep: Report, ok: bool, what: str) -> None:
+    """A check on a side road's dressing (its stub or closure): passed, or a warning, never a failure."""
+    (rep.passed if ok else rep.warnings).append(what if ok else f"{what}: not so; the build goes on")
 
 
 def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,

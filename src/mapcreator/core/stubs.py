@@ -211,6 +211,24 @@ def _flare_shape_ok(curve: np.ndarray, corner_deg: float) -> bool:
     return bool(turn <= math.radians(180.0 - corner_deg + 35.0))
 
 
+OUTLINE_CLOSE_M = 0.05  # a gap this small between a stub's throat and its carriageway is closed in its outline
+
+
+def _paved_outline(throat: shapely.Geometry, rows_xy: np.ndarray, rows_n: np.ndarray, half: float):
+    """A stub's paved area, its throat and its carriageway from its first full row (`rows_xy`, `rows_n`: exact, not as
+    rounded for stubs.json), as one polygon; None if they don't make one. The two share the first row's edge, but a
+    union of floats can still leave a gap a fraction of a millimetre wide there: that's closed. A part is never
+    dropped: with the carriageway alone, the outline once missed the throat, and with it the closures' tape and the
+    validator's samples there (Lyell Highway's Queenstown, Nov 2026)."""
+    carriageway = shapely.Polygon(np.vstack([rows_xy + half * rows_n, (rows_xy - half * rows_n)[::-1]])).buffer(0)
+    outline = shapely.unary_union([throat.buffer(0), carriageway])
+    if outline.geom_type != "Polygon":
+        outline = outline.buffer(OUTLINE_CLOSE_M, join_style="mitre").buffer(-OUTLINE_CLOSE_M, join_style="mitre")
+    if outline.geom_type != "Polygon" or outline.area < throat.area + carriageway.area - 0.5:
+        return None
+    return shapely.Polygon(outline.exterior)
+
+
 def _smoothstep(x):
     x = np.clip(x, 0.0, 1.0)
     return x * x * (3 - 2 * x)
@@ -394,11 +412,9 @@ def _candidate(j: dict, m: _Mainline, dem_sample, width_factor: float, scale: di
         h[-1] = z_left[first] if f["es"] > 0 else z_right[first]
         f["heights"] = h
 
-    carriageway = shapely.Polygon(np.vstack([rows_xy[first:] + w * rows_n[first:],
-                                             (rows_xy[first:] - w * rows_n[first:])[::-1]])).buffer(0)
-    outline = shapely.unary_union([throat.buffer(0), carriageway])
-    if outline.geom_type != "Polygon":
-        outline = max(outline.geoms, key=lambda g: g.area)
+    outline = _paved_outline(throat, rows_xy[first:], rows_n[first:], w)
+    if outline is None:
+        return None, "outline"
     angle = math.degrees(math.atan2(math.sin(rows_h[0] - np.interp(at, m.s, m.heading)),
                                     math.cos(rows_h[0] - np.interp(at, m.s, m.heading))))
 
@@ -446,14 +462,11 @@ def _clip(cand: _Candidate, rows: int) -> _Candidate | None:
     rec["rows"] = {k: v[:keep] for k, v in rec["rows"].items()}
     rec["length_m"] = float(keep - 1)
     rec["ends"] = "clipped"
-    xy = np.asarray(rec["rows"]["xy"], float)[cand.first:]
-    n = cand.rows_n[:rows]
-    carriageway = shapely.Polygon(np.vstack([xy + cand.half * n, (xy - cand.half * n)[::-1]])).buffer(0)
-    outline = shapely.unary_union([cand.throat, carriageway])
-    if outline.geom_type != "Polygon":
-        outline = max(outline.geoms, key=lambda g: g.area)
+    cand.rows_xy, cand.rows_n = cand.rows_xy[:rows], cand.rows_n[:rows]
+    outline = _paved_outline(cand.throat, cand.rows_xy, cand.rows_n, cand.half)  # the exact rows, as the throat's
+    if outline is None:
+        return None
     rec["outline"] = np.round(np.asarray(outline.exterior.coords)[:-1], 2).tolist()
-    cand.rows_xy, cand.rows_n = cand.rows_xy[:rows], n
     return cand
 
 
@@ -517,6 +530,16 @@ def plan(junctions: list[dict], c, section, dem_sample, *, width_factor: float =
         fitted.body = shapely.unary_union(_body(fitted)).buffer(0)
         kept.append(fitted)
     kept = _clear_gates(kept, junctions, c, section, layouts, skipped)
+    # The outline as written (to the centimetre) must hold the stub's whole centreline, as the closures and the checks
+    # read it.
+    sound = []
+    for k in kept:
+        outline = shapely.Polygon(k.record["outline"]).buffer(0.05)
+        if outline.contains(shapely.MultiPoint(np.asarray(k.record["rows"]["xy"], float))):
+            sound.append(k)
+        else:
+            skipped.append({"junction": k.record["junction"], "name": k.record["name"], "reason": "outline"})
+    kept = sound
     kept.sort(key=lambda k: (k.record["station_m"], k.record["junction"]))
     return {"version": FORMAT_VERSION,
             "rule": {"flare_radius_m": FLARE_RADIUS_M, "flare_max_m": FLARE_MAX_M,
@@ -864,3 +887,64 @@ def build(stubs: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
              "triangles": int(sum(len(msh.triangles) for msh in meshes)),
              "length_m": round(sum(st["length_m"] - st["ribbon_from_m"] for st in stubs), 1)}
     return Built(meshes, cut, edge_break, mesh.Footprint(cut, ribbons, patches, edges), stats)
+
+
+# -- checking them as built ---------------------------------------------------------------------------------------
+
+CLOSURE_PREFIXES = ("CLOSURE_", "POLICE_", "1WALL_CLOSURE_", "1WALL_POLICE")
+
+
+def faults(stubs: list[dict], ground: list[Mesh], closure_meshes: list[Mesh], c, section,
+           frame: LocalFrame) -> dict[int, list[str]]:
+    """What's wrong with each stub as built, by its junction's id, for those with anything: the validator's own checks
+    (`validate.stub_failures`: drawn as road along its centreline, joined to the road with no gap or step, no hole in
+    the ground round it, no ground over its road) on the road, verge, stub and terrain meshes just built (`ground`);
+    and `closure_off`, where a closure's or police car's vertex stands more than `validate.CLOSURE_ON_STUB_M` off every
+    stub's paved outline, put down to the nearest. The mesh stage leaves out every stub listed, so the validator, which
+    runs the same checks on the KN5, finds nothing to warn of."""
+    from mapcreator.core import validate
+
+    checks = [(st["junction"], validate.stub_check(st, c["s"], c["xy"], c["heading"], section["half_left"],
+                                                   section["half_right"], frame)) for st in stubs]
+    out = {k: list(v) for k, v in validate.stub_failures(validate.mesh_nodes(ground), checks).items() if v}
+    pts = [np.asarray(m.positions, float)[:, [0, 2]] for m in closure_meshes if m.name.startswith(CLOSURE_PREFIXES)]
+    if pts and checks:
+        xz = np.vstack(pts)
+        paved = [chk.paved for _, chk in checks]
+        zone = shapely.unary_union([p.buffer(validate.CLOSURE_ON_STUB_M) for p in paved])
+        off = xz[~shapely.contains_xy(zone, xz[:, 0], xz[:, 1])]
+        if len(off):
+            near = np.argmin(np.column_stack([shapely.distance(p, shapely.points(off)) for p in paved]), axis=1)
+            for k in np.unique(near):
+                out.setdefault(checks[int(k)][0], []).append("closure_off")
+    return out
+
+
+def settle(stubs: list[dict], build, check, rebuilds: int = 3, log=None):
+    """Build with `stubs`, check, and build again without any stub the check finds faulty, until none is: `build(stubs)`
+    gives a result, `check(stubs, result)` the faults by junction id (`faults`). Each round leaves out at least one;
+    after `rebuilds` rounds every stub goes, so a side road never fails a build. Returns the stubs kept, the last
+    result, and the stubs left out as `skipped` records (reason `build_check`, with their `faults`)."""
+    dropped: list[dict] = []
+    for attempt in range(rebuilds + 2):
+        result = build(stubs)
+        found = check(stubs, result) if stubs else {}
+        if not found:
+            return stubs, result, dropped
+        for st in stubs:
+            if st["junction"] in found:
+                why = found[st["junction"]]
+                dropped.append({"junction": st["junction"], "name": st.get("name"), "reason": "build_check",
+                                "faults": why})
+                if log is not None:
+                    log.warning("side-road stub left out: %s (junction %s) at %.0f m: %s",
+                                st.get("name") or "an unnamed road", st["junction"], st["station_m"], ", ".join(why))
+        if attempt >= rebuilds:
+            if log is not None:
+                log.warning("side-road stubs all left out of this build after %d tries", attempt + 1)
+            dropped += [{"junction": st["junction"], "name": st.get("name"), "reason": "build_check", "faults": []}
+                        for st in stubs if st["junction"] not in found]
+            stubs = []
+        else:
+            stubs = [st for st in stubs if st["junction"] not in found]
+    return stubs, build(stubs), dropped
