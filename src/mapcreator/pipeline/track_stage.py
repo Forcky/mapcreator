@@ -12,8 +12,9 @@ import numpy as np
 
 from mapcreator import __version__, buildinfo
 from mapcreator.config import Settings
-from mapcreator.core import ai_line, furniture, grass, grassfx, kn5, package, textures, treefx, validate
-from mapcreator.core.layout import AI_END_SHORT_M, Layout, RoadModel, finish_distance, layouts_for, logic_dummies
+from mapcreator.core import ai_line, furniture, grass, grassfx, junctions, kn5, package, textures, treefx, validate
+from mapcreator.core.layout import (AI_END_SHORT_M, GATE_FROM_END_M, Layout, RoadModel, finish_distance,
+                                    gate_distances, layouts_for, logic_dummies)
 from mapcreator.core.scene import Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import mesh_stage, profile_stage, route_stage, scenery_stage, section_stage
@@ -175,11 +176,19 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     layouts = layouts_for(job.layouts.value)
     multi = len(layouts) > 1
     summary = {"title": title, "unsealed_m": round(unsealed_m, 1), "layouts": {}}
+    # Side roads' mouths: no timing gate stands in one (`layout.gate_distances`).
+    mouths = junctions.mouths(route_stage.junctions(work, job), c["s"], c["xy"], c["heading"], sec["half_left"],
+                              sec["half_right"])
     for lay in layouts:
         road = RoadModel.from_arrays(c["s"], c["xy"], c["z"], c["heading"], c["curvature"], c["grade"],
                                      sec["half_left"], sec["half_right"], sec["slope_left"], sec["slope_right"],
                                      lay.reverse)
-        dummies = logic_dummies(road, scene.frame)
+        avoid = junctions.layout_intervals(mouths, c["s"], lay.reverse)
+        dummies = logic_dummies(road, scene.frame, avoid)
+        gates = dict(zip(("start", "finish"), gate_distances(road, avoid)))
+        moved = {k: round(d - usual, 1) for (k, d), usual in zip(gates.items(), (GATE_FROM_END_M,
+                                                                                 finish_distance(road.length)))
+                 if abs(d - usual) > 1e-6}
         pits = sum(1 for d in dummies if d.name.startswith("AC_PIT_"))
         kdummies = [kn5.Kn5Dummy(d.name, kn5.dummy_matrix(d.position, d.forward, d.up)) for d in dummies]
         kn5_name = f"{job.track_id}_{lay.key}.kn5" if multi else f"{job.track_id}.kn5"
@@ -256,7 +265,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             # Each early apex the line keeps room from the outside edge for: metres along the AI line, and whether
             # the road was too narrow for it (then it's hinted above).
             "exit_clearance": [[round(a), round(b), short] for a, b, _, short in line.exits or []],
-        }
+        } | ({"gates_moved_m": moved} if moved else {})
 
     power_geo = work.root / scenery_stage.STAGE / "power.geojson"
     if power_geo.exists():

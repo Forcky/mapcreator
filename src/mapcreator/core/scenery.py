@@ -40,6 +40,7 @@ TREE_REACH_M = TREE_BANDS[-1][0]
 COVER_SPACING_M = 7.0  # candidate spacing where only tree *cover* is known
 CLEAR_OF_VERGE_M = 2.0
 BUILDING_REACH_M = reach.SCENERY_M
+BUILDING_CLEAR_M = 2.0  # a building reaching within this of the road's edge is left out
 STOREY_M = 3.0
 SINK_M = 0.4
 # Made-up trees within NEAR_M only: keeps their dense forest near the road, where the frame-rate cost is
@@ -260,10 +261,14 @@ class _Builder:
 
 
 def building_meshes(polys: list[shapely.Polygon], dem_sample, frame: LocalFrame,
-                    rng: np.random.Generator) -> list[Mesh]:
+                    rng: np.random.Generator, keep: np.ndarray | None = None) -> list[Mesh]:
+    """Walls and roofs for the footprints. Those `keep` marks False aren't built, but take their random draws all the
+    same, so every other building (and everything drawn from `rng` after them) is exactly as it would be."""
     walls = _Builder([], [], [], [])
     roofs = {c: _Builder([], [], [], []) for c in ROOF_COLOURS}
     colours = list(ROOF_COLOURS)
+    built_walls, built_roofs = walls, roofs
+    left_out = _Builder([], [], [], [])
 
     def ac(e, n, h):
         return frame.to_ac(e, n, h)
@@ -271,7 +276,9 @@ def building_meshes(polys: list[shapely.Polygon], dem_sample, frame: LocalFrame,
     def ac_dir(de, dn, dh):
         return np.array([de, dh, -dn], dtype=float)
 
-    for p in polys:
+    for k, p in enumerate(polys):
+        walls = built_walls if keep is None or keep[k] else left_out
+        roofs = built_roofs if keep is None or keep[k] else {c: left_out for c in ROOF_COLOURS}
         ring = np.asarray(p.exterior.coords)[:-1]
         ground = dem_sample(ring[:, 0], ring[:, 1])
         if not np.isfinite(ground).any():
@@ -299,9 +306,9 @@ def building_meshes(polys: list[shapely.Polygon], dem_sample, frame: LocalFrame,
         else:
             _flat(roof, p, eave + 0.15, ac)
     out = []
-    if walls.count:
-        out.append(walls.mesh("1WALL_BUILDINGS", "walls"))  # solid: cars stop at houses
-    for colour, b in roofs.items():
+    if built_walls.count:
+        out.append(built_walls.mesh("1WALL_BUILDINGS", "walls"))  # solid: cars stop at houses
+    for colour, b in built_roofs.items():
         if b.count:
             out.append(b.mesh(f"BUILDING_ROOF_{colour.upper()}", f"roof_{colour}"))
     return [m for m in _split(out)]

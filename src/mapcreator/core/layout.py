@@ -62,6 +62,12 @@ GRID_ROW_M = 8.0  # between rows, along the road
 GRID_SIDE_M = 2.0  # a pair stands this far either side of the centreline
 GRID_CAR_HALF_M = 1.0  # half a car's width, with a margin: a pair needs GRID_SIDE_M + this on both sides
 GRID_CLEAR_OF_START_M = 8.0  # the last row stays this far from the road's start (its end wall is 1 m in)
+# A timing gate that would stand in a side road's mouth moves along the road to the nearest place clear of it, this
+# much past the mouth's end (the mouth already has its margin), by at most GATE_SHIFT_MAX_M. A start gate moved back
+# stays this far ahead of the grid's front spot, so the front car starts behind the line.
+GATE_CLEAR_M = 0.5
+GATE_SHIFT_MAX_M = 40.0
+GATE_AHEAD_OF_GRID_M = 4.0
 
 
 @dataclass(frozen=True)
@@ -150,7 +156,38 @@ def _forward_ac(heading: float) -> list[float]:
     return [float(np.cos(heading)), 0.0, float(-np.sin(heading))]
 
 
-def logic_dummies(road: RoadModel, frame: LocalFrame) -> list[Dummy]:
+def clear_gate(d: float, avoid: list[tuple[float, float]], lo: float, hi: float,
+               max_shift_m: float = GATE_SHIFT_MAX_M) -> float:
+    """Where a timing gate due at `d` goes: `d` itself, or, where that falls in one of the `avoid` stretches (side
+    roads' mouths, as metres from the layout's start), the nearest place within `max_shift_m` that's clear of all of
+    them and between `lo` and `hi`. With nowhere clear, it stays at `d`."""
+    def blocked(x: float) -> bool:
+        return any(a <= x <= b for a, b in avoid)
+
+    if not blocked(d):
+        return d
+    # Every stretch's ends are where the gate could stand; the nearest one that's clear of all of them wins.
+    options = sorted({x for a, b in avoid for x in (a - GATE_CLEAR_M, b + GATE_CLEAR_M)}, key=lambda x: (abs(x - d), x))
+    for x in options:
+        if abs(x - d) <= max_shift_m and lo <= x <= hi and not blocked(x):
+            return float(x)
+    return d
+
+
+def gate_distances(road: RoadModel, avoid: list[tuple[float, float]] = ()) -> tuple[float, float]:
+    """The start and finish gates, as metres from the layout's start: GATE_FROM_END_M and `finish_distance`, each
+    moved a few metres where it would stand in a side road's mouth (`avoid`). The start gate stays ahead of the
+    grid's front spot and the finish leaves at least GATE_FROM_END_M of run-off."""
+    start = clear_gate(GATE_FROM_END_M, list(avoid), GATE_FROM_END_M - SPAWN_BEFORE_GATE_M + GATE_AHEAD_OF_GRID_M,
+                       road.length / 2)
+    finish = clear_gate(finish_distance(road.length), list(avoid), road.length / 2, road.length - GATE_FROM_END_M)
+    return start, finish
+
+
+def logic_dummies(road: RoadModel, frame: LocalFrame, avoid: list[tuple[float, float]] = ()) -> list[Dummy]:
+    """The layout's AC_* dummies. `avoid`: side roads' mouths, as (from, to) metres from the layout's start, which
+    the timing gates move clear of (`gate_distances`). The grid, the hot-lap spawn, the AI line and its hints keep to
+    the gates' usual places."""
     if road.length < 2 * GATE_FROM_END_M + 20:
         raise ValueError(f"route of {road.length:.0f} m is too short for start and finish gates")
     out: list[Dummy] = []
@@ -174,12 +211,11 @@ def logic_dummies(road: RoadModel, frame: LocalFrame) -> list[Dummy]:
         h = p["z"] - fall * abs(offset) + SPAWN_HEIGHT_M
         out.append(Dummy(name, frame.to_ac(e, n, h).tolist(), _forward_ac(p["heading"])))
 
-    start = GATE_FROM_END_M
-    finish = finish_distance(road.length)
+    start, finish = gate_distances(road, avoid)
     gate("AC_AB_START", start)
     gate("AC_AB_FINISH", finish)
     for k, (d, offset) in enumerate(grid(road)):
         spawn(f"AC_PIT_{k}", d, offset)
         spawn(f"AC_START_{k}", d, offset)
-    spawn("AC_HOTLAP_START_0", start - HOTLAP_BEFORE_GATE_M)
+    spawn("AC_HOTLAP_START_0", GATE_FROM_END_M - HOTLAP_BEFORE_GATE_M)
     return out

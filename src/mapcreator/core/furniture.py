@@ -147,16 +147,23 @@ def _spacing(radius: float, outside: bool) -> float:
 
 
 def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, superelevation, limits,
-              frame: LocalFrame, rail_l=None, rail_r=None, unsealed=None) -> tuple[list[Mesh], dict, Atlas]:
+              frame: LocalFrame, rail_l=None, rail_r=None, unsealed=None, mouth_l=None,
+              mouth_r=None) -> tuple[list[Mesh], dict, Atlas]:
     """Guide posts, CAMs and speed signs along the road: meshes (in AC axes), a summary, and the texture atlas
     their material uses.
 
     `limits` is the posted speed at each station (NaN where unknown), `rail_l`/`rail_r` where a guard rail runs
     on that side (no guide posts there), `unsealed` where the road is gravel (no guide posts or CAMs there; speed
-    signs as mapped). Left is left of the direction the stations run (the forward layout).
+    signs as mapped). `mouth_l`/`mouth_r` are side roads' mouths on that side (`core.junctions.masks`): nothing
+    stands in one. A guide post due in a mouth goes up just past it, a CAM there is left out, and a speed sign moves
+    to the nearest station clear of it. Left is left of the direction the stations run (the forward layout).
     """
     n = len(s)
     step = float(s[1] - s[0]) if n > 1 else 1.0
+    mouths = None if mouth_l is None and mouth_r is None else {
+        "L": np.zeros(n, bool) if mouth_l is None else np.asarray(mouth_l, bool),
+        "R": np.zeros(n, bool) if mouth_r is None else np.asarray(mouth_r, bool)}
+    in_mouth = {"posts_moved": 0, "cams_left_out": 0, "signs_moved": 0}
     k = uniform_filter1d(np.asarray(curvature, dtype=float), max(int(CURVATURE_SMOOTH_M / step), 1), mode="nearest")
     radius = 1.0 / np.maximum(np.abs(k), 1e-6)
     tangent = np.column_stack([np.cos(heading), np.sin(heading)])
@@ -203,6 +210,9 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
         idx = np.clip(np.searchsorted(s, stations), 0, n - 1)
         cam_zone[side][max(idx[0] - 1, 0):idx[-1] + 2] = True
         for i in np.unique(idx[~gravel[idx]]):
+            if mouths is not None and mouths[side][i]:
+                in_mouth["cams_left_out"] += 1
+                continue
             e, nn, h = point(i, side, CAM_OFFSET_M)
             builder.sign(e, nn, h, tangent[i], CAM_BOARD, CAM_BOTTOM_M,
                          front="cam_left" if turn_left else "cam_right",  # seen by forward traffic
@@ -214,10 +224,17 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
     for side in ("L", "R"):
         # The spacing is checked at every station, so the posts close up as soon as a curve begins.
         last = s[0] + 5.0 - np.inf
+        waiting = False
         for i in range(n):
             outside = (k[i] > 0) == (side == "R")
             if s[i] < s[0] + 5.0 or s[i] - last < _spacing(float(radius[i]), outside):
                 continue
+            if mouths is not None and mouths[side][i]:
+                # Due in a side road's mouth: the post goes up at the first station past it.
+                in_mouth["posts_moved"] += not waiting
+                waiting = True
+                continue
+            waiting = False
             last = s[i]
             if rails[side][i] or cam_zone[side][i] or gravel[i]:
                 continue
@@ -239,13 +256,24 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
     if 0 < last < n and known_at[last]:
         placements.append((last, "R", float(limits[last]), -1.0))
     for i, side, value, facing in placements:
+        if mouths is not None and mouths[side][i]:
+            i = _clear_station(i, mouths[side])
+            in_mouth["signs_moved"] += 1
         e, nn, h = point(i, side, SIGN_OFFSET_M)
         builder.sign(e, nn, h, tangent[i] * facing, SIGN_BOARD, SIGN_BOTTOM_M, front=f"speed_{int(value)}",
                      back="metal", back_reflects=False)
         signs += 1
     meshes = builder.meshes(frame)
-    return meshes, {"guide_posts": posts, "cam_curves": curves, "cams": cams, "speed_signs": signs,
-                    "speed_limits": known}, tex
+    stats = {"guide_posts": posts, "cam_curves": curves, "cams": cams, "speed_signs": signs, "speed_limits": known}
+    if mouths is not None:
+        stats["side_road_mouths"] = in_mouth
+    return meshes, stats, tex
+
+
+def _clear_station(i: int, blocked: np.ndarray) -> int:
+    """The station nearest `i` that isn't `blocked` (`i` itself if nothing is clear)."""
+    clear = np.flatnonzero(~blocked)
+    return int(clear[np.argmin(np.abs(clear - i))]) if len(clear) else i
 
 
 def _runs(mask: np.ndarray) -> list[tuple[int, int]]:

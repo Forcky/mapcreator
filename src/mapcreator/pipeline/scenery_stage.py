@@ -32,10 +32,10 @@ import shapely
 
 from mapcreator.config import Settings
 from mapcreator.core import mesh as base_mesh
-from mapcreator.core import power, reach, scenery, species, sprites, treefx
+from mapcreator.core import junctions, power, reach, scenery, species, sprites, treefx
 from mapcreator.core.scene import Material, Scene
 from mapcreator.job import Job
-from mapcreator.pipeline import mesh_stage, profile_stage, section_stage
+from mapcreator.pipeline import mesh_stage, profile_stage, route_stage, section_stage
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.providers.esa import worldcover
 from mapcreator.providers.meta import canopy as meta_canopy
@@ -62,24 +62,37 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     half = float(max(sec["half_left"].max(), sec["half_right"].max()))
     road_clear = centre.buffer(half + base_mesh.VERGE_M + scenery.CLEAR_OF_VERGE_M)
     attributions = []
+    # Side roads (`core.junctions`): trees, buildings and power-line supports are kept off each for its first 100 m
+    # as they are off the road. They're taken out after everything else is chosen, and the rest keep their random
+    # draws, so nothing else in the scenery changes.
+    found = route_stage.junctions(work, job)
+    mouths = junctions.mouths(found, c["s"], xy, c["heading"], sec["half_left"], sec["half_right"]) if found else []
+    cleared: dict | None = {} if mouths else None
 
     dem = region.elevation(settings)
     dem.load_corridor(xy, profile_stage.CORRIDOR_M)
 
     # Buildings first: trees must not grow through roofs.
-    buildings: list = []
+    footprints: list = []
     buildings_note = None
     if region.buildings is not None:
         bbox = centre.buffer(scenery.BUILDING_REACH_M).bounds
         try:
-            found = region.buildings(bbox, settings)
+            footprints = region.buildings(bbox, settings)
         except Exception as e:  # noqa: BLE001 - any source failure costs the buildings, not the track
             log.warning("building footprints unavailable (%s: %s); building without them", type(e).__name__, e)
-            found, buildings_note = [], "unavailable"
-        buildings = scenery.select_buildings(found, xy, centre.buffer(half + 2.0), scenery.BUILDING_REACH_M)
-        if buildings:
+            footprints, buildings_note = [], "unavailable"
+        footprints = scenery.select_buildings(footprints, xy, centre.buffer(half + scenery.BUILDING_CLEAR_M),
+                                              scenery.BUILDING_REACH_M)
+        if footprints:
             attributions.append(region.buildings_attribution)
-    built = shapely.unary_union([b.buffer(3.0) for b in buildings]) if buildings else None
+    # Trees stay out of every footprint chosen, even one a side road takes out, so the trees elsewhere don't change.
+    built = shapely.unary_union([b.buffer(3.0) for b in footprints]) if footprints else None
+    keep_buildings = None
+    if mouths and footprints:
+        side_roads = junctions.zone(mouths, c["s"], xy, scenery.BUILDING_CLEAR_M)
+        keep_buildings = ~shapely.intersects(side_roads, footprints)
+        cleared["buildings"] = int((~keep_buildings).sum())
 
     vmap, vegetation_note = None, None
     if region.vegetation is not None:
@@ -135,12 +148,18 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     ground = dem.sample(trees.xy[:, 0], trees.xy[:, 1]) if len(trees) else np.zeros(0)
     ok = np.isfinite(ground)
     trees, ground = trees.subset(ok), ground[ok]
+    keep_trees = None
+    if mouths:
+        side_roads = junctions.zone(mouths, c["s"], xy, base_mesh.VERGE_M + scenery.CLEAR_OF_VERGE_M)
+        shapely.prepare(side_roads)
+        keep_trees = ~shapely.contains_xy(side_roads, trees.xy[:, 0], trees.xy[:, 1])
+        cleared["trees"] = int((~keep_trees).sum())
 
-    meshes = scenery.building_meshes(buildings, dem.sample, frame, rng)
+    meshes = scenery.building_meshes(footprints, dem.sample, frame, rng, keep=keep_buildings)
 
     out = work.stage(STAGE)
-    power_meshes, power_summary = _power(region, settings, xy, half, dem, frame, out, attributions,
-                                         c, sec)
+    power_meshes, power_summary = _power(region, settings, xy, half, dem, frame, out, attributions, c, sec,
+                                         blocked=junctions.zone(mouths, c["s"], xy, power.ON_ROAD_MARGIN_M))
     meshes += power_meshes
     where = vmap.at(trees.xy) if vmap is not None else None
     capped = 0
@@ -163,11 +182,16 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     if vmap is not None:
         attributions.extend(credits)
         codes = vmap.codes(where)
+        if keep_trees is not None:
+            codes = codes[keep_trees]
         vegetation |= {"communities": len(vmap), "made_up_dropped": dropped,
-                       f"capped_at_{species.OTHER_HEIGHT_M:.0f}m": capped, "families": species.counts(families)}
+                       f"capped_at_{species.OTHER_HEIGHT_M:.0f}m": capped,
+                       "families": species.counts(families if keep_trees is None else families[keep_trees])}
         # Every tree's community code: the count by code is how to spot crowns the map calls treeless.
         work.write_json(STAGE, "vegetation.json", {**vegetation, "by_code": species.counts(codes)})
-    fx, trunk_r, folded = _tree_fx(trees, ground, frame, rng, out, families)
+    fx, trunk_r, folded = _tree_fx(trees, ground, frame, rng, out, families, keep=keep_trees)
+    if keep_trees is not None:
+        trees, ground = trees.subset(keep_trees), ground[keep_trees]
     edge, station = scenery.edge_distance(trees.xy, xy, c["heading"], sec["half_left"], sec["half_right"])
     colliders = scenery.trunk_colliders(trees.xy, ground, trunk_r, edge, c["s"][station], frame)
     meshes += colliders
@@ -194,19 +218,19 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "vegetation": vegetation,
         "trunk_colliders": sum(len(m.positions) for m in colliders) // (2 * scenery.TRUNK_SIDES),
         "trunk_collider_meshes": len(colliders),
-        "buildings": len(buildings),
+        "buildings": len(footprints) if keep_buildings is None else int(keep_buildings.sum()),
         "buildings_source": buildings_note or "ok",
         "power": power_summary,
         "meshes": len(meshes),
         "vertices": int(sum(len(m.positions) for m in meshes)),
         "triangles": int(sum(len(m.triangles) for m in meshes)),
-    }
+    } | ({"junctions": {"found": len(found), "side_roads_cleared_of": cleared}} if cleared is not None else {})
 
 
 def _power(region, settings: Settings, xy: np.ndarray, half: float, dem, frame, out,
-           attributions: list, c, sec) -> tuple[list, dict]:
+           attributions: list, c, sec, blocked=None) -> tuple[list, dict]:
     """Towers or poles and wires for the region's mapped power lines near the road. Lines from an ODbL source
-    are written to power.geojson, which ships with the track."""
+    are written to power.geojson, which ships with the track. No support stands on `blocked` (side roads)."""
     geo = out / "power.geojson"
     geo.unlink(missing_ok=True)
     if region.power is None:
@@ -219,7 +243,7 @@ def _power(region, settings: Settings, xy: np.ndarray, half: float, dem, frame, 
     except Exception as e:  # noqa: BLE001 - any source failure costs the power lines, not the track
         log.warning("power lines unavailable (%s: %s); building without them", type(e).__name__, e)
         return [], {"source": f"{source} (unavailable)"}
-    p = power.plan(lines, xy, half, reach_m=reach_m)
+    p = power.plan(lines, xy, half, reach_m=reach_m, blocked=blocked)
     sxy = np.array([s.xy for s in p.supports]).reshape(-1, 2)
     edge, station = scenery.edge_distance(sxy, xy, c["heading"], sec["half_left"], sec["half_right"])
     s_m = c["s"][station] if len(sxy) else np.zeros(0)
@@ -234,11 +258,15 @@ def _power(region, settings: Settings, xy: np.ndarray, half: float, dem, frame, 
 
 
 def _tree_fx(trees: scenery.Trees, ground: np.ndarray, frame, rng: np.random.Generator, out,
-             families: np.ndarray | None = None) -> tuple[list[str], np.ndarray, dict[str, str]]:
+             families: np.ndarray | None = None,
+             keep: np.ndarray | None = None) -> tuple[list[str], np.ndarray, dict[str, str]]:
     """3D models for Tree FX and a placement for every tree: a model that suits its family (when the region
     has a vegetation map) and its height, scaled to it. A model few trees would draw folds into a similar one
     (`treefx.fold_rare`), and only the models some tree uses are written. Returns their names, each tree's
-    trunk radius in metres as Tree FX draws it, and which models folded into which."""
+    trunk radius in metres as Tree FX draws it, and which models folded into which.
+
+    Trees `keep` marks False (on a side road) are left out after every tree has had its draws, so the others keep
+    the model, angle and width they'd have had; the trunk radii returned are the kept trees'."""
     fx = out / "treefx"
     if fx.exists():
         for old in fx.iterdir():
@@ -251,6 +279,11 @@ def _tree_fx(trees: scenery.Trees, ground: np.ndarray, frame, rng: np.random.Gen
     else:
         model = treefx.assign(trees.height, every, rng)
     model, folded = treefx.fold_rare(model, trees.height, every)
+    angle = rng.uniform(0, 360, n)
+    width = rng.uniform(0.85, 1.15, n)
+    if keep is not None:
+        trees, ground, model, angle, width = trees.subset(keep), ground[keep], model[keep], angle[keep], width[keep]
+        n = len(trees)
     used = sorted(set(model.tolist()))
     names = [every[i] for i in used]
     model = np.searchsorted(used, model).astype(np.int64)
@@ -260,8 +293,6 @@ def _tree_fx(trees: scenery.Trees, ground: np.ndarray, frame, rng: np.random.Gen
         (fx / f"{name}.bin").write_bytes(treefx.model_bin(models[name], tex))
     own_height = np.array([models[name].box[0] for name in names])
     size = np.clip(trees.height / own_height[model], *treefx.SIZE_CLIP) if n else np.zeros(0)
-    angle = rng.uniform(0, 360, n)
-    width = rng.uniform(0.85, 1.15, n)
     np.savez(fx / "placement.npz",
              pos=frame.to_ac(trees.xy[:, 0], trees.xy[:, 1], ground) if n else np.zeros((0, 3)),
              model=model, size=size, angle=angle, width=width, names=np.array(names))

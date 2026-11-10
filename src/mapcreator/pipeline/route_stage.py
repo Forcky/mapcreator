@@ -10,8 +10,9 @@ import numpy as np
 
 from mapcreator.config import Settings
 from mapcreator.core import centreline
+from mapcreator.core import junctions as junctions_core
 from mapcreator.core.centreline import cumulative
-from mapcreator.job import Job
+from mapcreator.job import Job, Junctions
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.providers.osm import graph as osm_graph
 from mapcreator.providers.osm import roads as osm_roads
@@ -20,6 +21,8 @@ from mapcreator.regions import job_region
 STAGE = "01_route"
 # How the roads were selected from OpenStreetMap (`osm_roads.selection`), for the track's ATTRIBUTION.txt.
 OSM_SELECTION = "osm_selection.json"
+# The side-road junctions and roundabouts along the route (`core.junctions`; the format is in docs/ac-format.md).
+JUNCTIONS = "junctions.json"
 
 
 class RouteTooLong(osm_graph.RouteError):
@@ -128,8 +131,24 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     )
     work.write_json(STAGE, "runs.json", route_runs)
     work.write_json(STAGE, OSM_SELECTION, osm_roads.selection(settings))
-    return {"length_m": round(length, 1), "retraced_m": round(route.retraced_m, 1), "ways": len(route_runs),
-            "region": region.key, "sharp_turns": sharp}
+    summary = {"length_m": round(length, 1), "retraced_m": round(route.retraced_m, 1), "ways": len(route_runs),
+               "region": region.key, "sharp_turns": sharp}
+    if job.junctions == Junctions.CLOSED:
+        found = junctions_core.find(g, route.xy, to_lonlat=region.to_lonlat())
+        work.write_json(STAGE, JUNCTIONS, {"version": found.pop("version"), "crs": f"EPSG:{region.epsg}", **found})
+        summary |= {"junctions": len(found["junctions"]), "roundabouts": len(found["roundabouts"])}
+    else:
+        (work.stage(STAGE) / JUNCTIONS).unlink(missing_ok=True)  # built without them, as before they were found
+    return summary
+
+
+def junctions(work: WorkDir, job: Job) -> list[dict]:
+    """The side-road junctions the route stage found, as junctions.json lists them: none for a job built without
+    them, or a route stage run before they were found."""
+    path = work.root / STAGE / JUNCTIONS
+    if job.junctions != Junctions.CLOSED or not path.exists():
+        return []
+    return work.read_json(STAGE, JUNCTIONS)["junctions"]
 
 
 def osm_selection(work: WorkDir, settings: Settings) -> dict[str, str]:

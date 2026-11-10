@@ -82,7 +82,7 @@ def new_job_id() -> str:
 # Job fields added later, left out of hashes and stored jobs while they hold their default. Hashes of
 # earlier jobs then stay the same (a rebuild keeps its track id), and a worker that predates a field
 # (its Job forbids unknown fields) can still build every job that doesn't use it.
-LATER_FIELDS = {"allow_tight_bends": False}
+LATER_FIELDS = {"allow_tight_bends": False, "junctions": "closed"}
 # A job's length limit decides whether the road builds, not what it builds, so it isn't part of the road's
 # identity. Hashes carry the 30 km every job had before the limit was raised, so earlier ids stay the same.
 HASHED_MAX_LENGTH_KM = 30.0

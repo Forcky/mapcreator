@@ -168,6 +168,20 @@ In Tasmania the terrain is split into ground classes from TASVEG, each with its 
 - **One weight per class.** TASVEG codes the design gives a lower weight within a class (coastal grass and herbfield, rockplate grassland, sparse buttongrass on slopes) take their class's full weight: one material per class. A part-weight material can follow if they look too dense.
 - **The mainland keeps today's grass:** NVIS and WorldCover classes are for a later PR, as is a mainland atlas group for spinifex.
 
+## Side-road junctions
+
+The route stage finds the real side roads that meet the route, and nothing stands in their mouths (`docs/ac-format.md`, "Side-road junctions"). No road is drawn for them yet: that's the stubs, to come.
+
+- **To check in game** (Grasstree Hill and Brinktop Road):
+  - nothing stands in a side road's mouth: no guide post, CAM, sign or guard rail across it, and no tree on the side road. Before (laptop builds, made-up WorldCover trees), forward distances: on Grasstree Hill a post or marker stood in the mouths of Sugarloaf Road (1.34 km), the unnamed road at 5.51 km and Downhams Town Road (6.76 km), and trunk colliders on Downhams Town Road and Malcolms Hut Road (9.43 km); on Brinktop Road a rail ran across Bridge Street's mouth (0.49 km), and a post or marker stood in those of Bakers Road (9.41 km) and the Tasman Highway (10.37 km);
+  - the guide posts either side of a mouth read naturally (the one due in it now stands just past it), and a rail ending at a mouth doesn't look cut off;
+  - the start and finish gates: none moves on the examples.
+- **The mouth's margin is a guess:** 5 m along the road either side of the side road's carriageway, and the band 3 m beyond the edge. The stubs' corners (about 8 m radius) will show whether it's enough.
+- **Side roads' widths are class defaults:** no side road on the examples has a `width` tag and few have `lanes`, so the cleared corridor is as wide as the class default.
+- **Driveways, service roads and tracks** aren't junctions (the maintainer's decision, 10 Nov 2026): the road data doesn't hold them. Grasstree Hill has 37 driveways and Lower Swamp Road 39, and guide posts, rails and trunk colliders still stand in some of their mouths. Clearing them needs the OSM index to keep those ways too, a PR of its own.
+- **Roundabouts** are recorded and built as before: only the route's arc of the ring is road, and nothing is cleared at their exits. A later PR draws them.
+- **Mount Dandenong Tourist Road** has 73 junctions in 14.6 km, 8 clusters within 30 m of each other: its guide posts fall from 1,535 to 1,443, and 1,053 trees (420 trunk colliders) come off its side roads.
+
 ## Power lines
 
 - **Answered in game (4 Nov, Grasstree Hill, with towers then allowed 700 m out):**
