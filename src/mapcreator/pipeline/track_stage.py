@@ -12,8 +12,8 @@ import numpy as np
 
 from mapcreator import __version__, buildinfo
 from mapcreator.config import Settings
-from mapcreator.core import (ai_line, furniture, grass, grassfx, junctions, kn5, package, stubs, textures, treefx,
-                             validate)
+from mapcreator.core import (ai_line, closures, furniture, grass, grassfx, junctions, kn5, package, stubs, textures,
+                             treefx, validate)
 from mapcreator.core.layout import (AI_END_SHORT_M, GATE_FROM_END_M, Layout, RoadModel, finish_distance,
                                     gate_distances, layouts_for, logic_dummies)
 from mapcreator.core.scene import Scene
@@ -37,8 +37,14 @@ MATERIAL_PROPS = {
     "rail": {"ksAmbient": 0.4, "ksDiffuse": 0.55, "ksSpecular": 0.35, "ksSpecularEXP": 30.0},
     "water": {"ksAmbient": 0.25, "ksDiffuse": 0.35, "ksSpecular": 0.8, "ksSpecularEXP": 90.0},
     "power": {"ksAmbient": 0.4, "ksDiffuse": 0.55, "ksSpecular": 0.25, "ksSpecularEXP": 25.0},
+    # The closure props (closure and closure_retro): the walls' values with no specular, which lit their black legend
+    # in the headlights at night (`closures.KN5_PROPERTIES`).
+    "closure": closures.KN5_PROPERTIES,
 }
 ALPHA_REF = 0.5
+# Retroreflective materials and their ksDiffuse at night: the furniture's and the closure props'. The police cars'
+# materials bring their own, with their KN5 values (`scene.Material.night_diffuse` and `.properties`).
+NIGHT_DIFFUSE = {**furniture.NIGHT_DIFFUSE, **closures.NIGHT_DIFFUSE}
 
 
 PREVIEW_REACH_M = 1500.0
@@ -99,12 +105,23 @@ def _materials_and_textures(work: WorkDir, scenes: list[Scene]):
                     if not cached.exists():
                         cached.write_bytes(textures.to_dds(textures.LIBRARY[mat.texture](), fmt))
                     tex[tex_name] = cached.read_bytes()
-            props = dict(MATERIAL_PROPS.get(name, MATERIAL_PROPS.get(name.split("_")[0], MATERIAL_PROPS["walls"])))
+            props = dict(mat.properties or MATERIAL_PROPS.get(name, MATERIAL_PROPS.get(name.split("_")[0],
+                                                                                       MATERIAL_PROPS["walls"])))
             props |= {"ksEmissive": (0.0, 0.0, 0.0), "ksAlphaRef": ALPHA_REF if alpha else 0.0}
             index[name] = len(mats)
             mats.append(kn5.Kn5Material(name=name, shader="ksPerPixelAT" if alpha else "ksPerPixel",
                                         properties=props, textures={"txDiffuse": tex_name}, alpha_tested=alpha))
     return tex, mats, index
+
+
+def retro_materials(scenes: list[Scene], mats: list[kn5.Kn5Material]) -> dict[str, tuple[float, float]]:
+    """Each material whose ksDiffuse changes at night: (at night, by day), for `package.ext_config_ini`. The
+    furniture's and closures' by name (NIGHT_DIFFUSE); any other scene material that brings its own night value (the
+    police cars')."""
+    night = dict(NIGHT_DIFFUSE)
+    for scene in scenes:
+        night |= {name: m.night_diffuse for name, m in scene.materials.items() if m.night_diffuse is not None}
+    return {m.name: (night[m.name], m.properties["ksDiffuse"]) for m in mats if m.name in night}
 
 
 def _attributions(region, work: WorkDir):
@@ -295,8 +312,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         water_materials=["water"] if "water" in mat_index else [], water_type=water_type or "LAKE",
         tree_list=tree_list[0] if tree_list else None,
         tree_surfaces=[*ground, "grass"] if "grass" in mat_index else ground,
-        retro_materials={m.name: (furniture.NIGHT_DIFFUSE[m.name], m.properties["ksDiffuse"])
-                         for m in mats if m.name in furniture.NIGHT_DIFFUSE}),
+        retro_materials=retro_materials(scenes, mats)),
         encoding="ascii")
     _write_centreline(track_dir, job, c, sec, region, lonlat, attributions, plan)
 

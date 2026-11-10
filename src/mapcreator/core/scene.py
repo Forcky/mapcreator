@@ -71,6 +71,10 @@ class Material:
     texture: str  # key into Scene.textures
     uv_scale: float = 1.0
     kind: str = "opaque"  # opaque | alpha_test
+    # The KN5 values by day (ksAmbient, ksDiffuse, ksSpecular, ksSpecularEXP), where the material brings its own; the
+    # track stage otherwise looks them up by name (`track_stage.MATERIAL_PROPS`).
+    properties: dict[str, float] | None = None
+    night_diffuse: float | None = None  # its ksDiffuse at night, where CSP should change it (a retroreflective face)
 
 
 @dataclass

@@ -362,7 +362,7 @@ Built in the mesh stage, visual only, in `FURNITURE_n` meshes and a texture atla
 
 ## Side-road junctions (`core/junctions.py`)
 
-The route stage finds the real side roads that meet the route and writes them to `01_route/junctions.json` (below). The section stage plans a stub of each, its first 100 m (`core/stubs.py`, `03_section/stubs.json`, below), and the mesh stage draws it as road, joined to the mainline by a corner flare either side ("Side roads' stubs" below). Guard rails, roadside furniture, trees, buildings and power-line supports are kept out of the side roads' mouths and off their stubs, and the timing gates move clear of them. The closures are to build on the plan. A job with `"junctions": "none"` builds without any of it, exactly as before (`Job.junctions`, `closed` by default, and left out of the track id while it holds its default).
+The route stage finds the real side roads that meet the route and writes them to `01_route/junctions.json` (below). The section stage plans a stub of each, its first 100 m (`core/stubs.py`, `03_section/stubs.json`, below), and the mesh stage draws it as road, joined to the mainline by a corner flare either side ("Side roads' stubs" below). Guard rails, roadside furniture, trees, buildings and power-line supports are kept out of the side roads' mouths and off their stubs, and the timing gates move clear of them. Each stub is closed off the stage, with police cars at some of the major closures ("Closures on the stubs" below). A job with `"junctions": "none"` builds without any of it, exactly as before (`Job.junctions`, `closed` by default, and left out of the track id while it holds its default).
 
 - **Which side roads count** (the maintainer's decision, 10 Nov 2026). At each node of the route, a way leaving it is a junction when:
   - its way is a class the router uses (`overpass.DRIVABLE`: motorway to living_street, `road` and the links). The road data holds no other kind, so driveways, other service roads and tracks never count;
@@ -371,7 +371,7 @@ The route stage finds the real side roads that meet the route and writes them to
   - it's clear of the rest of the route. It's followed until it comes within 10 m of another part of the route (one where the road distance is more than 1.4 times the straight distance, plus 5 m), and one that does so within 15 m isn't a junction;
   - it has no `bridge`, `tunnel` or `layer` other than 0 in its first 30 m: a road passing over or under isn't a junction.
 - **How far:** each is followed out to 100 m, the stubs' length to come. It follows its own way, then, at the way's end, the straightest way that turns less than 60°. It stops sooner at a dead end, at a branch, or where it meets the route. A side road at the route's very first or last point isn't one: the end wall closes it.
-- **Closure level**, for the closures to come: `limited` where the most specific access tag is `permit`, `forestry`, `agricultural`, `destination`, `delivery`, `customers` or `military`; else `major` (motorway, trunk, primary, secondary, tertiary and their links) or `minor` (unclassified, residential, living_street, road).
+- **Closure level** ("Closures on the stubs" below): `limited` where the most specific access tag is `permit`, `forestry`, `agricultural`, `destination`, `delivery`, `customers` or `military`; else `major` (motorway, trunk, primary, secondary, tertiary and their links) or `minor` (unclassified, residential, living_street, road).
 - **On the examples:** Grasstree Hill 8, Brinktop Road 18, Esperance Coast Road 10, Lower Swamp Road 3, Lyell Highway 4 (Burns Dam Road, `access=permit`, is limited) and Mount Dandenong Tourist Road 73.
 - **Roundabouts** the route drives or touches (`junction=roundabout` or `circular`) are recorded with their ring and exits, and built as before: the route drives only its arc of the ring, its exits aren't junctions, and nothing is cleared at them. The validator names them. None of the examples passes one.
 - **The mouth** of a junction is the stretch of the mainline where the side road's carriageway crosses the band from the road's edge to 3 m beyond it (`MOUTH_BAND_M`: guide posts stand at 0.8 m, rails at 1 m, signs at 2 m), plus 5 m along the road either side (`MOUTH_MARGIN_M`). The carriageway is its line as `junctions.json` has it, at its tagged or class-default width as mapped (`section.width_from_tags`). In it:
@@ -381,7 +381,7 @@ The route stage finds the real side roads that meet the route and writes them to
   - Where the side road has a stub, the mouth reaches over its flares too (from one flare's tangent point to the other's, plus the margin), and the side road is the stub's paved outline (throat and carriageway) as well as its mapped line, whole: a stub keeps to its own side of the road by construction.
 - **Along the side road**, for its first 100 m and on its own side of the mainline, the mainline's own clearances apply from the side road's edge: no tree within 4 m (the 2 m verge and 2 m more), and so no trunk collider; no building within 2 m; no power-line support whose base comes within 0.5 m (it's dropped with its spans, as one on the road is).
   - They're taken out after everything else is chosen, and every other tree and building keeps its random draws, so the rest of the scenery is as without junctions. Trees also stay out of the 3 m round a building taken out, as round every building.
-- **What doesn't change:** the mainline's road surface and its half widths, so the AI line and the racing line, `ai_hints.ini`, the grid, the spawns and the run-off. On the six examples every `fast_lane.ai` and `ai_hints.ini` is byte for byte as without junctions. The AI drives only its line, so it never meets a stub. A car that runs wide can drive into one and on to its end: the closures to come stop it 12 m in.
+- **What doesn't change:** the mainline's road surface and its half widths, so the AI line and the racing line, `ai_hints.ini`, the grid, the spawns and the run-off. On the six examples every `fast_lane.ai` and `ai_hints.ini` is byte for byte as without junctions. The AI drives only its line, so it never meets a stub. A car that runs wide can drive into one: the closures stop it only where they're solid, at straw bales or a police car ("Closures on the stubs" below).
 - **Timing gates:** a gate whose place falls in a mouth moves to the nearest place clear of every mouth, 0.5 m past its end, by at most 40 m (`layout.gate_distances`). A start gate moved back stays at least 4 m ahead of the grid's front spot (so at 46 m or more), and the finish gate leaves at least 50 m of run-off. With nowhere clear, it stays, and the validator warns; a stub whose mouth would do that is left out instead (a gate end on a stub would fail "gate spans the road"). The grid, the hot-lap spawn, the AI line and its hints keep to the gate's usual place, so the timed length changes by those few metres. On the examples only Brinktop Road's start gate moves, 0.5 m back to 49.5 m, clear of Percy Street's flare.
 - **Validation:** a warning listing the junctions (name, class, closure level and where), and checks that no guard rail or rail collider, guide post or sign has a vertex on a side road's carriageway or flares within 3 m of the road's edge, and no tree or power collider has one on a side road's carriageway or stub in its first 100 m. A timing gate's end in a mouth is a warning. For the stubs (`validate.stub_checks`), failures unless:
   - each is road (a `1ROAD` or `1GRAVEL` mesh) along its centreline;
@@ -408,7 +408,7 @@ Each junction's side road is drawn as road for its first 100 m (the maintainer's
 - **Meshes:** `1ROAD_J###` (sealed) or `1GRAVEL_J###` (unsealed), with an `N` after the number for one lane, and `1GRASS_J###` for their verges: packed by material per 400 m of the mainline (`###`), under the vertex limit. Their materials are the mainline's, so Grass FX occlusion, Rain FX and the gravel's `[TYRES_FX]` follow, and a track with an unsealed stub has `GRAVEL` in `surfaces.ini`: a sealed road with a gravel side road gains the gravel material and texture.
 - **Left out,** and listed in `stubs.json`'s `skipped` with the reason: one whose flares can't be drawn (`flare`, `corner`, `skew`, `stays_on_road`), too near the road's end for its flares (`road_end`), with less than 10 m of ribbon past its throat (`short`), coming within a verge of another part of the route right from its first row (`near_route`), whose mouth would share the road's rows with a stub already kept on the same side, or its throat overlap one, even with flares half the size (`overlaps`: major roads, then longer ones, are kept first), or whose mouth would leave a timing gate nowhere clear to stand (`timing_gate`). Further out, a stub that would come within a verge of another part of the route, or overlap a kept stub, is cut short before it (`ends: clipped`).
 - **On the examples:** Grasstree Hill 8 of 8, Brinktop Road 14 of 18 (Henry Street and the Tasman Highway at the route's ends, Bridge Street's one-way arm into its other arm, and Charles Street leaving Gunning Street's node on the same side), Esperance Coast Road 10 of 10, Lower Swamp Road 3 of 3, Lyell Highway 3 of 4 (a 33 m dead-end spur), Mount Dandenong Tourist Road 66 of 73 (6 in its clusters, and School Lane, beside another part of the route).
-- **For the closures to come:** `stubs.pose(stub)` gives (easting, northing, height, heading into the stub) on its centreline at d metres in from the mainline's edge line, carrying on straight past its end; `stubs.surface_height(stub, d, lateral)` and `stubs.ground_height(stub, d, lateral, dem)` give its road's surface and the ground beside it.
+- **For the closures:** `stubs.pose(stub)` gives (easting, northing, height, heading into the stub) on its centreline at d metres in from the mainline's edge line, carrying on straight past its end; `stubs.surface_height(stub, d, lateral)` and `stubs.ground_height(stub, d, lateral, dem)` give its road's surface and the ground beside it.
 
 ### `03_section/stubs.json`
 
@@ -449,3 +449,237 @@ Coordinates are in the region's metric CRS (`crs`), as `route.npz`'s are, rounde
   - `line`: its centreline from the junction node outwards, `length_m` long.
 - `roundabouts`, each: `id`, `way_ids` (the ring's ways), `highway`, `name`, `tags`, `ring` (its nodes in order round it, the first repeated at the end when it closes), `closed`, `centre`, `radius_m` (the nodes' mean distance from their centre), `on_route`, `route_from_m` and `route_to_m` (where the route is on it, as `at_m`), and `exits`: each drivable, public way leaving the ring that isn't the route, with `node`, `xy`, `on_route` (whether it leaves the ring where the route is on it) and the junctions' fields from `way_id` to `line`.
 - `skipped`: the side roads that leave the route but aren't junctions, for checking the rule: `node`, `at_m`, `xy`, `side`, `angle_deg`, `off_mainline_deg`, `way_id`, `highway`, `name`, and `reason`: `class`, `private`, `grade_separated`, `roundabout` (an entry or exit of a roundabout the route drives), `angle` or `meets_route`. On the examples only Brinktop Road has any: Bridge Street behind its start and the Tasman Highway beyond its finish, each the road carrying straight on past the route's end (`angle`).
+
+## Closure props (`core/closures.py`)
+
+The objects that close a side road off the stage, after Motorsport Australia's stage-rally rules (2026 Special Stage Rally standing regulations, art. 11.10 "Road Closure Standards"). The mesh stage places them on every side road's stub ("Closures on the stubs" below).
+
+- **Levels**, by the side road's class:
+  - **major** (trunk to tertiary): course tape at the mouth; barrier boards on yellow trestles across the full width, with a ROAD CLOSED sign in the middle and a slot behind them for a vehicle (its own module builds it); 25 m further in, a second tape and another ROAD CLOSED sign.
+  - **minor** (unclassified, residential, living street, `road`): the tape; one obstacle across the road, barrier boards or big square straw bales; the second tape and sign.
+  - **limited** (permit, forestry, destination): the tape and a sign.
+  - No arrows, chevrons or DETOUR signs (the maintainer's decision).
+- **Layout** (`closures.layout`), in metres from the mainline's edge line:
+
+  | | Tape | Obstacle | Second tape | ROAD CLOSED sign |
+  |---|---|---|---|---|
+  | major, minor | 4 | 12 | 37 | 37.6, behind the second tape; a major closure's boards carry one too |
+  | limited | 4 | | | 12 |
+  | overshoot stub (straight ahead where the route turns) | 4 | 27 | 52 | 52.6 (limited: 27) |
+
+  - MA asks for "a minimum of 25m" between the obstacle and the tape and sign.
+  - A stub under 45 m (60 m on an overshoot stub) has no second tape: the sign goes on the obstacle, in the middle of the boards or raised behind the bales. Under 15 m (30 m) there's no obstacle, only the tape and a lone sign as far in as fits.
+  - No obstacle or sign stands in an overshoot stub's first 25 m. A lone sign never stands nearer than 6 m (26 m overshooting); where it can't fit, there's only the tape.
+- **The local frame:** origin on the stub's centreline at the mainline's edge line; +z into the stub, +x to the right looking in, +y up; metres.
+  - `closures.closure(level, width, overshoot=, length=, obstacle=, ground=, seed=, solid=)` returns each element (`tape`, `obstacle`, `warning`: the second tape and its sign, `sign`: a lone sign) at its distance in, with its visual meshes (one per material), its props' extents, and a collider mesh where any of them is solid, plus the vehicle slot.
+  - `width` is the width to close, centred on the centreline: normally the carriageway and its verges. It's a number, or a function of the distance in. `ground(x, z)` gives the cross-section (crown and verge fall) for the feet to stand on.
+  - The frame is left-handed, so `closures.place(kit, pose, frame, index)` maps it onto AC's axes by a mirror and rewinds the triangles. `pose` is the stub's centreline at the mouth (easting, northing, height, heading into the stub), or a function of the distance in, so on a bending or climbing stub each element stands square across the stub at its own distance.
+  - `closures.merge` packs many closures' meshes into a few under the vertex limit, one run per material.
+- **Collision:** straw bales are solid; barrier boards, trestles and signs are passable, like the tape (the maintainer's decision, 10 Nov 2026). The vehicle, from its own module, is solid too.
+  - Why: in game (10 Nov) the solid props felt like what the car met at about 20 km/h, but at 60 km/h they were a rigid wall. Boards on trestles, which would fold over, stopped the car like concrete, and two of four cars glanced along the face and spun off its end. Bales are believable as a hard stop.
+  - So a major closure's boards don't stop a car, which drives on down the stub; a minor closure built with bales does.
+  - No invisible wall in open air (the maintainer's concern): each bale has its own box collider, exactly its visible extent, from 1 m below the lowest ground under it to its top. The row spans exactly the width, 6 cm between bales, each collider flush with its own bale's face.
+  - **One setting:** `closures.SOLID` (or `closure`'s `solid`) names the solid props by kind (`boards`, `bales`, `signs`) and element (`obstacle`, `warning`, `sign`); a prop is solid when both are named, naming none of either meaning all. Today it's `("bales",)`. Made solid, a board's or sign's collider runs from its trestles' front feet to their back feet.
+  - Colliders are `1WALL_CLOSURE_*`: invisible, solid by the name, four sides and a top per box, wound outwards.
+- **Sizes and colours** (the code marks the guesses):
+  - Tape: 75 mm, red diagonal stripes on white (MA's Tape A), tied 1.0 m up on star pickets 0.3 m beyond the width and sagging up to 0.15 m, with an A4 warning tag.
+  - Barrier boards: up to 2.5 m long, cut equal to fill the width; 0.2 m deep, centred 1.0 m up; yellow and black stripes at 45 degrees on both faces, 0.1 m wide, mirrored either side of the middle and falling towards it. AS 1742.3's rule for the direction is paywalled; the US MUTCD (2009, section 6F.68) asks for stripes falling towards the middle "where no turns are intended" (`STRIPES_FALL_TO_MIDDLE`).
+  - Trestles: yellow (the NSW roads authority's G10 specification), open A-frames: on each side of the board two slim legs (tubes about 40 mm across, 0.48 m apart at the feet and 0.34 m under the board) and a crossbar about 0.3 m up, the feet 0.3 m either side of the board. Along a row the legs stand at most about 1.4 m apart. The first version's solid 0.45 m leg panels read as blocks in game.
+  - ROAD CLOSED: AS 1742.3's T2-4, 1800 x 300 mm, black on white, double-sided so it reads from the stage.
+  - Straw bales: big squares, 0.9 m high, 1.2 m deep, about 2.4 m long at most, twines along the top and down the ends. They stand 6 cm apart, each up to 5 cm out of line, 3 cm taller or lower and 8% longer or shorter. Each face shows one bale, with darker, ragged edges, in one of two tints (one a little weathered), either way round. In game the first row, with no joins, read as one 8 m block.
+- **Two materials on one atlas** (`closures.atlas`: 1024 x 512, 0.35 MB as DXT1 with mips):
+  - `closure`: trestles, stakes, bales, edges and the tag;
+  - `closure_retro`: the boards' and signs' faces and the tape.
+  - The tape and the stripes are bands the atlas's full width, so their texture coordinates run on past 1 and wrap. Each straw band holds two bales' faces side by side.
+  - Every texture is drawn by our own code; the legend uses Pillow's built-in Aileron font (CC0), as the speed signs do.
+- **At night** `closure_retro` gets ksDiffuse **0.9** and `closure` comes down to **0.35** (both 0.6 by day), each a `[MATERIAL_ADJUSTMENT_n]` as above; the track stage's `NIGHT_DIFFUSE` includes them. The plain material's 0.35 is the police car body's.
+  - In game at 22:00 with the furniture boards' 2.0, the closures glinted like the reflectors from 25 m and more. But at 8-12 m, square to the beam, the sign burnt out (93% near white, the legend unreadable at 12 m), the stripes washed pale, and the straw bales glowed near white (83%) though they're not retroreflective.
+  - At 1.3 on the faces, with the plain material unadjusted, the sign was still 79% near white with pale grey letters, the stripes faded mid-beam, the middle bales glowed (70%), and even a plain grey block came up from 106 by day to 141 at night. CSP's night exposure is set for the dark road (30 in the beam), so any light surface square to the headlights at 10 m clips. From 25 m and more the faces still glinted like the reflectors.
+  - The legend, the sign's border and the black stripes are pure black: ksDiffuse multiplies the texture, so no boost lifts them. At 18 (7%) the boost and the near beam had lifted them into the top of CSP's tone curve.
+  - The sign's white is a light grey, 200 (it was 244), so the white round the letters doesn't clip and bloom into them; the police car's white paint came down to 224 for the same reason.
+  - **No specular** on either material (`closures.KN5_PROPERTIES`, which the track stage gives both: the walls' values with `ksSpecular` 0). On Brinktop Road at night (11 Nov), from the front at 12-15 m with the beam's hot spot on the boards, the sign was 91% near white with no dark letter pixels at all, and the stripes' yellow paled in the middle of the beam; from behind at 8 m it read crisp.
+    - The cause: AC's `ksPerPixel` adds the specular term on top of the texture, not through it (Content Manager's re-implementation of Kunos's shaders has `txColor * (ambient + diffuse) + specular`), so even a pure-black texel gets `ksSpecular` x (N.H)^`ksSpecularEXP` x the light. The headlights sit beside the eye, so a face square to them has N.H close to 1 across its width (0.99-0.93 over the middle 4 m at 13 m, at the walls' exponent of 10).
+    - The walls' 0.05 put a floor under the black of about 7-10% of the sign's white at its night ksDiffuse of 0.9. The furniture's boards are at 2.6%, since their 2.0 dwarfs it. Each night cut to ksDiffuse (2.0, then 1.3, then 0.9) and to the white made that floor a larger share. Where CSP's auto-exposure overexposes the face about tenfold, the floor alone reaches white. White light added to yellow also turns it pale.
+    - Not the texture: decoded from the KN5's DXT1, the legend keeps exactly black stroke cores down to mip 3, which the game samples for the sign out to about 25 m on a 1080-row screen. 18-24% of its texels are under a fifth of the white there; they grey only from mip 4, about 30 m.
+  - The straw is about 0.72 as light as before (mean luminance 118 against 164). A bale's face is big, flat and square to the beam where it's strongest, and the straw had been nearly as light as the sign's white (208 by day in game, against the sign's 194).
+- **Budgets:** every element and level is held to `closures.BUDGET` and `COLLIDER_BUDGET` at any width up to 14 m. The vehicle isn't counted. The trestles' tubes have a triangle for every corner, so triangles run closer to vertices than on boxes.
+
+  | Closure, 8 m wide (14 m) | Vertices | Triangles | Collider vertices |
+  |---|---|---|---|
+  | major | 536 (848) | 440 (740) | 0 |
+  | minor, boards | 588 (756) | 502 (658) | 0 |
+  | minor, bales | 324 (364) | 226 (246) | 80 (120) |
+  | limited | 168 | 134 | 0 |
+
+  Per element: the tape 76 vertices, the second tape and its sign 168, a lone sign 92. In game the first version cost no measurable frame rate (164 fps facing a major closure against 160 facing open grass).
+- **Names when placed:** visual meshes `CLOSURE_*`, colliders `1WALL_CLOSURE_*` (validation: "Closures on the stubs" below).
+- **To look at them:** `python scripts/closure_preview.py OUT_DIR` renders each case from the mainline (its colliders drawn in red) and writes a small test track, `mapcreator_closures`, to install with the harness; `--solid` builds it with other props solid. Confirmed in game (10 Nov): the bales' and trestles' looks, passing through the boards and stopping at the bales, and no frame-rate cost. **To confirm in game:** the night at 8-12 m and from 25 m.
+
+## Police cars (`core/police_car.py`)
+
+A procedural low-poly police car for each Australian jurisdiction, in that jurisdiction's livery with POLICE and its crest: the maintainer's decision for the closed side roads (10 Nov 2026). The mesh stage parks one at some major closures, at most one per 2 km and six per track ("Closures on the stubs" below). This module builds the car.
+
+- **Drawn here, from shapes.** The body, the chequer, the lettering and each crest are our own renditions, simplified. No image of a real crest or livery is copied, traced or embedded. The liveries were researched from the services' releases, news reports and dated photos; images were viewed for reference only. The sources are in `THIRD_PARTY_NOTICES.md` ("Design references").
+- **Entry point:** `police_car(code, body=None)` returns a `PoliceCar` with:
+  - `meshes`: `scene.Mesh`, the type furniture hands the KN5 writer, one per material, in the car's own frame;
+  - `collider`, `materials` (`scene.Material`), `textures` (texture name to its Pillow image, to save as a PNG the way the mesh stage saves `furniture.png`), `kn5_properties` (each material's KN5 values) and `night_diffuse` (each material's ksDiffuse at night).
+- **Local frame:** the origin is the car's centre on the ground, +z forward, +x to the car's right, +y up, metres. The tyres touch y = 0 and the light bar is the top.
+  - With x right, y up and z forward the frame is left-handed. `place(car, position, forward, up=(0, 1, 0), index=0)` maps it onto AC's axes with the car's right on its right (right = forward × up), so nothing comes out mirrored, rewinds each triangle to the KN5's rule, and names the copy `..._<index>`. `up` tilts the car on a slope.
+  - `merge(meshes)` joins placed cars by material, under the vertex limit, so six cars draw as three meshes and one collider mesh.
+- **Codes:** `tas`, `nsw`, `vic`, `qld`, `sa`, `wa`, `nt`, `act` (ACT Policing, part of the AFP).
+
+### Meshes, materials and the collider
+
+| Mesh | Material | What |
+|---|---|---|
+| `POLICE_<CODE>_BODY` | `police_<code>` | body, glass, wheels, mirrors |
+| `POLICE_<CODE>_RETRO` | `police_<code>_retro` | the livery band's strip of faces, both sides and across the rear |
+| `POLICE_<CODE>_LENS` | `police_<code>_lens` | the light bar |
+| `1WALL_POLICE` | (`police_<code>`, invisible) | the collider |
+
+- All three materials draw on one texture, `police_<code>`, so up to six cars of a track share one atlas. A body other than the jurisdiction's own adds its name (`police_nsw_sedan`), since its atlas differs.
+- **The collider is the body's own shape, so nothing solid stands where nothing shows.** It's a `WALL` physics mesh (no surface KEY) with `isRenderable` 0, so the car carries its own collision, as the closure answers ask (no wall in open air).
+  - **Three convex pieces:** the bonnet (nose to the windscreen's foot), the cabin (to the rear window's foot) and the boot (to the tail). `collider_pieces` gives each piece's points.
+  - **Each piece** is the convex hull of the body's own cross-sections at its stations. So it follows the bonnet, windscreen, roof, rear-window and boot lines, the cabin's tumblehome and the narrowing nose and tail.
+  - **Height:** from the sill up. The open space under the car stays open.
+  - **Fit:** the collider's sides stand 1 cm inside the band's line. The drawn body is at most 1 cm outside the collider; the collider is at most 4 cm outside the drawn body, along the sill's lower edge. The mirrors (0.16 m) and the light bar (9 cm above the roof) are left out.
+  - Each piece is closed, its faces wound outwards like the trunk colliders.
+  - The first collider was a box the body's size, up to the roof. In game it stood above the bonnet and boot, where a car riding up would meet an invisible face.
+- **KN5 values** (`kn5_properties`, by material; the track stage keys its `MATERIAL_PROPS` by a name's first word, so the mesh stage hands these over in each `scene.Material`, "Closures on the stubs" below):
+
+  | Part | ksAmbient | ksDiffuse (by day) | ksSpecular | ksSpecularEXP |
+  |---|---|---|---|---|
+  | body (white or silver paint) and the band | 0.4 | 0.6 | 0 | 40 |
+  | lenses | 0.4 | 0.6 | 0.05 | 200 |
+
+  - ksDiffuse by day is the walls' 0.6, which a stage that doesn't look these up gives them anyway; the night adjustments start from it.
+  - **No specular on the paint or the band**, which carry the lettering and the chequer. AC's `ksPerPixel` adds its specular on top of the texture, not through it, so it lifts black lettering as much as white paint (see "Night"). A stage that doesn't look these up gives them the walls' 0.05.
+  - Tasmania's silver comes from its albedo alone (164-173, against the white's 224).
+  - The lenses keep a small, tight glint.
+
+### Night
+
+`night_diffuse` gives each material's ksDiffuse at night. It goes through the furniture's `retro_materials` path in `ext_config.ini`: a `[MATERIAL_ADJUSTMENT_n]` with `CONDITION = NIGHT_SMOOTH`, and `VALUE_0_OFF` 0.6 by day.
+
+| Part | Night ksDiffuse | First check track |
+|---|---|---|
+| body (`police_<code>`) | 0.35 | 0.6 (no adjustment) |
+| band (`_retro`) | 1.3 | 2.0 |
+| lenses (`_lens`) | 2.0 | 4.0 |
+
+- **Why these values.** In game (10 Nov 2026), side-on in the beam at about 6 m, the first values washed out:
+  - the bodies clipped to white over 36-47% of their area (1-18% by day);
+  - the chequers turned pale or vanished, and the lettering went with them;
+  - the lenses burned to white boxes, and from 12 m the bars showed steady red and blue, like a bar left on.
+- **The causes, shared with any prop:**
+  - **A near-white texture under the walls' ksDiffuse 0.6.** Every material outside the track's own surfaces takes those fallback values.
+    - White at 246 under 0.6 reflects 3.7 times what the road does (95 under 0.42), taking the texture values as they are, or 11.5 times if the game decodes them from sRGB first.
+    - CSP's night exposure suits the dark road, so at close range in the beam the props go past the top of the tone curve: white clips, and saturated colours pale towards white.
+  - **Specular, added untextured.** `ksPerPixel` gives `txColor * (ksAmbient * ambient + ksDiffuse * light + ksEmissive) + ksSpecular * (N·H)^ksSpecularEXP * light`. That's Content Manager's re-implementation of the shader, `AcTools.Render/Shaders/Includes/DarkMaterial.Lighting.Simple.fx`, which the closure props' work found.
+    - At night the headlights sit beside the eye, so N·H is near 1 across a face square to them, and the specular lifts every texel alike, black lettering as much as white paint.
+    - At 0.12 and exponent 40 it came to about 40% of the white's light at the night 0.35, so the lettering's contrast fell from about 11:1 to under 3:1. Lowering the night diffuse made that share larger.
+- **Round 2** (night 0.35, 1.3 and 2.0, specular 0.12; in game 11 Nov): the bodies were as bright as by day but 24-31% near-white at 6 m, the chequers kept their dark squares but pale, and most lettering faded to pale lavender. The bars read as off from 12 m.
+- **What changed:**
+  - white paint at 224 (was 246), and Tasmania's silver at 164-173;
+  - the body comes down to 0.35 at night. Out of the beam it's lit by its ambient, which stays. That's the closure props' value too, so the two look alike side by side;
+  - the band and the lenses get smaller boosts;
+  - no specular on the paint and band (0.3, then 0.12), and a small, tight glint on the lenses (0.25 at exponent 60, now 0.05 at 200). Without the specular, the hot spot on a white side loses about a quarter of its light;
+  - the lenses are drawn as tinted, unlit plastic: each colour darkened and greyed, nothing near white.
+- White paint stays at 224 rather than the 200-210 the round 2 report suggested: whiter paint than that by day and the silver car no longer stands apart.
+- **The light bar is off, not emissive.** The track stage writes ksEmissive 0 for every material, so a glow would need a new property path. A steady glow would read as a bar left on that never flashes, and whether a track config can make a material flash is unverified.
+- The ini's description line still says "retroreflective furniture" for every entry, including the body's darker one.
+- All of it is to retest in game (`docs/known-issues.md`). Vanilla AC ignores the file, so there the car looks as by day.
+
+### Body and texture
+
+- **Body.** Lofted through 10 or 11 cross-sections from the front bumper to the rear. Each section runs from the left sill up over the roof and down to the right sill, and splits the side at the band's heights, so the band is its own strip of faces.
+  - Two shapes from the same code: a sedan (about a Toyota Camry: 4.89 x 1.84 x 1.445 m) and an SUV (about a Kia Sorento: 4.81 x 1.90 x 1.70 m).
+  - Wheels are ten-sided with a corner on the ground. They stand 5 mm proud of the body side, so the side never hides them; the arches are painted.
+  - Windows are painted on the sides. The windscreen and rear window take a glass cell.
+  - A static light bar on the roof, and two mirrors.
+- **Atlas:** 1024 x 1024 per jurisdiction and body. Each face takes its UVs by projection onto its view:
+  - the right side (1024 x 384, about 5 mm a pixel), the left side drawn on its own so the lettering reads forwards on both;
+  - the top (bonnet lettering and crest read from in front of the car), the front and the rear;
+  - a wheel, the tread, glass, plain paint, and the light bar from in front, from behind (so its lettering reads both ways) and from above.
+  - Each view is drawn in a drawing of its cell's size, so nothing spills into the next cell, at twice the size and scaled down for smooth edges. The lettering is Pillow's built-in Aileron (CC0), made bold with a stroke. Crests are drawn on a layer at four times their size.
+  - **Cells aren't square in metres** (the sedan's side is about 405 px a metre along and 547 up; the front view 291 and 474). Lettering and crests are sized by each axis, so a word or crest has its proportions and size in metres in any view. The first atlases sized them by the horizontal scale alone: crests came out squashed into small ellipses, side lettering about a quarter short of its height, and bonnet lettering stretched about three and a half times across the car.
+- **Crests** are drawn 0.30-0.38 m across (0.50 m on the NT's bonnet), bigger than on most real cars, so they read at parking distance. Bold shapes with dark edges, a few big leaves to a wreath, no small lettering. In game the first ones (0.16-0.19 m) read only as roundels, apart from Queensland's (0.30 m). Tasmania's moves above the chequer on the rear door, where there's room for it.
+  - The ACT's star is drawn a darker silver edged in navy, with a thick navy ring round a bigger shield. Its pale silver star on white paint read only as its gold centre from 6 m.
+  - The tests ask each crest to stand clearly off its paint over at least 27% of its box (the ACT's now 39%, against 27% before).
+- **The band follows the shoulder.** Along the doors it runs between the livery's heights. Towards the nose and tail it drops with the belt line, keeping its depth (NSW's "sweeps down towards the headlight"), and the geometry's strip drops with it. Queensland's wedge keeps its foot instead.
+
+### Budget
+
+| | Sedan | SUV |
+|---|---|---|
+| Vertices | 584 | 556 |
+| Triangles | 302 | 288 |
+| Collider | 52 vertices, 92 triangles | 48 vertices, 84 triangles |
+
+- **Vertices:** under the intersections report's estimate of about 700. Each face keeps its own vertices (its UVs come from its view), so the four wheels are a third of them (50 each), the body about 320, the mirrors 40 and the light bar 20.
+- **Texture:** one 1024 x 1024 DXT1 atlas with its mips, 699 KB, shared by every car on the track.
+- **Six cars on a track** (the cap), sharing the atlas, merged: an 873 KB KN5, of which 174 KB is geometry (3,624 vertices in four meshes, colliders included). Zipped, 105 KB, because the atlas is mostly flat colour. One car: 729 KB, 75 KB zipped.
+
+### Liveries
+
+Current marked general-duties cars, from releases and dated photos (2019-2026). Colours are approximate unless a source gave an official one (NSW's PMS 287).
+
+| Code | Service | Body | Paint and band | Lettering | Crest (our rendition), where | Light bar |
+|---|---|---|---|---|---|---|
+| `tas` | Tasmania Police | SUV | Silver (164-173). Two-row blue/white chequer low on the doors, a lime line on top, across the tailgate | "Police" above the line on the front doors; tailgate | Rayed gold star under a crown; blue disc with a gold lion walking. Rear door, above the chequer (on the real cars smaller, below it) | blue and red, POLICE centre |
+| `nsw` | NSW Police Force | SUV | White. Two-row blue/white chequer along the shoulder, dropping to the headlight | "Police" large and low across both doors; bonnet; "000 EMERGENCY" (0.085 m) on the rear quarter | Laurel wreath and white ring under a crown; brown eagle with the state's shield in a light blue disc; scroll. Front door, ahead of "Police" | blue, clear, red |
+| `vic` | Victoria Police | SUV | White. Three-row blue/white chequer at door-handle height, "131 444" and "000" panels set into it | "Police" low round the B-pillar; bonnet | In one colour, as on the cars: wreath, five-pointed star point down, crown, Southern Cross. Front door, ahead of "Police" | blue on the driver's side, red |
+| `qld` | Queensland Police Service | sedan | White. The 2023 design: large blue/white squares in a wedge on the lower body, two rows behind the front wheel rising to four at the rear axle; orange-red lines along its top and the sill | "POLICE" in capitals, blue keylined white and orange-red, on the front door | White eight-pointed cross edged red on a wreath, under a crown; blue ring, navy disc with a small crown; scroll. Large, rear door | blue and red |
+| `sa` | South Australia Police | SUV | White. Three-row black/white chequer between yellow lines, breaking into scattered squares over the front guard | "POLICE" in tall black capitals keylined yellow across both doors; bonnet | Wattle wreath under a crown; light blue ring, white disc with a black and white piping shrike, wings spread. Front door | red on the driver's side, blue; POLICE centre |
+| `wa` | WA Police Force | SUV | White. Two-row blue/white chequer along the shoulder, a thin orange-red line above | "Police" on the doors | In one colour, as on the cars: eight-pointed star under a crown, banners, a black swan. Front door, near "Police" | red and blue |
+| `nt` | NT Police | SUV | White. Two-row blue/white chequer along the shoulder between ochre lines | "Police" on the front doors below the band; bonnet | Wreath with two desert roses under a crown; an ochre kangaroo standing; blue and gold scrolls. Bonnet | red and blue |
+| `act` | ACT Policing (AFP) | sedan | White. Three-row near-black/white chequer along the shoulder between lime lines, bigger squares on the front guard, lime flashes on the bumper | "Police" low on the rear door; ghosted grey on the bonnet | The AFP's: an eight-pointed star under a crown, a navy ring round the Commonwealth arms' shield, a scroll; drawn bolder than the badge (a darker silver star edged in navy, a thick ring). Front door, mid-height (low on the real cars) | red and blue, POLICE centre |
+
+- **What the sources leave open**, drawn as a common Australian layout:
+  - which side the red is on, except Victoria (blue on the driver's side) and SA (red);
+  - the rear, except Tasmania: the band across it and "Police" above it (no band on Queensland's wedge cars).
+- **Least certain:** WA's general-duties livery after 2023, the NT's after 2018, the ACT's current models, and when SA's chequer changed from blue to black. Tasmania's silver comes from photos only.
+- **Bodies** follow the current fleets: SUVs almost everywhere (Santa Fe, Sorento, Kluger, RAV4, Tiguan; HiLux and LandCruiser in the NT), Camrys in Queensland (RAV4s replacing them) and the ACT's Subaru Liberty and Outback. Either body can be asked for.
+- Call signs aren't drawn: they belong to individual cars.
+
+### Which jurisdiction
+
+`jurisdiction_for(region, lonlat)` gives one jurisdiction for a whole track:
+
+- A region that names its state decides (`Region.state`; Tasmania does).
+- Otherwise the route's points do, by `jurisdiction_at(lon, lat)`, and the jurisdiction holding most of them wins. So a route across a border takes the state of most of its length, and a car near the coarse border line matches the rest of the track. A tie goes to the first along the route.
+- With neither, `tas`.
+- The borders are coarse, to within about 10 km. Most are meridians and parallels (WA at 129° E, the NT to 26° S and 138° E, Queensland's west at 138° E and 141° E, SA's east at 141° E, then 140.97° E south of the Murray). Queensland/NSW follows 29° S, the rivers past Goondiwindi and the ranges to Point Danger. NSW/Victoria follows the Murray and the line from its source to Cape Howe. The ACT is an outline of about 20 points. Every point in Australia's box gets a jurisdiction.
+
+### Visual check
+
+`PYTHONPATH=src python scripts/police_cars_check.py [--out DIR]` writes, by default to a folder in the system's temp directory (never inside the repository):
+
+- `lineup_right.png`, `lineup_left.png` and a close-up of each car from the front and the rear, from a small software renderer that culls back faces as AC does (a face wound the wrong way shows as a hole);
+- each atlas as a PNG;
+- `mapcreator_police_check/`, a test track: a straight 600 m road with the eight cars parked on each verge, so you see each car's right side on the left verge and its left side on the right. Copy it to `assettocorsa/content/tracks/`, pick "Police car check", and set a night time (CSP) to see the bands and light bars catch the headlights. Its `ext_config.ini` carries the cars' night adjustments, as a built track's would.
+
+## Closures on the stubs (`core/stub_closures.py`)
+
+The mesh stage closes every side road's stub off the stage with the closure props, and parks police cars at some of the major closures: the maintainer's answers to the intersections research (10 Nov 2026). A junction whose stub was left out (`stubs.json`'s `skipped`) gets nothing, and `"junctions": "none"` gives neither stubs nor closures.
+
+- **Level**, the junction's closure: **major** gets course tape, barrier boards across the full width with ROAD CLOSED, and a police car if it's chosen (below); **minor** gets tape, one obstacle and a sign; **limited** gets tape and a sign. No arrows of any kind.
+- **A minor closure's obstacle:** barrier boards or straw bales, about half each, from a hash of the junction's OSM node and way (`stub_closures.obstacle_for`). So it never changes between builds, and a real junction gets the same one on every track that passes it. Bales go only where the whole row keeps 5 m from the road's edge (they're solid); elsewhere boards. None needed switching on the examples.
+- **Layout:** `closures.layout` from the closure's origin: tape at 4 m, the obstacle at 12 m, the second tape and sign at 37 m; on a stub under 45 m the sign stands on the obstacle.
+- **The origin.** A stub's `d` runs along its centreline from the road's edge line, so on a skewed junction a line square across the stub 4 m in runs back onto the road on its acute side. The closure's origin (its local z = 0) is the first place along the stub, half a metre at a time, where its tape keeps 3.5 m from the road's edge, stake to stake. On a square junction that's d = 0 and the tape stands 4 m in, as the research's Q8 has it; on a skewed one the whole closure moves in, up to 26 m on Mount Dandenong Tourist Road's shallowest junctions.
+- **Width.** In the throat the paved width is the stub and its flares. So each line of props spans the stub's paved outline (`stubs.json`'s `outline`) along the line square across the stub, and 1 m more onto each verge, as the kit's 8 m does for a 6 m road. Otherwise cars would go round on the flare. Where one flare is longer, the props' centre moves off the stub's centreline with the span. No line reaches nearer the road's edge than 1.5 m.
+- **Ground.** Feet stand on the built ground: the highest road, stub, verge or terrain triangle under each point (`stub_closures.TopSurface`). `closures.place` stands each line of props rigidly at its own distance in, so the ground under a prop is read in its line's frame.
+- **Overshoot** (straight ahead where the route turns): the route turns at least 30 degrees at the junction, and the side road leaves within 30 degrees of the way a car arrives, nearer straight on than the route goes, in a direction one of the track's layouts drives. Its closure has nothing solid in its first 25 m (`closures.closure(overshoot=True)`): the obstacle stands at 27 m. On the examples there's one: Gunning Street, on Brinktop Road.
+- **Police cars:** only at major closures with a vehicle slot, no two within 2 km of each other along the route, and six a track at most (Q7). The biggest side roads come first: by class (trunk, primary, secondary, tertiary; a link after its road), then width, then length, then station. One jurisdiction a track (`police_car.jurisdiction_for`: the region's state, else most of the route's points).
+  - A car keeps its slot's distance in and heading: behind the boards, right of the middle, nose out and turned 30 degrees in. Across the stub it stays within the span where it stands, so a slot sized to boards across a wide throat still parks it on the side road. Its height and tilt come from the ground under its four wheels.
+  - Where its collider would come within 5 m of the road's edge or leave the stub and its verge, it tries the mirror image (left of the middle). Failing both, that closure gets no car and the next in line may.
+- **Collision:** straw bales and the police cars are solid; boards, trestles, signs and tape are passable (Q9, option 2). Nothing solid stands within 5 m of the road's edge (placement keeps 5.25 m).
+- **Meshes:** every closure merged by `closures.merge`: `CLOSURE_k` (one per material) and `1WALL_CLOSURE_k`. The cars, by `police_car.merge`: `POLICE_<CODE>_k`, `POLICE_<CODE>_RETRO_k`, `POLICE_<CODE>_LENS_k` and `1WALL_POLICE_k`. The atlases are saved beside the scene as `closure.png` and `police_<code>.png`, as `furniture.png` is.
+- **Materials:** `closure` and `closure_retro` take the walls' values (`track_stage.MATERIAL_PROPS["closure"]`, as their check track had them), and `closure_retro` goes to 1.3 at night (`track_stage.NIGHT_DIFFUSE`). A police material brings its own KN5 values and night value in its `scene.Material` (`properties` and `night_diffuse`, from `PoliceCar.kn5_properties` and `.night_diffuse`). The track stage writes those as given and adds the night values to `ext_config.ini`'s adjustments (`track_stage.retro_materials`).
+- **What doesn't change:** the mainline, its half widths, the AI line and racing line, `ai_hints.ini`, the grid, the spawns, the gates and the run-off. On the six examples every `fast_lane.ai`, `ai_hints.ini`, `surfaces.ini`, `map.ini`, `map.png`, `ui_track.json` and `centreline.geojson` is byte for byte the stubs' build's, and so is every KN5 dummy and every mesh that build had.
+- **`04_mesh/closures.json`** (version 1): `closures`, one per stub in order along the route, each with `junction`, `name`, `highway`, `station_m`, `side`, `level`, `obstacle` (`boards`, `bales`, or null on a limited closure), `overshoot`, `origin_m`, `elements` (`tape`, `obstacle`, `warning` for the second tape and its sign, `sign` for a lone sign; each with `d_m` metres in from the road's edge line, `width_m`, `offset_m` the props' centre left of the stub's centreline, `in_throat` and `cut_by_road`), `car` (false, or `mirrored` and `d_m`), and `note` where bales became boards.
+- **Validation** (`validate.closure_checks`), failures unless:
+  - the `1WALL_CLOSURE_*` and `1WALL_POLICE*` colliders are invisible;
+  - none has a vertex within 5 m of the road's edge (its own `1ROAD` and `1GRAVEL` meshes, not the stubs') or within 3 m of a spawn, in every layout;
+  - every `CLOSURE_*` and `POLICE_*` vertex lies within 3.5 m of a stub's paved outline, every stub carries closure props, and none stands on a side road that has no stub.
+- **Cost:** `docs/known-issues.md`, "Side-road junctions".

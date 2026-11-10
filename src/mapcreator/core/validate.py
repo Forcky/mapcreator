@@ -84,6 +84,14 @@ JUNCTION_CLEAR = (("guard rails", ("RAIL_", "1WALL_RAIL_"), "mouth"),
                   ("power colliders", (POWER_COLLIDER,), "road"))
 
 
+# The closures on the stubs (`core.stub_closures`): their visual meshes, and their colliders, which are solid (WALL).
+CLOSURE_MESHES = ("CLOSURE_", "POLICE_")
+CLOSURE_COLLIDERS = (("closure", "1WALL_CLOSURE_"), ("police car", "1WALL_POLICE"))
+SOLID_ROAD_CLEARANCE_M = 5.0  # no solid closure or car nearer the road's edge than this (the research's Q9)
+SOLID_SPAWN_CLEARANCE_M = 3.0  # nor nearer a spawn than this
+CLOSURE_ON_STUB_M = 3.5  # every closure or car vertex within this of a stub's paved outline (stakes, a car's verge)
+
+
 @dataclass(frozen=True)
 class TightBend:
     """The tightest point of a layout's AI line, where that's under MIN_RADIUS_M."""
@@ -672,6 +680,74 @@ def junction_checks(rep: Report, label: str, data: dict, dummies: dict, junction
         rep.passed.append(f"{label}: timing gates clear of side roads' mouths")
 
 
+def is_mainline_road(name: str) -> bool:
+    """The route's own road (1ROAD_### or 1GRAVEL_###), not a side road's stub (1ROAD_J###)."""
+    return is_road_mesh(name) and "_J" not in name
+
+
+def _xz(nodes: list[dict]) -> np.ndarray:
+    return (np.concatenate([n["vertices"]["pos"][:, [0, 2]] for n in nodes]).astype(float) if nodes
+            else np.zeros((0, 2)))
+
+
+def closure_checks(rep: Report, label: str, data: dict, dummies: dict, junctions: list[JunctionCheck], *,
+                   meshes: bool = True) -> None:
+    """The closures on the stubs and their police cars (`core.stub_closures`): their colliders invisible, nothing solid
+    within SOLID_ROAD_CLEARANCE_M of the road's edge (its own road meshes, not the stubs') or SOLID_SPAWN_CLEARANCE_M
+    of a spawn; and with the junctions known, every closure on a stub, every stub closed, and none on a side road
+    that has no stub. `meshes` False checks the spawns alone (another layout of the same meshes)."""
+    nodes = [n for n in data["nodes"] if n["class"] == 2]
+    visual = [n for n in nodes if n["name"].startswith(CLOSURE_MESHES)]
+    solid = {what: [n for n in nodes if n["name"].startswith(prefix)] for what, prefix in CLOSURE_COLLIDERS}
+    walls = [n for found in solid.values() for n in found]
+    if not visual and not walls:
+        return
+    hard = _xz(walls)
+    if len(hard):
+        spawns = np.array([d["matrix"][3, [0, 2]] for n, d in dummies.items() if SPAWN.match(n)])
+        if len(spawns):
+            gap = float(cKDTree(hard).query(spawns, workers=-1)[0].min())
+            rep.check(gap >= SOLID_SPAWN_CLEARANCE_M, f"{label}: closures' and police cars' colliders at least "
+                      f"{SOLID_SPAWN_CLEARANCE_M:.0f} m from every spawn ({gap:.1f} m)")
+    if not meshes:
+        return
+    for what, found in solid.items():
+        if found:
+            rep.check(all(n["renderable"] == 0 for n in found),
+                      f"{label}: {len(found)} {what} collider meshes, all invisible")
+    if len(hard):
+        lo, hi = hard.min(axis=0) - SOLID_ROAD_CLEARANCE_M - 1.0, hard.max(axis=0) + SOLID_ROAD_CLEARANCE_M + 1.0
+        tris = []
+        for n in nodes:
+            if is_mainline_road(n["name"]):
+                t = n["vertices"]["pos"].astype(float)[n["indices"].reshape(-1, 3)][:, :, [0, 2]]
+                near = (t.max(axis=1) >= lo).all(axis=1) & (t.min(axis=1) <= hi).all(axis=1)
+                tris.append(t[near])
+        tris = np.concatenate(tris) if tris else np.zeros((0, 3, 2))
+        road = shapely.union_all(shapely.polygons(tris)) if len(tris) else shapely.Polygon()
+        gap = float(shapely.distance(road, shapely.points(hard)).min()) if not road.is_empty else np.inf
+        rep.check(gap >= SOLID_ROAD_CLEARANCE_M - 1e-3,
+                  f"{label}: closures' and police cars' colliders at least {SOLID_ROAD_CLEARANCE_M:.0f} m from the "
+                  f"road's edge ({gap:.1f} m)")
+    stubs = [j for j in junctions if j.stub is not None]
+    if not stubs:
+        return
+    every = _xz(visual + walls)
+    paved = shapely.union_all([j.stub.paved for j in stubs])
+    zone = paved.buffer(CLOSURE_ON_STUB_M)
+    off = int((~shapely.contains_xy(zone, every[:, 0], every[:, 1])).sum())
+    rep.check(off == 0, f"{label}: closures and police cars stand on side roads' stubs"
+              + (f" ({off} vertices off them)" if off else ""))
+    xz = _xz([n for n in visual if n["name"].startswith("CLOSURE_")])
+    bare = [j.label for j in stubs if not shapely.contains_xy(j.stub.paved, xz[:, 0], xz[:, 1]).any()]
+    rep.check(not bare, f"{label}: every stub closed ({len(stubs)})" + (f" (not {'; '.join(bare[:5])})" if bare else ""))
+    skipped = [j for j in junctions if j.stub is None]
+    hit = [j.label for j in skipped
+           if shapely.contains_xy(shapely.union(j.mouth, j.road).difference(zone), every[:, 0], every[:, 1]).any()]
+    rep.check(not hit, f"{label}: no closure on a side road without a stub"
+              + (f" ({'; '.join(hit[:5])})" if hit else ""))
+
+
 def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
                  road_radius: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
                  junctions: list[JunctionCheck] | None = None) -> Report:
@@ -730,6 +806,7 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
                            allow_tight_bends=allow_tight_bends, road_radius=(road_radius or {}).get(label))
             # Every layout's KN5 holds the same meshes; only the gates differ.
             junction_checks(rep, label, merged, all_dummies, junctions or [], meshes=lay == layouts[0])
+            closure_checks(rep, label, merged, all_dummies, junctions or [], meshes=lay == layouts[0])
     for rel in ("ATTRIBUTION.txt", "centreline.geojson", "extension/ext_config.ini"):
         rep.check((track_dir / rel).exists(), f"{rel} present")
     if (track_dir / "extension" / "ext_config.ini").exists() and kn5_materials:
