@@ -215,10 +215,12 @@ KINDS = {
     # Tea-tree and paperbark: stems from low down, steep and many, with fine foliage.
     "tea_tree": Kind(7.0, 0.1, (6, 9), (10, 32), 0.6, 0.1, (sprites.TEA_TREE_CELL,), 1.2, 6, 2, sprites.GREY_BARK),
     # Rainforest myrtle (Nothofagus cunninghamii): a dense, dark, domed crown from low down. Limbs start at a
-    # fifth of the height and spread wider, and the leaf cards are 3.2 m, not 2.0: the first version (limbs from
-    # 30%, 2 m cards) read as open eucalypt woodland in game, in Tasmania and in NSW's rainforest alike. Bigger
-    # cards rather than more of them keep its triangles where they were (2,032 at LOD 0).
-    "myrtle": Kind(25.0, 0.2, (7, 9), (40, 70), 0.42, 0.45, sprites.MYRTLE_CELLS, 3.2, 5, 3, sprites.GREY_BARK),
+    # fifth of the height and spread wider, with 3 leaf cards of 2.8 m a cluster. The first version (limbs from
+    # 30%, 5 cards of 2 m) read as open eucalypt woodland in game, in Tasmania and in NSW's rainforest alike.
+    # Leaf-card area is what costs (overdraw): 5 cards of 3.2 m read as rainforest but were 2.56x the old area
+    # and cost 6.4% of frame rate on Lady Wakehurst (9.1% in its myrtle gully); 3 of 2.8 m is 1.18x the area,
+    # 1,688 triangles at LOD 0 (was 2,032), reads the same, and costs 1.8% (2.3%) (mapcreator#62).
+    "myrtle": Kind(25.0, 0.2, (7, 9), (40, 70), 0.42, 0.45, sprites.MYRTLE_CELLS, 2.8, 3, 3, sprites.GREY_BARK),
     # Radiata pine: a straight leader and whorls of level branches, conical; plantation rows come from the data.
     "pine": Kind(30.0, 0.28, (7, 9), (78, 98), 0.3, 0.4, sprites.PINE_CELLS, 2.2, 4, 0, sprites.PINE_BARK, True),
     # A young pine, for the 3-12 m trees of a young plantation: drawn as the grown pine they sat at Tree FX's
