@@ -58,9 +58,10 @@ HEIGHT_M = {
     DRY_SMOOTH: (18.0, 4.5, 8.0, 32.0), DRY_ROUGH: (18.0, 4.5, 8.0, 32.0), SNOW_GUM: (10.0, 3.0, 4.0, 18.0),
     WET: (35.0, 9.0, 15.0, 70.0), RAINFOREST: (22.0, 6.0, 8.0, 40.0), CONIFER: (18.0, 5.0, 8.0, 30.0),
     TEA_TREE: (6.0, 2.0, 3.0, 12.0), WATTLE: (8.0, 2.5, 4.0, 14.0), BLACKWOOD: (14.0, 5.0, 5.0, 30.0),
-    SHE_OAK: (9.0, 3.0, 4.0, 16.0), BANKSIA: (6.0, 2.0, 3.0, 12.0), REGROWTH: (10.0, 4.0, 4.0, 22.0),
+    # Coast banksia (B. integrifolia) grows 10-15 m; at tea-tree's height it barely showed from the road.
+    SHE_OAK: (9.0, 3.0, 4.0, 16.0), BANKSIA: (9.0, 3.0, 4.0, 16.0), REGROWTH: (10.0, 4.0, 4.0, 22.0),
     PINE: (22.0, 6.0, 8.0, 40.0), PLANTATION: (25.0, 7.0, 10.0, 45.0), WILLOW: (12.0, 3.0, 6.0, 20.0),
-    MALLEE: (6.0, 2.0, 3.0, 10.0),
+    MALLEE: (6.0, 2.0, 4.0, 10.0),  # from 4 m: euc_young, which draws it, can't go below 3.6 m (the 0.3 clip)
 }
 
 MIXED_SPLIT = 0.6  # share of the local tallest crown above which a crown in mixed wet forest is the eucalypt

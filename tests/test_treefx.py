@@ -266,3 +266,44 @@ def test_folding_keeps_pines_scales_and_small_tracks_in_mind():
     # The same trees fold the same way every time.
     assert _fold({"euc_tall": 300, "euc_spread": 2, "euc_young": 2}, {}) == \
         _fold({"euc_tall": 300, "euc_spread": 2, "euc_young": 2}, {})
+
+
+def _own(name: str) -> float:
+    return treefx.KINDS[treefx.VARIANTS[name][0] if name in treefx.VARIANTS else name].height
+
+
+def test_every_family_draws_its_made_up_heights_within_the_size_clip():
+    # Made-up trees take their family's height range (species.HEIGHT_M); a band that hands one to a model it
+    # sits at the 0.3 or 3x clip of draws it the wrong height (54% of Dalgarth's pines stood at 9 m).
+    from mapcreator.core import species
+    for family, (_, _, lo, hi) in species.HEIGHT_M.items():
+        for h in np.linspace(lo, hi, 40):
+            lower = -np.inf
+            for upper, shares in treefx.FAMILY_BANDS[family]:
+                if lower < h <= upper:
+                    for name in shares:
+                        assert treefx.SIZE_CLIP[0] <= h / _own(name) <= treefx.SIZE_CLIP[1], (family, h, name)
+                lower = upper
+
+
+def test_short_and_tall_crowns_get_a_model_of_their_size():
+    names = list(treefx.MODEL_NAMES)
+    rng = np.random.default_rng(2)
+
+    def drawn(family: str, h: float) -> set[str]:
+        return {names[i] for i in treefx.assign_families(np.full(50, h), np.full(50, family, dtype=object), names, rng)}
+
+    assert drawn("pine", 6.0) == {"pine_young"} and drawn("pine", 25.0) == {"pine"}
+    assert drawn("rainforest", 5.0) == {"wattle"} and drawn("rainforest", 25.0) == {"myrtle"}
+    assert drawn("rainforest", 55.0) == drawn("blackwood", 50.0) == {"euc_wet"}  # emergent eucalypts
+    assert drawn("snow_gum", 5.0) == drawn("willow", 5.0) == {"euc_young"}
+    assert drawn("wet", 13.0) == {"euc_tall_rough"}
+
+
+def test_tea_tree_is_dimmer_than_the_rest_at_night():
+    def brightness(model: str) -> str:
+        ini = treefx.tree_ini(7.0, 2.0, ["lod0.mesh"], model)
+        return next(ln.split("=")[1] for ln in ini.splitlines() if ln.startswith("BRIGHTNESS"))
+
+    assert brightness("tea_tree") == brightness("euc_wet") == "0.4"
+    assert brightness("myrtle") == brightness("pine") == brightness("") == treefx.SHADING["BRIGHTNESS"] == "0.6"
