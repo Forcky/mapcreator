@@ -13,7 +13,8 @@ materials, the atlas and a collider in the car's own frame, and `place` puts a c
 - **Meshes** are `scene.Mesh`, the type `furniture` hands the KN5 writer: one per material (body, reflective
   livery band, light bar), all drawing on the jurisdiction's one atlas, so up to six cars share one texture.
   `merge` joins placed cars by material.
-- **Collider:** a box the size of the body, invisible, in a `1WALL_POLICE_n` mesh like the other solid props.
+- **Collider:** the body's own shape in three convex pieces (bonnet, cabin, boot), invisible, in a `1WALL_POLICE_n`
+  mesh like the other solid props, so no invisible face stands above the bonnet or boot or beside the windows.
 - **Which car:** `jurisdiction_for(region, lonlat)`, one per track.
 
 **Body.** Lofted through cross-sections from the front bumper to the rear: each runs from the left sill up over the
@@ -44,6 +45,7 @@ from functools import lru_cache
 import numpy as np
 import shapely
 from PIL import Image, ImageDraw, ImageFont
+from scipy.spatial import ConvexHull
 
 from mapcreator.core.scene import MAX_VERTICES, Material, Mesh
 
@@ -55,7 +57,7 @@ BAND_BELOW_BELT = 0.03  # the band's top stays this far under the belt; where th
 WHEEL_SIDES = 10
 WHEEL_PROUD = 0.005  # the tyre's outer face stands this far outside the body side, so the side never hides it
 MIRROR = (0.16, 0.11, 0.08)  # out from the door, tall, long
-COLLIDER_BELOW_M = 0.5  # the collider reaches this far below the ground, for a car parked on a slope
+COLLIDER_INSET = 0.01  # the collider's sides stand this far inside the side's widest line (the band)
 
 
 @dataclass(frozen=True)
@@ -475,14 +477,46 @@ def _mirrors(parts: _Parts, body: Body, mats: dict[str, str]) -> None:
              uv)
 
 
+def _collider_section(st: Station) -> list[tuple[float, float]]:
+    """A station's cross-section for the collider (x, y): straight sides from the sill to the belt, 1 cm inside the
+    band's line, then in to the roof's edge where the cabin is over it."""
+    x = st.half_w - COLLIDER_INSET
+    right = [(x, st.sill), (x, st.belt)] + ([(st.roof_half_w, st.roof)] if st.roof is not None else [])
+    return right + [(-px, py) for px, py in right[::-1]]
+
+
+def collider_pieces(body: Body) -> list[np.ndarray]:
+    """The collider's three convex pieces, as the points (x, y, z) they're the hulls of: the bonnet (nose to the
+    windscreen's foot), the cabin (to the rear window's foot) and the boot (to the tail)."""
+    st = body.stations
+    first = next(i for i, s in enumerate(st) if s.roof is not None)
+    last = max(i for i, s in enumerate(st) if s.roof is not None)
+    spans = ((0, first - 1), (first - 1, last + 1), (last + 1, len(st) - 1))
+    return [np.array([(x, y, s.z) for s in st[a:b + 1] for x, y in _collider_section(s)]) for a, b in spans]
+
+
 def _collider(body: Body, material: str) -> Mesh:
-    """A box the body's size, faces wound outwards (the walls stop cars one-sided); no floor."""
-    parts = _Parts()
-    hw, half_l = body.width / 2, body.length / 2
-    _box(parts, material, (-hw, -COLLIDER_BELOW_M, -half_l), (hw, body.roof, half_l),
-         lambda face, pts: np.zeros((len(pts), 2)))
-    (mesh,) = parts.meshes(COLLIDER_MESH)
-    return replace(mesh, name=COLLIDER_MESH, renderable=False)
+    """The body's shape for collisions, so nothing solid stands where nothing shows: three convex pieces (bonnet,
+    cabin, boot), each the hull of the body's own cross-sections, so it follows the bonnet, windscreen, roof, rear
+    window and boot lines, the cabin's tumblehome and the narrowing nose and tail. It runs from the sill (the open
+    space under the car stays open) to the top. Each piece is closed, its faces wound outwards."""
+    pos, nrm, tri = [], [], []
+    for pts in collider_pieces(body):
+        hull = ConvexHull(pts)
+        index = {int(v): len(pos) + k for k, v in enumerate(hull.vertices)}
+        acc = np.zeros((len(hull.vertices), 3))
+        for (a, b, c), eq in zip(hull.simplices, hull.equations):
+            if np.cross(pts[b] - pts[a], pts[c] - pts[a]) @ eq[:3] < 0:
+                b, c = c, b
+            tri.append((index[a], index[b], index[c]))
+            face = np.cross(pts[b] - pts[a], pts[c] - pts[a])
+            for v in (a, b, c):
+                acc[index[v] - len(pos)] += face
+        pos.extend(pts[hull.vertices])
+        nrm.extend(acc / np.linalg.norm(acc, axis=1, keepdims=True))
+    n = len(pos)
+    return Mesh(COLLIDER_MESH, material, np.array(pos, np.float32), np.array(nrm, np.float32),
+                np.zeros((n, 2), np.float32), np.array(tri, np.int64), renderable=False)
 
 
 # -- the car -----------------------------------------------------------------------------------------------------

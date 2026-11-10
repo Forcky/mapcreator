@@ -369,7 +369,13 @@ A procedural low-poly police car for each Australian jurisdiction, in that juris
 | `1WALL_POLICE` | (`police_<code>`, invisible) | the collider |
 
 - All three materials draw on one texture, `police_<code>`, so up to six cars of a track share one atlas. A body other than the jurisdiction's own adds its name (`police_nsw_sedan`), since its atlas differs.
-- **The collider** is a box the size of the body: its full width and length, from 0.5 m below the ground (for a slope) to the roof. Four sides and a top, wound outwards like the trunk colliders, `isRenderable` 0. It's a `WALL` physics mesh (no surface KEY), so the car carries its own collision, as the closure answers ask (no wall in open air).
+- **The collider is the body's own shape, so nothing solid stands where nothing shows.** It's a `WALL` physics mesh (no surface KEY) with `isRenderable` 0, so the car carries its own collision, as the closure answers ask (no wall in open air).
+  - **Three convex pieces:** the bonnet (nose to the windscreen's foot), the cabin (to the rear window's foot) and the boot (to the tail). `collider_pieces` gives each piece's points.
+  - **Each piece** is the convex hull of the body's own cross-sections at its stations. So it follows the bonnet, windscreen, roof, rear-window and boot lines, the cabin's tumblehome and the narrowing nose and tail.
+  - **Height:** from the sill up. The open space under the car stays open.
+  - **Fit:** the collider's sides stand 1 cm inside the band's line. The drawn body is at most 1 cm outside the collider; the collider is at most 4 cm outside the drawn body, along the sill's lower edge. The mirrors (0.16 m) and the light bar (9 cm above the roof) are left out.
+  - Each piece is closed, its faces wound outwards like the trunk colliders.
+  - The first collider was a box the body's size, up to the roof. In game it stood above the bonnet and boot, where a car riding up would meet an invisible face.
 - **KN5 values** (`kn5_properties`, by material; the track stage keys its `MATERIAL_PROPS` by a name's first word, so it needs to look these up by the full name):
 
   | Part | ksAmbient | ksDiffuse (by day) | ksSpecular | ksSpecularEXP |
@@ -429,11 +435,11 @@ A procedural low-poly police car for each Australian jurisdiction, in that juris
 |---|---|---|
 | Vertices | 584 | 556 |
 | Triangles | 302 | 288 |
-| Collider | 20 vertices, 10 triangles | the same |
+| Collider | 52 vertices, 92 triangles | 48 vertices, 84 triangles |
 
 - **Vertices:** under the intersections report's estimate of about 700. Each face keeps its own vertices (its UVs come from its view), so the four wheels are a third of them (50 each), the body about 320, the mirrors 40 and the light bar 20.
 - **Texture:** one 1024 x 1024 DXT1 atlas with its mips, 699 KB, shared by every car on the track.
-- **Six cars on a track** (the cap), sharing the atlas, merged: an 863 KB KN5, of which 164 KB is geometry (3,456 vertices in four meshes). Zipped, 97 KB, because the atlas is mostly flat colour. One car: 728 KB, 70 KB zipped.
+- **Six cars on a track** (the cap), sharing the atlas, merged: an 873 KB KN5, of which 174 KB is geometry (3,624 vertices in four meshes, colliders included). Zipped, 105 KB, because the atlas is mostly flat colour. One car: 729 KB, 75 KB zipped.
 
 ### Liveries
 

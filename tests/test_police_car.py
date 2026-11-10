@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import shapely
 from PIL import Image
 
 from mapcreator.core import kn5, police_car, textures
@@ -101,27 +102,81 @@ def test_the_band_is_its_own_reflective_strip(code):
     assert y.max() <= b1 + 1e-3
 
 
-def test_collider_is_the_body_box():
-    car = police_car.police_car("vic")
-    c = car.collider
-    lo, hi = c.positions.min(axis=0), c.positions.max(axis=0)
-    shape = car.body
-    assert lo[0] == pytest.approx(-shape.width / 2) and hi[0] == pytest.approx(shape.width / 2)
-    assert lo[2] == pytest.approx(-shape.length / 2) and hi[2] == pytest.approx(shape.length / 2)
-    assert lo[1] == pytest.approx(-police_car.COLLIDER_BELOW_M) and hi[1] == pytest.approx(shape.roof)
-    assert len(c.positions) == 20  # four sides and a top, no floor
-    # Outward: each face's normal points away from the box's centre.
-    centre = (lo + hi) / 2
-    t = c.triangles
+COLLIDER_TOL_M = 0.045  # "within a few cm": its sides stand 1 cm in from the band, so 4 cm out from the sill's edge
+
+
+def collider_groups(mesh):
+    """The collider's pieces: its triangles grouped by the vertices they share."""
+    parent = list(range(len(mesh.positions)))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for a, b, c in mesh.triangles:
+        parent[root(b)] = root(a)
+        parent[root(c)] = root(a)
+    groups = {}
+    for t in mesh.triangles:
+        groups.setdefault(root(t[0]), []).append(t)
+    return [np.array(g) for g in groups.values()]
+
+
+@pytest.mark.parametrize("body", sorted(police_car.BODIES))
+def test_collider_is_the_body_in_convex_pieces(body):
+    """No invisible face: the collider follows the bonnet, roof line, boot and sides, in three convex pieces."""
+    car = police_car.police_car("tas", body)
+    shape, c = car.body, car.collider
+    c.validate()
+    assert c.name == police_car.COLLIDER_MESH and not c.renderable
+    assert np.allclose(np.linalg.norm(c.normals, axis=1), 1, atol=1e-4)
     p = c.positions.astype(float)
-    cross = np.cross(p[t[:, 1]] - p[t[:, 0]], p[t[:, 2]] - p[t[:, 0]])
-    assert ((cross * (p[t].mean(axis=1) - centre)).sum(axis=1) > 0).all()
-    # The car is inside its footprint, but for the tyres, 5 mm proud of the body, and the mirrors.
-    pos, _, uv = all_vertices(car)
-    assert np.abs(pos[:, 2]).max() <= shape.length / 2 + 1e-6
-    outside = np.abs(pos[:, 0]) > shape.width / 2 + police_car.WHEEL_PROUD + 1e-6
-    assert outside.any() and (in_cell(uv, "paint") | in_cell(uv, "glass"))[outside].all()
-    assert np.abs(pos[:, 0]).max() <= shape.width / 2 + police_car.MIRROR[0] + 1e-6
+    groups = collider_groups(c)
+    assert len(groups) == 3  # bonnet, cabin, boot
+    for tris in groups:
+        verts = np.unique(tris)
+        centre = p[verts].mean(axis=0)
+        for a, b, d in tris:
+            n = np.cross(p[b] - p[a], p[d] - p[a])
+            n /= np.linalg.norm(n)
+            assert n @ (p[[a, b, d]].mean(axis=0) - centre) > 0  # wound outwards
+            assert ((p[verts] - p[a]) @ n <= 1e-5).all()  # convex: every corner on the inner side of every face
+    # Within the body's silhouette, station by station (the collider's corners are all on stations).
+    for x, y, z in p:
+        st = next(s for s in shape.stations if abs(s.z - z) < 1e-5)
+        section = shapely.Polygon(police_car._section(st, police_car.band_heights(shape, police_car.LIVERIES["tas"]),
+                                                      False))
+        assert section.buffer(COLLIDER_TOL_M).contains(shapely.Point(x, y)), (x, y, z)
+    # No higher than the bonnet and boot at the nose and tail, and the roof's height over the cabin.
+    nose, tail = shape.stations[0], shape.stations[-1]
+    assert p[np.abs(p[:, 2] - nose.z) < 1e-5, 1].max() == pytest.approx(nose.belt)
+    assert p[np.abs(p[:, 2] - tail.z) < 1e-5, 1].max() == pytest.approx(tail.belt)
+    assert p[:, 1].max() == pytest.approx(shape.roof)
+    # And it covers the body: every corner of the drawn body and band (not the wheels, the mirrors, or the light bar
+    # 9 cm above the roof) is inside a piece.
+    drawn = [m for m in car.meshes if not m.material.endswith("_lens")]
+    pos = np.vstack([m.positions for m in drawn]).astype(float)
+    uv = np.vstack([m.uvs for m in drawn]).astype(float)
+    pos = pos[~(in_cell(uv, "wheel") | in_cell(uv, "tread"))]
+    hw = np.interp(pos[:, 2], [s.z for s in shape.stations][::-1], [s.half_w for s in shape.stations][::-1])
+    pos = pos[np.abs(pos[:, 0]) <= hw + 1e-6]  # the mirrors stand out beyond the body; nothing else does
+    planes = []
+    for tris in groups:
+        n = np.cross(p[tris[:, 1]] - p[tris[:, 0]], p[tris[:, 2]] - p[tris[:, 0]])
+        n /= np.linalg.norm(n, axis=1, keepdims=True)
+        planes.append((n, (n * p[tris[:, 0]]).sum(axis=1)))
+    inside = np.zeros(len(pos), bool)
+    for n, d in planes:
+        inside |= ((pos @ n.T - d) <= COLLIDER_TOL_M).all(axis=1)
+    assert inside.all(), pos[~inside][:5]
+
+
+@pytest.mark.parametrize("body", sorted(police_car.BODIES))
+def test_collider_budget(body):
+    c = police_car.police_car("vic", body).collider
+    assert len(c.positions) <= 64 and len(c.triangles) <= 120
 
 
 def test_place_maps_the_car_into_ac_axes():
