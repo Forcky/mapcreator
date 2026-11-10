@@ -258,6 +258,51 @@ def test_the_signs_white_is_a_light_grey_so_it_doesnt_bloom_into_the_legend():
     assert 190 <= np.percentile(lum, 90) <= 210  # the white: about 200, where it was 244
 
 
+def _dxt1_mips(im) -> list[np.ndarray]:
+    """The mip chain as the track stage encodes it (DXT1), decoded back to RGB."""
+    dds = textures.to_dds(im, "DXT1")
+    h, w = (int(v) for v in np.frombuffer(dds, "<u4", 2, 12))
+    levels, off = [], 128
+    while off < len(dds):
+        n = max(w // 4, 1) * max(h // 4, 1)
+        blocks = np.frombuffer(dds, np.uint8, n * 8, off).reshape(n, 8)
+        off += n * 8
+        c = blocks[:, :4].view("<u2").astype(int)
+        ends = np.stack([(c >> 11 & 31) * 255 / 31, (c >> 5 & 63) * 255 / 63, (c & 31) * 255 / 31], axis=-1)
+        a, b = ends[:, 0], ends[:, 1]
+        four = (c[:, 0] > c[:, 1])[:, None]
+        pal = np.stack([a, b, np.where(four, (2 * a + b) / 3, (a + b) / 2), np.where(four, (a + 2 * b) / 3, 0)], 1)
+        bits = blocks[:, 4:].view("<u4")[:, 0]
+        idx = (bits[:, None] >> (2 * np.arange(16))) & 3
+        px = np.take_along_axis(pal, idx[..., None].astype(int), axis=1).reshape(h // 4, w // 4, 4, 4, 3)
+        levels.append(px.transpose(0, 2, 1, 3, 4).reshape(h, w, 3))
+        w, h = max(4, w // 2), max(4, h // 2)
+    return levels
+
+
+def test_the_legend_keeps_pure_black_stroke_cores_down_to_the_mips_sampled_at_12_to_25_m():
+    """Not the texture: at 12-15 m the game samples mips 2-3 for the sign (1.8 m across, about 120-150 px on a
+    1080-row screen), and there its strokes still have exactly black texels, so a night that shows none is light added
+    on top of the texture (`KN5_PROPERTIES`)."""
+    x0, y0, x1, y1 = C.CELLS["road_closed"]
+    for k, level in enumerate(_dxt1_mips(C.atlas().image)[:4]):
+        s = 2 ** k
+        legend = level[(y0 + 24) // s:(y1 - 24) // s, (x0 + 80) // s:(x1 - 80) // s]
+        legend = legend @ np.array([0.2126, 0.7152, 0.0722])
+        white = np.percentile(legend, 90)
+        assert legend.min() == 0.0
+        assert np.mean(legend < 0.2 * white) > 0.15
+
+
+def test_no_specular_on_the_closures_so_their_black_stays_black_at_night():
+    assert C.KN5_PROPERTIES["ksSpecular"] == 0.0
+    walls = track_stage.MATERIAL_PROPS["walls"]
+    assert {k: v for k, v in C.KN5_PROPERTIES.items() if k != "ksSpecular"} == \
+        {k: v for k, v in walls.items() if k != "ksSpecular"}  # otherwise the walls' values, as before
+    for name in C.materials():  # the track stage keys MATERIAL_PROPS by a material's first word
+        assert track_stage.MATERIAL_PROPS[name.split("_")[0]] is C.KN5_PROPERTIES
+
+
 def test_the_legend_and_stripes_are_pure_black_so_no_night_boost_lifts_them():
     img = np.asarray(C.atlas().image).astype(int)
     x0, y0, x1, y1 = C.CELLS["road_closed"]

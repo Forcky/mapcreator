@@ -45,7 +45,9 @@ and stripes are bands the atlas's full width, so their texture coordinates run o
 `RETRO_MATERIAL`, which CSP brightens at night as it does the furniture's CAM and sign faces, but much less (0.9
 against their 2.0). Everything else, on `MATERIAL`, comes down (0.35), as the police car's paint does: CSP's night
 exposure is set for the dark road, so a light surface square to the headlights at 10 m clips to white. Their black is
-pure black, so it stays black, and the sign's white is a light grey.
+pure black, and **neither material has any specular** (`KN5_PROPERTIES`): AC adds the specular term on top of the
+texture, not through it, so with the headlights beside the eye it lit the black legend and stripes across a face
+square to them, and lowering ksDiffuse at night only made that floor a larger share of the white.
 
 Sizes the sources don't give are marked as guesses. The research behind them cites AS 1742.3-2019 (through
 Queensland's MUTCD Part 3 and QGTTM Part 3, as AS 1742.3 itself is paywalled), the NSW roads authority's QA
@@ -155,6 +157,19 @@ SOLID = ("bales",)
 MATERIAL = "closure"
 RETRO_MATERIAL = "closure_retro"
 TEXTURE = "closure"
+# The KN5 values by day for both materials (`track_stage.MATERIAL_PROPS["closure"]`): the walls', but no specular.
+# AC's ksPerPixel adds the specular term on top of the texture rather than multiplying it in (as Content Manager's
+# re-implementation of Kunos's shaders has it: `txColor * (ambient + diffuse) + specular`), so a pure-black texel still
+# gets ksSpecular x (N.H)^ksSpecularEXP x the light. With the headlights beside the eye a face square to them has
+# N.H close to 1 across its width (0.99 to 0.93 over the middle 4 m of a sign 13 m off, at the walls' exponent 10).
+# The walls' 0.05 then put a floor under the legend and the black stripes of 7-10% of the sign's white at its night
+# ksDiffuse of 0.9 (2.6% on the furniture's boards, whose 2.0 dwarfs it): lowering ksDiffuse at night shrank the white
+# and left the floor. On Brinktop Road at night (11 Nov 2026), with the beam's hot spot on the boards at 12-15 m and
+# CSP's auto-exposure up for the dark around them, that floor reached white: the sign 91% near white with no dark
+# letter pixels, though its texture keeps pure-black stroke cores down to mip 3 (the mips sampled out to about 25 m),
+# and the stripes' yellow paled in the middle of the beam (white light added to it). Retroreflective sheeting and straw
+# have no mirror-like highlight to speak of, and the trestles' tubes are too thin to show one.
+KN5_PROPERTIES = {"ksAmbient": 0.4, "ksDiffuse": 0.6, "ksSpecular": 0.0, "ksSpecularEXP": 10.0}
 # ksDiffuse at night, by material; by day both keep the KN5's (the track stage's walls' 0.6). In game at 22:00 (CSP,
 # 10 Nov 2026), at 8-12 m and square to the beam:
 # - with the furniture boards' 2.0 on the retroreflective faces, the sign burnt out (93% near white, its legend
