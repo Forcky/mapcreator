@@ -24,7 +24,8 @@ the stretch of the mainline where the side road's carriageway crosses the band f
 `MOUTH_BAND_M` beyond it (where guard rails, guide posts and signs stand), plus `MOUTH_MARGIN_M` either side. No guard
 rail, guide post, curve marker or sign stands in it, and no timing gate. Trees, buildings and power-line supports are
 kept off the side road for its first `LEG_M` as they are kept off the mainline: the side road's own half width plus
-the mainline's clearance for each.
+the mainline's clearance for each. Where the side road has a stub (`core.stubs`), its mouth reaches over the stub's
+flares too, and the side road is the stub's paved outline (its throat and carriageway) as well as its mapped line.
 
 The format of `01_route/junctions.json` is in `docs/ac-format.md` ("Junctions"). Coordinates are in the region's
 projected CRS, as the route's are.
@@ -471,10 +472,15 @@ class Mouth:
     s1: float
     line: np.ndarray  # the side road from the junction outwards
     half_m: float  # its half width
+    outline: shapely.Geometry | None = None  # its stub's paved outline, flares included (`core.stubs`), if it has one
 
     def corridor(self, beyond_m: float = 0.0) -> shapely.Geometry:
-        """The side road's carriageway out to its end, widened by `beyond_m` either side."""
-        return shapely.LineString(self.line).buffer(self.half_m + beyond_m, cap_style="flat")
+        """The side road's carriageway out to its end, widened by `beyond_m` either side; with a stub, its paved
+        outline widened as much too."""
+        road = shapely.LineString(self.line).buffer(self.half_m + beyond_m, cap_style="flat")
+        if self.outline is None:
+            return road
+        return shapely.union(road, self.outline.buffer(beyond_m) if beyond_m > 0 else self.outline)
 
 
 def _station(xy: np.ndarray, s: np.ndarray, p: np.ndarray, near_m: float) -> float:
@@ -494,10 +500,13 @@ def _station(xy: np.ndarray, s: np.ndarray, p: np.ndarray, near_m: float) -> flo
 
 
 def mouths(junctions: list[dict], s: np.ndarray, xy: np.ndarray, heading: np.ndarray, half_l: np.ndarray,
-           half_r: np.ndarray, *, band_m: float = MOUTH_BAND_M, margin_m: float = MOUTH_MARGIN_M) -> list[Mouth]:
+           half_r: np.ndarray, *, band_m: float = MOUTH_BAND_M, margin_m: float = MOUTH_MARGIN_M,
+           stubs: dict[int, dict] | None = None) -> list[Mouth]:
     """Each junction's mouth on the smoothed centreline (stations `s`, points `xy`, headings, half widths): where its
     side road's carriageway crosses the band from the edge to `band_m` beyond it on its side, plus `margin_m` along
-    the road either side. The side road's line and width come from junctions.json."""
+    the road either side. The side road's line and width come from junctions.json. `stubs`, by junction id
+    (`stubs.by_junction`): a junction with a stub has its mouth reach over the stub's flares as well, and the stub's
+    paved outline."""
     s, xy = np.asarray(s, float), np.asarray(xy, float)
     nrm = np.column_stack([-np.sin(heading), np.cos(heading)])
     offsets = np.arange(0.0, band_m + 1e-9, MOUTH_BAND_STEP_M)
@@ -517,7 +526,13 @@ def mouths(junctions: list[dict], s: np.ndarray, xy: np.ndarray, heading: np.nda
         inside = shapely.contains_xy(carriageway, pts[..., 0].ravel(), pts[..., 1].ravel()).reshape(pts.shape[:2])
         hit = idx[inside.any(axis=1)]
         lo, hi = (float(s[hit.min()]), float(s[hit.max()])) if len(hit) else (at - half, at + half)
-        out.append(Mouth(j, side, at, max(lo - margin_m, float(s[0])), min(hi + margin_m, float(s[-1])), line, half))
+        stub = stubs.get(j.get("id")) if stubs else None
+        outline = None
+        if stub is not None:
+            lo, hi = min(lo, float(stub["mouth"]["from_m"])), max(hi, float(stub["mouth"]["to_m"]))
+            outline = shapely.Polygon(stub["outline"]).buffer(0)
+        out.append(Mouth(j, side, at, max(lo - margin_m, float(s[0])), min(hi + margin_m, float(s[-1])), line, half,
+                         outline))
     return out
 
 
@@ -540,13 +555,23 @@ def side_band(m: Mouth, s: np.ndarray, xy: np.ndarray, width_m: float | None = N
     return shapely.LineString(np.asarray(xy)[idx]).buffer(w if m.side == "L" else -w, single_sided=True)
 
 
+def side_road(m: Mouth, s: np.ndarray, xy: np.ndarray, beyond_m: float = 0.0) -> shapely.Geometry:
+    """A side road's carriageway widened by `beyond_m` either side, kept to its own side of the mainline; and its
+    stub's paved outline widened as much, whole: a stub is on its own side by construction, and on a bending road
+    the side band can miss the far end of one that bends too."""
+    road = shapely.LineString(m.line).buffer(m.half_m + beyond_m, cap_style="flat").intersection(side_band(m, s, xy))
+    if m.outline is None:
+        return road
+    return shapely.union(road, m.outline.buffer(beyond_m) if beyond_m > 0 else m.outline)
+
+
 def zone(ms: list[Mouth], s: np.ndarray, xy: np.ndarray, beyond_m: float) -> shapely.Geometry | None:
-    """The side roads' carriageways widened by `beyond_m` either side, each kept to its own side of the mainline:
-    the ground to keep clear of trees, buildings or power-line supports. None with no mouths."""
+    """The side roads' carriageways widened by `beyond_m` either side, each kept to its own side of the mainline,
+    and their stubs (`side_road`): the ground to keep clear of trees, buildings or power-line supports. None with no
+    mouths."""
     if not ms:
         return None
-    parts = [m.corridor(beyond_m).intersection(side_band(m, s, xy)) for m in ms]
-    return shapely.unary_union(parts)
+    return shapely.unary_union([side_road(m, s, xy, beyond_m) for m in ms])
 
 
 def layout_intervals(ms: list[Mouth], s: np.ndarray, reverse: bool) -> list[tuple[float, float]]:

@@ -1,4 +1,9 @@
-"""Stage 3: surface, carriageway width and camber at every centreline station."""
+"""Stage 3: surface, carriageway width and camber at every centreline station; and the side roads' stubs.
+
+The stubs' plan (`core.stubs`, `stubs.json`) is worked out here, before the mesh and scenery stages, because those two
+run side by side and both need it: the mesh stage builds the stubs from it, and the scenery stage keeps trees,
+buildings and power-line supports off them.
+"""
 
 from __future__ import annotations
 
@@ -8,12 +13,16 @@ from mapcreator.config import Settings
 from mapcreator.core import centreline as cl
 from mapcreator.core import profile as pf
 from mapcreator.core import section as sec
+from mapcreator.core import stubs as stubs_core
+from mapcreator.core.layout import layouts_for
 from mapcreator.job import Job
 from mapcreator.pipeline import profile_stage, route_stage
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.regions import FINE_DEM_M, job_region
 
 STAGE = "03_section"
+# The side roads' stubs (`core.stubs`; the format is in docs/ac-format.md).
+STUBS = "stubs.json"
 
 
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
@@ -50,6 +59,18 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     np.savez_compressed(work.stage(STAGE) / "section.npz", s=c["s"], half_left=half, half_right=half,
                         slope_left=slope_l, slope_right=slope_r, superelevation=e, crown=crown, style=style,
                         unsealed=unsealed, camber_limit=limit)
+    found = route_stage.junctions(work, job)
+    stub_summary = None
+    if found:
+        section = {"half_left": half, "half_right": half, "slope_left": slope_l, "slope_right": slope_r, "style": style}
+        plan = stubs_core.plan(found, c, section, dem.sample, width_factor=job.width.factor,
+                               layouts=tuple(lay.reverse for lay in layouts_for(job.layouts.value)))
+        work.write_json(STAGE, STUBS, {"version": plan.pop("version"), "crs": f"EPSG:{region.epsg}", **plan})
+        stub_summary = {"stubs": len(plan["stubs"]), "skipped": {}}
+        for sk in plan["skipped"]:
+            stub_summary["skipped"][sk["reason"]] = stub_summary["skipped"].get(sk["reason"], 0) + 1
+    else:
+        (work.stage(STAGE) / STUBS).unlink(missing_ok=True)  # no junctions, or built without them
     sources: dict[str, float] = {}
     inherited: dict[str, float] = {}
     for r, run, m in zip(per_run, runs, lengths):
@@ -73,4 +94,13 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "surface_changes": int(np.count_nonzero(np.diff(unsealed.astype(np.int8)))),
         "styles_m": {name: round(float(ds[style[:-1] == k].sum()), 1) for k, name in enumerate(sec.STYLES)
                      if (style[:-1] == k).any()},
-    }
+    } | ({"junction_stubs": stub_summary} if stub_summary is not None else {})
+
+
+def stubs(work: WorkDir, job: Job) -> list[dict]:
+    """The side roads' stubs the section stage planned (`core.stubs`), as stubs.json lists them: none for a job built
+    without junctions, or a section stage run before stubs."""
+    path = work.root / STAGE / STUBS
+    if not route_stage.junctions(work, job) or not path.exists():
+        return []
+    return work.read_json(STAGE, STUBS)["stubs"]

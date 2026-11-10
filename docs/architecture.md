@@ -12,17 +12,19 @@ route     01_route     snapped OSM centreline and its ways' tags (roads from the
 profile   02_profile   DEM sampling, smoothing with a grade-change limit and grade cap, bridge dips filled
 section   03_section   sealed or unsealed (OSM surface, short runs merged), width (OSM width → lanes × lane width →
                        narrow → class default, narrower on gravel; +15% / +30%), camber from the DEM (limited by
-                       width), crown
-mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, adaptive terrain corridor (in ground classes from
-                       TASVEG in Tasmania, for Grass FX), guard rails and furniture (none in side roads' mouths), AC
-                       dummies
-scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), typed by TASVEG in Tasmania, trunk colliders, buildings from footprints (none on a side road's first 100 m)
+                       width), crown; the side roads' stubs, planned (stubs.json)
+mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, the side roads' 100 m stubs joined to the road by
+                       their flares, adaptive terrain corridor (in ground classes from TASVEG in Tasmania, for Grass
+                       FX), guard rails and furniture (none in side roads' mouths), AC dummies
+scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), typed by TASVEG in Tasmania, trunk colliders, buildings from footprints (none on a side road's first 100 m or its stub)
 track     05_track     numpy KN5 writer (timing gates clear of side roads' mouths), DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,
                        centreline.geojson (ODbL), the zip
 validate  06_validate  static checks (report.json); the in-game harness is for development only
 ```
 
 The stage names are `mapcreator.pipeline.STAGE_NAMES`; `mapcreator <stage> job.json` reruns one, `mapcreator build job.json` runs them all. No stage needs a GPU, Blender, the AC SDK or the game. `data-flows.md` lists each stage's inputs and outputs.
+
+The mesh and scenery stages run side by side (`pipeline/runner.py`), so anything both need comes from an earlier stage. The side roads' stubs are one such thing: the section stage plans them (`core/stubs.py`, `03_section/stubs.json`), the mesh stage builds them from the plan, and the scenery, track and validate stages read the same plan to keep trees off them, keep timing gates out of their mouths and check them.
 
 ## OSM data
 
@@ -43,8 +45,8 @@ Geofabrik extract (.osm.pbf) ──build once (pyosmium)──▶ index (SQLite)
 ```
 src/mapcreator/
   core/        centreline, profile, section, mesh, scene, scenery, sprites, textures, roadside, kn5, ai_line,
-               layout, package, validate, grass, grassfx and junctions (data-agnostic: arrays and geometry in,
-               meshes and files out)
+               layout, package, validate, grass, grassfx, junctions and stubs (data-agnostic: arrays and geometry
+               in, meshes and files out)
   providers/   one package per source; each declares its licence and attribution
                base, raster (windowed reads and tile cache)
                tas_list/: 2 m DEM, canopy height model, building footprints (Tasmania)

@@ -57,13 +57,26 @@ MIN_AI_SPEED = 5.0
 
 
 @dataclass(frozen=True)
+class StubCheck:
+    """A side road's stub (`core.stubs`), as the checks see it, in AC x/z."""
+    paved: shapely.Geometry  # its throat and carriageway
+    centre: np.ndarray  # (n, 2) points along its centreline, from just past the mainline's edge to its end
+    seams: np.ndarray  # (n, 2, 2) pairs of points either side of where its road meets the mainline's and its own
+
+
+@dataclass(frozen=True)
 class JunctionCheck:
     """A side road's junction (`core.junctions`), as the checks see it, in AC x/z."""
     label: str  # how the report names it
     mouth: shapely.Geometry  # its carriageway beside the road, out to MOUTH_BAND_M beyond the edge
     road: shapely.Geometry  # its carriageway out to its end (100 m)
+    stub: StubCheck | None = None  # its stub, if it has one
 
 
+SEAM_STEP_M = 0.05  # where a stub's road meets the mainline's or its own, no step bigger than this
+STUB_GROUND_CLEAR_M = 0.02  # no ground (verge, skirt or terrain) more than this above a stub's road
+STUB_GROUND_REACH_M = 3.0  # the ground round a stub, its verges and a metre more, must have no hole
+STUB_SAMPLE_M = 1.0
 # What must stand clear of side roads, and where: (what, mesh name prefixes, the JunctionCheck area).
 JUNCTION_CLEAR = (("guard rails", ("RAIL_", "1WALL_RAIL_"), "mouth"),
                   ("guide posts and signs", ("FURNITURE_",), "mouth"),
@@ -526,6 +539,103 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
         rep.check(float(fwd @ ai_dir) > 0.8, f"{label}: {name} faces the AI line's direction")
 
 
+class _Cover:
+    """Triangles (AC axes) bucketed on a grid, to find whether any covers a point and the highest there."""
+
+    def __init__(self, tri: np.ndarray, cell: float = 4.0):
+        self.tri, self.cell = tri, cell
+        xz = tri[:, :, [0, 2]]
+        lo, hi = np.floor(xz.min(axis=1) / cell).astype(int), np.floor(xz.max(axis=1) / cell).astype(int)
+        self.buckets: dict[tuple[int, int], list[int]] = {}
+        for t, (a, b, c, d) in enumerate(np.column_stack([lo, hi]).tolist()):
+            for i in range(a, c + 1):
+                for j in range(b, d + 1):
+                    self.buckets.setdefault((i, j), []).append(t)
+
+    def top(self, xz: np.ndarray) -> np.ndarray:
+        """The highest covering triangle's height at each x/z point, NaN where none covers it."""
+        xz = np.asarray(xz, float).reshape(-1, 2)
+        out = np.full(len(xz), np.nan)
+        cells = np.floor(xz / self.cell).astype(int)
+        keys, inv = np.unique(cells, axis=0, return_inverse=True)
+        for k, key in enumerate(keys.tolist()):
+            ts = self.buckets.get(tuple(key))
+            if not ts:
+                continue
+            idx = np.flatnonzero(inv.ravel() == k)
+            t = self.tri[ts]
+            a, b, c = t[:, 0, [0, 2]], t[:, 1, [0, 2]], t[:, 2, [0, 2]]
+            p = xz[idx][:, None, :]
+            v0, v1, v2 = (c - a)[None], (b - a)[None], p - a[None]
+            den = v0[..., 0] * v1[..., 1] - v1[..., 0] * v0[..., 1]
+            good = np.abs(den) > 1e-12
+            den = np.where(good, den, 1.0)
+            u = (v2[..., 0] * v1[..., 1] - v1[..., 0] * v2[..., 1]) / den
+            v = (v0[..., 0] * v2[..., 1] - v2[..., 0] * v0[..., 1]) / den
+            inside = good & (u >= -1e-6) & (v >= -1e-6) & (u + v <= 1 + 1e-6)
+            h = t[None, :, 0, 1] + u * (t[None, :, 2, 1] - t[None, :, 0, 1]) + v * (t[None, :, 1, 1] - t[None, :, 0, 1])
+            h = np.where(inside, h, -np.inf).max(axis=1)
+            out[idx] = np.where(np.isfinite(h), h, np.nan)
+        return out
+
+
+def _grid_in(area: shapely.Geometry, step: float) -> np.ndarray:
+    """Points every `step` metres inside an area."""
+    minx, miny, maxx, maxy = area.bounds
+    gx, gy = np.meshgrid(np.arange(minx, maxx + step, step), np.arange(miny, maxy + step, step))
+    pts = np.column_stack([gx.ravel(), gy.ravel()])
+    shapely.prepare(area)
+    return pts[shapely.contains_xy(area, pts[:, 0], pts[:, 1])]
+
+
+def stub_checks(rep: Report, label: str, data: dict, junctions: list[JunctionCheck]) -> None:
+    """Side roads' stubs (`core.stubs`): each drawn as road along its centreline; joined to the mainline's road and its
+    own ribbon with no gap and no step across the seam; no hole in the ground round it (road, verge, skirt and
+    terrain); and no ground above its road."""
+    stubs = [(j.label, j.stub) for j in junctions if j.stub is not None]
+    if not stubs:
+        return
+    boxes = np.array([j.paved.buffer(STUB_GROUND_REACH_M + 2.0).bounds for _, j in stubs])
+
+    def triangles(select) -> np.ndarray:
+        out = []
+        for nd in data["nodes"]:
+            if nd["class"] != 2 or not select(nd["name"]):
+                continue
+            t = nd["vertices"]["pos"].astype(float)[nd["indices"].reshape(-1, 3)]
+            lo, hi = t[:, :, [0, 2]].min(axis=1), t[:, :, [0, 2]].max(axis=1)
+            near = ((lo[:, None, 0] <= boxes[None, :, 2]) & (hi[:, None, 0] >= boxes[None, :, 0])
+                    & (lo[:, None, 1] <= boxes[None, :, 3]) & (hi[:, None, 1] >= boxes[None, :, 1])).any(axis=1)
+            out.append(t[near])
+        return np.concatenate(out) if out else np.zeros((0, 3, 3))
+
+    road = _Cover(triangles(is_road_mesh))
+    ground = _Cover(triangles(lambda n: n[:1].isdigit() and "GRASS" in n))
+    missing, gaps, holes, above = [], [], [], []
+    for name, st in stubs:
+        if np.isnan(road.top(st.centre)).any():
+            missing.append(name)
+        a, b = road.top(st.seams[:, 0]), road.top(st.seams[:, 1])
+        if np.isnan(a).any() or np.isnan(b).any() or (np.abs(a - b) > SEAM_STEP_M).any():
+            gaps.append(name)
+        around = _grid_in(st.paved.buffer(STUB_GROUND_REACH_M), STUB_SAMPLE_M)
+        if (np.isnan(road.top(around)) & np.isnan(ground.top(around))).any():
+            holes.append(name)
+        on = _grid_in(st.paved.buffer(-0.05), STUB_SAMPLE_M)
+        r, g = road.top(on), ground.top(on)
+        if (np.isfinite(g) & np.isfinite(r) & (g > r + STUB_GROUND_CLEAR_M)).any():
+            above.append(name)
+    n = len(stubs)
+    rep.check(not missing, f"{label}: {n} side-road stubs drawn as road along their centrelines"
+              + (f" (not {'; '.join(missing[:5])})" if missing else ""))
+    rep.check(not gaps, f"{label}: stubs joined to the road with no gap or step over {SEAM_STEP_M * 100:.0f} cm"
+              + (f" ({'; '.join(gaps[:5])})" if gaps else ""))
+    rep.check(not holes, f"{label}: no hole in the ground within {STUB_GROUND_REACH_M:.0f} m of a stub"
+              + (f" ({'; '.join(holes[:5])})" if holes else ""))
+    rep.check(not above, f"{label}: no ground above a stub's road"
+              + (f" ({'; '.join(above[:5])})" if above else ""))
+
+
 def junction_checks(rep: Report, label: str, data: dict, dummies: dict, junctions: list[JunctionCheck], *,
                     meshes: bool = True) -> None:
     """Side roads' junctions: a warning listing them, then (`meshes`) checks that no guard rail, guide post or sign
@@ -546,6 +656,7 @@ def junction_checks(rep: Report, label: str, data: dict, dummies: dict, junction
                         if shapely.contains_xy(getattr(j, area), xz[:, 0], xz[:, 1]).any()]
             where = "in a side road's mouth" if area == "mouth" else "on a side road"
             rep.check(not standing, f"{label}: no {what} {where}" + (f" ({'; '.join(standing[:5])})" if standing else ""))
+        stub_checks(rep, label, data, junctions)
     stuck = []
     for gate in ("AC_AB_START", "AC_AB_FINISH"):
         for side in "LR":

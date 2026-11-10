@@ -32,7 +32,7 @@ import shapely
 
 from mapcreator.config import Settings
 from mapcreator.core import mesh as base_mesh
-from mapcreator.core import junctions, power, reach, scenery, species, sprites, treefx
+from mapcreator.core import junctions, power, reach, scenery, species, sprites, stubs, treefx
 from mapcreator.core.scene import Material, Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import mesh_stage, profile_stage, route_stage, section_stage
@@ -63,10 +63,11 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     road_clear = centre.buffer(half + base_mesh.VERGE_M + scenery.CLEAR_OF_VERGE_M)
     attributions = []
     # Side roads (`core.junctions`): trees, buildings and power-line supports are kept off each for its first 100 m
-    # as they are off the road. They're taken out after everything else is chosen, and the rest keep their random
-    # draws, so nothing else in the scenery changes.
+    # as they are off the road, and off its stub, flares included (`core.stubs`). They're taken out after everything
+    # else is chosen, and the rest keep their random draws, so nothing else in the scenery changes.
     found = route_stage.junctions(work, job)
-    mouths = junctions.mouths(found, c["s"], xy, c["heading"], sec["half_left"], sec["half_right"]) if found else []
+    mouths = junctions.mouths(found, c["s"], xy, c["heading"], sec["half_left"], sec["half_right"],
+                              stubs=stubs.by_junction(section_stage.stubs(work, job))) if found else []
     cleared: dict | None = {} if mouths else None
 
     dem = region.elevation(settings)
