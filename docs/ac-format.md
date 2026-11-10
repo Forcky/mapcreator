@@ -345,3 +345,102 @@ Built in the mesh stage, visual only, in `FURNITURE_n` meshes and a texture atla
   - One where OSM's `maxspeed` changes between two known values.
   - One near each layout's start (70 m in), where the limit there is known.
   - Unknown or non-km/h limits make no sign. The numerals use Pillow's built-in Aileron font (CC0).
+
+## Police cars (`core/police_car.py`)
+
+A procedural low-poly police car for each Australian jurisdiction, in that jurisdiction's livery with POLICE and its crest: the maintainer's decision for the closed side roads (10 Nov 2026). The closure stage will park one at major closures, at most one per 2 km and six per track. This module only builds the car; placing it comes with the side-road stubs.
+
+- **Drawn here, from shapes.** The body, the chequer, the lettering and each crest are our own renditions, simplified. No image of a real crest or livery is copied, traced or embedded. The liveries were researched from the services' releases, news reports and dated photos; images were viewed for reference only. The sources are in `THIRD_PARTY_NOTICES.md` ("Design references").
+- **Entry point:** `police_car(code, body=None)` returns a `PoliceCar` with:
+  - `meshes`: `scene.Mesh`, the type furniture hands the KN5 writer, one per material, in the car's own frame;
+  - `collider`, `materials` (`scene.Material`), `textures` (texture name to its Pillow image, to save as a PNG the way the mesh stage saves `furniture.png`) and `night_diffuse`.
+- **Local frame:** the origin is the car's centre on the ground, +z forward, +x to the car's right, +y up, metres. The tyres touch y = 0 and the light bar is the top.
+  - With x right, y up and z forward the frame is left-handed. `place(car, position, forward, up=(0, 1, 0), index=0)` maps it onto AC's axes with the car's right on its right (right = forward × up), so nothing comes out mirrored, rewinds each triangle to the KN5's rule, and names the copy `..._<index>`. `up` tilts the car on a slope.
+  - `merge(meshes)` joins placed cars by material, under the vertex limit, so six cars draw as three meshes and one collider mesh.
+- **Codes:** `tas`, `nsw`, `vic`, `qld`, `sa`, `wa`, `nt`, `act` (ACT Policing, part of the AFP).
+
+### Meshes, materials and the collider
+
+| Mesh | Material | What |
+|---|---|---|
+| `POLICE_<CODE>_BODY` | `police_<code>` | body, glass, wheels, mirrors |
+| `POLICE_<CODE>_RETRO` | `police_<code>_retro` | the livery band's strip of faces, both sides and across the rear |
+| `POLICE_<CODE>_LENS` | `police_<code>_lens` | the light bar |
+| `1WALL_POLICE` | (`police_<code>`, invisible) | the collider |
+
+- All three materials draw on one texture, `police_<code>`, so up to six cars of a track share one atlas. A body other than the jurisdiction's own adds its name (`police_nsw_sedan`), since its atlas differs.
+- **The collider** is a box the size of the body: its full width and length, from 0.5 m below the ground (for a slope) to the roof. Four sides and a top, wound outwards like the trunk colliders, `isRenderable` 0. It's a `WALL` physics mesh (no surface KEY), so the car carries its own collision, as the closure answers ask (no wall in open air).
+- **KN5 values:** `MATERIAL_PROPS` (ksAmbient 0.4, ksDiffuse 0.6, ksSpecular 0.3, ksSpecularEXP 40) is for the track stage's `MATERIAL_PROPS` under `police`. Without it the materials take the walls' values, which have the same ksDiffuse.
+
+### Night
+
+- **The band catches the headlights.** The chequer is retroreflective film on the real cars. Its faces are their own material, `_retro`, and `night_diffuse` gives ksDiffuse 2 at night: the furniture boards' value, through the same `retro_materials` path in `ext_config.ini` (a `[MATERIAL_ADJUSTMENT_n]` with `CONDITION = NIGHT_SMOOTH`). The rest of the paint and the lettering stay as by day.
+- **The light bar is off, and retroreflective.** Its lenses (`_lens`) get ksDiffuse 4 at night, between paint and a guide post reflector's 12, so they catch the headlights without reading as lit. It isn't emissive:
+  - the track stage writes ksEmissive 0 for every material, so a glow would need a new property path or a night adjustment on ksEmissive;
+  - a steady glow would read as a bar left on that never flashes, and whether a track config can make a material flash is unverified.
+- Both values are to tune in game (`docs/known-issues.md`). Vanilla AC ignores the file, so there the car looks as by day.
+
+### Body and texture
+
+- **Body.** Lofted through 10 or 11 cross-sections from the front bumper to the rear. Each section runs from the left sill up over the roof and down to the right sill, and splits the side at the band's heights, so the band is its own strip of faces.
+  - Two shapes from the same code: a sedan (about a Toyota Camry: 4.89 x 1.84 x 1.445 m) and an SUV (about a Kia Sorento: 4.81 x 1.90 x 1.70 m).
+  - Wheels are ten-sided with a corner on the ground. They stand 5 mm proud of the body side, so the side never hides them; the arches are painted.
+  - Windows are painted on the sides. The windscreen and rear window take a glass cell.
+  - A static light bar on the roof, and two mirrors.
+- **Atlas:** 1024 x 1024 per jurisdiction and body. Each face takes its UVs by projection onto its view:
+  - the right side (1024 x 384, about 5 mm a pixel), the left side drawn on its own so the lettering reads forwards on both;
+  - the top (bonnet lettering and crest read from in front of the car), the front and the rear;
+  - a wheel, the tread, glass, plain paint, and the light bar from in front, from behind (so its lettering reads both ways) and from above.
+  - Each view is drawn in a drawing of its cell's size, so nothing spills into the next cell, at twice the size and scaled down for smooth edges. The lettering is Pillow's built-in Aileron (CC0), made bold with a stroke. Crests are drawn on a layer at four times their size.
+- **The band follows the shoulder.** Along the doors it runs between the livery's heights. Towards the nose and tail it drops with the belt line, keeping its depth (NSW's "sweeps down towards the headlight"), and the geometry's strip drops with it. Queensland's wedge keeps its foot instead.
+
+### Budget
+
+| | Sedan | SUV |
+|---|---|---|
+| Vertices | 584 | 556 |
+| Triangles | 302 | 288 |
+| Collider | 20 vertices, 10 triangles | the same |
+
+- **Vertices:** under the intersections report's estimate of about 700. Each face keeps its own vertices (its UVs come from its view), so the four wheels are a third of them (50 each), the body about 320, the mirrors 40 and the light bar 20.
+- **Texture:** one 1024 x 1024 DXT1 atlas with its mips, 699 KB, shared by every car on the track.
+- **Six cars on a track** (the cap), sharing the atlas, merged: an 863 KB KN5, of which 164 KB is geometry (3,456 vertices in four meshes). Zipped, 97 KB, because the atlas is mostly flat colour. One car: 728 KB, 70 KB zipped.
+
+### Liveries
+
+Current marked general-duties cars, from releases and dated photos (2019-2026). Colours are approximate unless a source gave an official one (NSW's PMS 287).
+
+| Code | Service | Body | Paint and band | Lettering | Crest (our rendition), where | Light bar |
+|---|---|---|---|---|---|---|
+| `tas` | Tasmania Police | SUV | Silver. Two-row blue/white chequer low on the doors, a lime line on top, across the tailgate | "Police" above the line on the front doors; tailgate | Rayed gold star under a crown; blue ring and disc with a gold lion walking. Small, rear door, below the chequer | blue and red, POLICE centre |
+| `nsw` | NSW Police Force | SUV | White. Two-row blue/white chequer along the shoulder, dropping to the headlight | "Police" large and low across both doors; bonnet; "000 EMERGENCY" on the rear quarter | Laurel wreath and white ring under a crown; brown eagle with the state's shield in a light blue disc; scroll. Front door, ahead of "Police" | blue, clear, red |
+| `vic` | Victoria Police | SUV | White. Three-row blue/white chequer at door-handle height, "131 444" and "000" panels set into it | "Police" low round the B-pillar; bonnet | In one colour, as on the cars: wreath, five-pointed star point down, crown, Southern Cross. Front door, ahead of "Police" | blue on the driver's side, red |
+| `qld` | Queensland Police Service | sedan | White. The 2023 design: large blue/white squares in a wedge on the lower body, two rows behind the front wheel rising to four at the rear axle; orange-red lines along its top and the sill | "POLICE" in capitals, blue keylined white and orange-red, on the front door | White eight-pointed cross edged red on a wreath, under a crown; blue ring, navy disc with a small crown; scroll. Large, rear door | blue and red |
+| `sa` | South Australia Police | SUV | White. Three-row black/white chequer between yellow lines, breaking into scattered squares over the front guard | "POLICE" in tall black capitals keylined yellow across both doors; bonnet | Wattle wreath under a crown; light blue ring, white disc with a black and white piping shrike, wings spread. Front door | red on the driver's side, blue; POLICE centre |
+| `wa` | WA Police Force | SUV | White. Two-row blue/white chequer along the shoulder, a thin orange-red line above | "Police" on the doors | In one colour, as on the cars: eight-pointed star under a crown, banners, a black swan. Front door, near "Police" | red and blue |
+| `nt` | NT Police | SUV | White. Two-row blue/white chequer along the shoulder between ochre lines | "Police" on the front doors below the band; bonnet | Wreath with two desert roses under a crown; an ochre kangaroo standing; blue and gold scrolls. Bonnet | red and blue |
+| `act` | ACT Policing (AFP) | sedan | White. Three-row near-black/white chequer along the shoulder between lime lines, bigger squares on the front guard, lime flashes on the bumper | "Police" low on the rear door; ghosted grey on the bonnet | The AFP's: silver eight-pointed star and wreath under a crown; navy ring round the Commonwealth arms (a shield between a kangaroo and an emu); scroll. Front door, low | red and blue, POLICE centre |
+
+- **What the sources leave open**, drawn as a common Australian layout:
+  - which side the red is on, except Victoria (blue on the driver's side) and SA (red);
+  - the rear, except Tasmania: the band across it and "Police" above it (no band on Queensland's wedge cars).
+- **Least certain:** WA's general-duties livery after 2023, the NT's after 2018, the ACT's current models, and when SA's chequer changed from blue to black. Tasmania's silver comes from photos only.
+- **Bodies** follow the current fleets: SUVs almost everywhere (Santa Fe, Sorento, Kluger, RAV4, Tiguan; HiLux and LandCruiser in the NT), Camrys in Queensland (RAV4s replacing them) and the ACT's Subaru Liberty and Outback. Either body can be asked for.
+- Call signs aren't drawn: they belong to individual cars.
+
+### Which jurisdiction
+
+`jurisdiction_for(region, lonlat)` gives one jurisdiction for a whole track:
+
+- A region that names its state decides (`Region.state`; Tasmania does).
+- Otherwise the route's points do, by `jurisdiction_at(lon, lat)`, and the jurisdiction holding most of them wins. So a route across a border takes the state of most of its length, and a car near the coarse border line matches the rest of the track. A tie goes to the first along the route.
+- With neither, `tas`.
+- The borders are coarse, to within about 10 km. Most are meridians and parallels (WA at 129° E, the NT to 26° S and 138° E, Queensland's west at 138° E and 141° E, SA's east at 141° E, then 140.97° E south of the Murray). Queensland/NSW follows 29° S, the rivers past Goondiwindi and the ranges to Point Danger. NSW/Victoria follows the Murray and the line from its source to Cape Howe. The ACT is an outline of about 20 points. Every point in Australia's box gets a jurisdiction.
+
+### Visual check
+
+`PYTHONPATH=src python scripts/police_cars_check.py [--out DIR]` writes, by default to a folder in the system's temp directory (never inside the repository):
+
+- `lineup_right.png`, `lineup_left.png` and a close-up of each car from the front and the rear, from a small software renderer that culls back faces as AC does (a face wound the wrong way shows as a hole);
+- each atlas as a PNG;
+- `mapcreator_police_check/`, a test track: a straight 600 m road with the eight cars parked on each verge, so you see each car's right side on the left verge and its left side on the right. Copy it to `assettocorsa/content/tracks/`, pick "Police car check", and set a night time (CSP) to see the bands and light bars catch the headlights. Its `ext_config.ini` carries the cars' night adjustments, as a built track's would.
