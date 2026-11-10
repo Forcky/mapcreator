@@ -34,7 +34,8 @@ their own (`<base>_retro`) and get a boost. The light bar is off: its lenses (`<
 unlit plastic and get a boost too, so they catch the headlights without glowing on their own; the track stage writes
 `ksEmissive` 0 for every material, and a steady glow would read as a bar left on that never flashes. The plain body
 comes down at night: white paint under the walls' ksDiffuse 0.6 reflects several times what the road does, and in the
-headlights at close range it clipped to white. `kn5_properties` gives each part's KN5 values.
+headlights at close range it clipped to white. `kn5_properties` gives each part's KN5 values: no specular on the
+paint or the band, since AC adds specular untextured, on top of the lettering as much as the paint.
 """
 
 from __future__ import annotations
@@ -214,7 +215,8 @@ def views(body: Body) -> dict[str, View]:
 RGB = tuple[int, int, int]
 # White paint at 224, not 246: near-white under the track stage's ksDiffuse 0.6 reflects several times what the road
 # does, and clipped to white in the headlights at night (in game, 10 Nov 2026). Silver at 164-173, darker than first
-# drawn (195): in sunlight 195 rendered the same as the white.
+# drawn (195): in sunlight 195 rendered the same as the white. A whiter white would grey the white cars by day until
+# they no longer stand apart from the silver.
 WHITE: RGB = (224, 224, 222)
 SILVER_PAINT: RGB = (164, 168, 173)
 RED: RGB = (214, 24, 32)
@@ -238,7 +240,6 @@ class Livery:
     word_colour: RGB
     word_side: tuple[float, float, float, float]  # along, height, cap height, longest
     paint: RGB = WHITE
-    metallic: bool = False  # the paint takes a broader, stronger sheen (Tasmania's silver)
     pattern: str = "sillitoe"  # small squares, or "wedge": large squares rising from front to rear (Queensland)
     wedge: tuple[int, int] = (2, 4)  # rows at the wedge's front (behind the front wheel) and rear (the rear axle)
     wedge_edge: RGB | None = None  # a line along the wedge's top
@@ -525,17 +526,22 @@ COLLIDER_MESH = "1WALL_POLICE"
 VISUAL_MESH = "POLICE"
 # KN5 material values, by part (`PoliceCar.kn5_properties`, for the track stage, which keys its MATERIAL_PROPS by
 # the name's first word and would otherwise give every part the walls' values). ksDiffuse stays the walls' 0.6 by day,
-# which the night adjustments start from. Specular is low on the paint and the band: at night the headlights sit
-# beside the eye, so a flat side facing them catches the highlight across its width, white on top of the chequer and
-# the lettering (in game at 0.3, 10 Nov 2026). Tasmania's silver gets a broader, stronger sheen so it reads as silver.
-PAINT_PROPS = {"ksAmbient": 0.4, "ksDiffuse": 0.6, "ksSpecular": 0.12, "ksSpecularEXP": 40.0}
-SILVER_PROPS = {"ksAmbient": 0.4, "ksDiffuse": 0.6, "ksSpecular": 0.35, "ksSpecularEXP": 22.0}
-LENS_PROPS = {"ksAmbient": 0.4, "ksDiffuse": 0.6, "ksSpecular": 0.25, "ksSpecularEXP": 60.0}
+# which the night adjustments start from.
+#
+# No specular on the paint or the band, which carry the lettering and the chequer. AC's ksPerPixel adds its specular
+# on top of the texture, not through it: txColor * (ksAmbient * ambient + ksDiffuse * light + ksEmissive) + ksSpecular *
+# (N.H)^ksSpecularEXP * light (Content Manager's re-implementation of the shader, `AcTools.Render/Shaders/Includes/
+# DarkMaterial.Lighting.Simple.fx`). At night the headlights sit beside the eye, so N.H is near 1 across a side square
+# to them, and the specular lifts black lettering as much as white paint: at 0.12 it came to about 40% of the white's
+# light at the night 0.35, and the lettering faded to pale lavender (in game, 11 Nov 2026). Tasmania's silver comes
+# from its albedo alone. The lenses keep a small, tight glint.
+PAINT_PROPS = {"ksAmbient": 0.4, "ksDiffuse": 0.6, "ksSpecular": 0.0, "ksSpecularEXP": 40.0}
+LENS_PROPS = {"ksAmbient": 0.4, "ksDiffuse": 0.6, "ksSpecular": 0.05, "ksSpecularEXP": 200.0}
 # ksDiffuse at night, by part, for `ext_config_ini(retro_materials=...)` ([MATERIAL_ADJUSTMENT_n], CONDITION =
-# NIGHT_SMOOTH; by day each goes back to 0.6). In game (10 Nov) the first values washed out at 6 m in the beam: the
-# plain body (0.6, no adjustment) clipped to white over 36-47% of it, the band at 2.0 lost its chequer, and the lenses
-# at 4.0 burned white and read as a bar left on from 12 m. Now the body comes down at night, the band takes a smaller
-# boost and the lenses half theirs (they're also drawn darker, as switched-off lenses). To retest in game.
+# NIGHT_SMOOTH; by day each goes back to 0.6). In game the first values (body 0.6, band 2.0, lenses 4.0) washed out at
+# 6 m in the beam; with these, and the specular still on, the bodies were as bright as by day but 24-31% near-white,
+# and the bars read as off from 12 m. With the specular gone the hot spot loses about a quarter of its light, so the
+# body stays at 0.35, the closure props' value, side by side with them. To retest in game.
 NIGHT_DIFFUSE_BY_PART = {"body": 0.35, "retro": 1.3, "lens": 2.0}
 
 
@@ -587,8 +593,8 @@ def police_car(code: str, body: str | None = None) -> PoliceCar:
         materials={m: Material(m, texture) for m in sorted({m.material for m in meshes})},
         textures={texture: atlas(code, shape.name).copy()},
         night_diffuse={mats[part]: v for part, v in NIGHT_DIFFUSE_BY_PART.items()},
-        kn5_properties={mats["body"]: dict(SILVER_PROPS if livery.metallic else PAINT_PROPS),
-                        mats["retro"]: dict(PAINT_PROPS), mats["lens"]: dict(LENS_PROPS)})
+        kn5_properties={mats["body"]: dict(PAINT_PROPS), mats["retro"]: dict(PAINT_PROPS),
+                        mats["lens"]: dict(LENS_PROPS)})
 
 
 def place(car: PoliceCar, position, forward, up=(0.0, 1.0, 0.0), index: int = 0) -> list[Mesh]:
@@ -1087,7 +1093,6 @@ GOLD = (204, 164, 52)
 GOLD_LIGHT = (236, 204, 104)
 GOLD_DARK = (120, 86, 20)
 SILVER = (206, 210, 214)
-GREY = (70, 76, 84)
 GREEN = (30, 100, 48)
 CROWN_RED = (176, 30, 40)
 INK = (16, 24, 40)
@@ -1112,9 +1117,6 @@ KANGAROO = ((-0.42, 0.62), (-0.30, 0.72), (-0.24, 0.90), (-0.16, 0.72), (-0.08, 
             (0.26, -0.30), (0.52, -0.66), (0.72, -0.86), (0.50, -0.82), (0.16, -0.62), (0.10, -0.76), (-0.26, -0.84),
             (-0.26, -0.75), (-0.02, -0.66), (-0.06, -0.40), (-0.12, -0.18), (-0.14, 0.10), (-0.28, 0.16),
             (-0.38, 0.10), (-0.32, 0.24), (-0.22, 0.32), (-0.25, 0.50), (-0.40, 0.55))
-EMU = ((-0.32, 0.80), (-0.18, 0.88), (-0.10, 0.80), (-0.08, 0.40), (0.05, 0.22), (0.45, 0.16), (0.62, 0.0),
-       (0.52, -0.26), (0.26, -0.32), (0.22, -0.86), (0.12, -0.86), (0.10, -0.36), (-0.04, -0.33), (-0.20, -0.10),
-       (-0.20, 0.40), (-0.18, 0.74))
 
 
 class _Pen:
@@ -1325,19 +1327,19 @@ def _crest_nt(p: _Pen):
 
 
 def _crest_act(p: _Pen):
-    """The AFP's: a silver eight-pointed star under a crown; a navy ring round the Commonwealth arms (a shield between
-    a kangaroo and an emu); a navy scroll."""
+    """The AFP's: an eight-pointed star under a crown, a navy ring round the Commonwealth arms' shield, a navy scroll.
+    Drawn bolder than the badge: the star a darker silver edged in navy and the ring thick, since a pale silver star on
+    white paint read only as its gold centre from 6 m (in game, 11 Nov 2026)."""
     c = CREST_Y
     navy = (15, 26, 51)
-    p.poly(_star(0, c, 0.84, 0.54, 8), SILVER, GREY, 0.035)
-    p.circle(0, c, 0.54, navy)
-    p.circle(0, c, 0.41, WHITE)
-    p.poly(_shield(0, c, 0.24, 0.30), GOLD, GOLD_DARK, 0.012)
-    p.poly([(-0.12, c + 0.15), (0, c + 0.15), (0, c - 0.0), (-0.12, c)], CROWN_RED)
-    p.poly(_shape(KANGAROO, -0.25, c - 0.02, 0.21, mirror=True), (150, 90, 40))
-    p.poly(_shape(EMU, 0.25, c - 0.02, 0.21), (70, 50, 36))
+    p.poly(_star(0, c, 0.86, 0.58, 8), (150, 158, 170), navy, 0.05)
+    p.circle(0, c, 0.58, navy)
+    p.circle(0, c, 0.36, WHITE)
+    p.poly(_shield(0, c, 0.34, 0.40), GOLD, navy, 0.025)
+    p.poly([(-0.17, c + 0.20), (0, c + 0.20), (0, c + 0.02), (-0.17, c + 0.02)], CROWN_RED)
+    p.poly([(0, c + 0.02), (0.17, c + 0.02), (0.17, c - 0.04), (0, c - 0.15)], (40, 70, 150))
     _crown(p)
-    _scroll(p, -0.86, 0.78, 0.15, navy)
+    _scroll(p, -0.86, 0.80, 0.16, navy)
 
 
 CRESTS = {"tas": _crest_tas, "nsw": _crest_nsw, "vic": _crest_vic, "qld": _crest_qld, "sa": _crest_sa,
@@ -1366,7 +1368,7 @@ LIVERIES = {
     # Silver SUVs: a two-row chequer low on the doors with a lime line on top; "Police" above it on the front doors;
     # the crest on the rear door; a POLICE box in the bar (new liveries from April 2019).
     "tas": Livery("tas", "Tasmania Police", "suv", ((11, 79, 151), WHITE), 2, (0.36, 0.53), "Police", (11, 79, 151),
-                  (0.43, 0.68, 0.12, 0.9), paint=SILVER_PAINT, metallic=True,
+                  (0.43, 0.68, 0.12, 0.9), paint=SILVER_PAINT,
                   stripes=(((212, 220, 0), 0.555, 0.025),), crest="tas", crest_side=(0.655, 0.79, 0.30),
                   bar_word="POLICE"),
     # White SUVs: a two-row chequer along the shoulder, dropping to the headlights; "Police" large and low across both
@@ -1413,5 +1415,5 @@ LIVERIES = {
     "act": Livery("act", "ACT Policing (Australian Federal Police)", "sedan", ((15, 26, 51), WHITE), 3, (0.68, 0.90),
                   "Police", (15, 26, 51), (0.645, 0.32, 0.13, 0.85), front="enlarge",
                   stripes=(((200, 220, 0), 0.925, 0.012), ((200, 220, 0), 0.655, 0.012)), word_bonnet=(160, 164, 170),
-                  corner_flash=(200, 220, 0), crest="act", crest_side=(0.42, 0.33, 0.34), bar_word="POLICE"),
+                  corner_flash=(200, 220, 0), crest="act", crest_side=(0.42, 0.42, 0.34), bar_word="POLICE"),
 }
