@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from mapcreator.core import closures as C
-from mapcreator.core import furniture, kn5, package, textures
+from mapcreator.core import furniture, kn5, package, textures, validate
 from mapcreator.core.scene import MAX_VERTICES, LocalFrame
 from mapcreator.pipeline import track_stage
 
@@ -229,7 +229,7 @@ def test_the_atlas_colours():
     assert share(stripes, C.BLACK) == pytest.approx(0.5, abs=0.08)
     x0, y0, x1, y1 = C.CELLS["road_closed"]
     sign = img[y0:y1, x0:x1]
-    white = (np.abs(sign - np.array(C.WHITE)).max(axis=-1) < 30).mean()
+    white = (np.abs(sign - np.array(C.SIGN_WHITE)).max(axis=-1) < 30).mean()
     black = (np.abs(sign - np.array(C.BLACK)).max(axis=-1) < 30).mean()
     assert white > 0.6 and 0.1 < black < 0.35  # black on white, the legend and its border
     legend = img[y0 + 30:y1 - 30, x0 + 60:x1 - 60]
@@ -249,6 +249,13 @@ def test_repeating_bands_tile_seamlessly():
         # The first column continues from the last as the pattern does from one column to the next.
         step = np.abs(band[:, 1] - band[:, 0]).mean()
         assert np.abs(band[:, 0] - band[:, -1]).mean() <= step + 25
+
+
+def test_the_signs_white_is_a_light_grey_so_it_doesnt_bloom_into_the_legend():
+    img = np.asarray(C.atlas().image).astype(float)
+    x0, y0, x1, y1 = C.CELLS["road_closed"]
+    lum = img[y0:y1, x0:x1] @ np.array([0.2126, 0.7152, 0.0722])
+    assert 190 <= np.percentile(lum, 90) <= 210  # the white: about 200, where it was 244
 
 
 def test_the_legend_and_stripes_are_pure_black_so_no_night_boost_lifts_them():
@@ -555,18 +562,25 @@ def test_a_placed_closure_writes_to_a_kn5_and_reads_back(tmp_path):
 
 # -- night and budgets -------------------------------------------------------------------------------------------
 
-def test_retroreflective_faces_are_brightened_at_night_less_than_the_furnitures_boards():
-    # In game at 2.0 (the furniture boards') the sign burnt out at 8-12 m; the tester suggested 1.2-1.4.
-    assert 1.2 <= C.NIGHT_DIFFUSE[C.RETRO_MATERIAL] <= 1.4
-    assert C.NIGHT_DIFFUSE[C.RETRO_MATERIAL] < furniture.NIGHT_DIFFUSE[furniture.RETRO_MATERIAL]
-    assert track_stage.NIGHT_DIFFUSE[C.RETRO_MATERIAL] == C.NIGHT_DIFFUSE[C.RETRO_MATERIAL]
+def test_at_night_the_retroreflective_faces_come_up_a_little_and_everything_else_down():
+    # In game the sign burnt out at 8-12 m at 2.0 (the furniture boards') and still clipped at 1.3, and the plain
+    # straw and even a grey block brightened in the beam at the walls' 0.6. The retest suggested 0.8-1.0 and 0.35.
+    day = track_stage.MATERIAL_PROPS["walls"]["ksDiffuse"]  # what the closures' materials get by day
+    assert 0.8 <= C.NIGHT_DIFFUSE[C.RETRO_MATERIAL] <= 1.0
+    assert day < C.NIGHT_DIFFUSE[C.RETRO_MATERIAL] < furniture.NIGHT_DIFFUSE[furniture.RETRO_MATERIAL]
+    assert C.NIGHT_DIFFUSE[C.MATERIAL] == pytest.approx(0.35) and C.NIGHT_DIFFUSE[C.MATERIAL] < day
+    for name in (C.MATERIAL, C.RETRO_MATERIAL):
+        assert track_stage.NIGHT_DIFFUSE[name] == C.NIGHT_DIFFUSE[name]
     reflector = furniture.REFLECTOR_MATERIAL
     assert track_stage.NIGHT_DIFFUSE[reflector] == furniture.NIGHT_DIFFUSE[reflector]
     ini = package.ext_config_ini(grass_materials=["grass"], road_materials=["road"], version="t",
-                                 retro_materials={C.RETRO_MATERIAL: (C.NIGHT_DIFFUSE[C.RETRO_MATERIAL], 0.6)})
-    section = ini.split("[MATERIAL_ADJUSTMENT_0]")[1].split("[")[0]
-    section = section.replace(" ", "")
-    assert "MATERIALS=closure_retro" in section and "CONDITION=NIGHT_SMOOTH" in section
+                                 retro_materials={name: (night, day) for name, night in C.NIGHT_DIFFUSE.items()})
+    sections = dict(validate.ini_sections(ini))
+    adjust = {s["MATERIALS"]: s for name, s in sections.items() if name.startswith("MATERIAL_ADJUSTMENT_")}
+    assert set(adjust) == {C.MATERIAL, C.RETRO_MATERIAL}
+    for name, s in adjust.items():
+        assert s["CONDITION"] == "NIGHT_SMOOTH" and s["KEY_0"] == "ksDiffuse"
+        assert float(s["VALUE_0"]) == pytest.approx(C.NIGHT_DIFFUSE[name]) and float(s["VALUE_0_OFF"]) == day
     # The boards' and sign's faces and the tape are retroreflective; frames, stakes, bales and the tag are not.
     kit = C.closure("major", W)
     for name in ("tape", "obstacle", "warning"):

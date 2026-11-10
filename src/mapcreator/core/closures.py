@@ -41,9 +41,11 @@ right, on both faces), the sign's black ROAD CLOSED on white (AS 1742.3's T2-4, 
 in Pillow's built-in Aileron font (CC0) as the furniture's speed signs are, and the straw, a bale to a face. The tape
 and stripes are bands the atlas's full width, so their texture coordinates run on past 1 and wrap.
 
-**Night:** the boards' and the sign's faces and the tape are on `RETRO_MATERIAL`, which CSP brightens at night as
-it does the furniture's CAM and sign faces (`NIGHT_DIFFUSE`, through `package.ext_config_ini`), but less: 1.3, where
-the furniture's 2.0 burnt the sign out up close in game. Their black is pure black, so it stays black.
+**Night** (`NIGHT_DIFFUSE`, through `package.ext_config_ini`): the boards' and the sign's faces and the tape are on
+`RETRO_MATERIAL`, which CSP brightens at night as it does the furniture's CAM and sign faces, but much less (0.9
+against their 2.0). Everything else, on `MATERIAL`, comes down (0.35), as the police car's paint does: CSP's night
+exposure is set for the dark road, so a light surface square to the headlights at 10 m clips to white. Their black is
+pure black, so it stays black, and the sign's white is a light grey.
 
 Sizes the sources don't give are marked as guesses. The research behind them cites AS 1742.3-2019 (through
 Queensland's MUTCD Part 3 and QGTTM Part 3, as AS 1742.3 itself is paywalled), the NSW roads authority's QA
@@ -153,10 +155,16 @@ SOLID = ("bales",)
 MATERIAL = "closure"
 RETRO_MATERIAL = "closure_retro"
 TEXTURE = "closure"
-# ksDiffuse at night for the retroreflective faces; by day both materials keep the KN5's (0.6). In game at 22:00 (CSP,
-# 10 Nov 2026) the furniture boards' 2.0 glinted well from 25 m and more, but at 8-12 m, square to the beam, the sign
-# burnt out (93% of it near white, its legend unreadable) and the stripes washed pale. The tester suggested 1.2-1.4.
-NIGHT_DIFFUSE = {RETRO_MATERIAL: 1.3}
+# ksDiffuse at night, by material; by day both keep the KN5's (the track stage's walls' 0.6). In game at 22:00 (CSP,
+# 10 Nov 2026), at 8-12 m and square to the beam:
+# - with the furniture boards' 2.0 on the retroreflective faces, the sign burnt out (93% near white, its legend
+#   unreadable) and the stripes washed pale; at 1.3 the sign was still 79% near white, its letters pale grey;
+# - with no adjustment (0.6) the straw bales glowed near white (83%, then 70% darker), and even a plain grey block
+#   (106 by day) came up to 141 at night. CSP's night exposure is set for the dark road (30 in the beam), so any light
+#   surface facing the headlights at 10 m clips. So the plain material comes down at night, as the police car's body
+#   does (0.35), and the retroreflective faces get less than the police car's band (1.3): theirs are big, flat
+#   faces square to the beam. From 25 m and more the faces still glinted like the reflectors at 1.3; to retest at 0.9.
+NIGHT_DIFFUSE = {MATERIAL: 0.35, RETRO_MATERIAL: 0.9}
 
 # The most each element and each level may take, as (vertices, triangles) of its visual meshes, at any width up to
 # BUDGET_WIDTH_M and any stub length; and of its colliders. The research's estimates were about 250 vertices for a
@@ -180,6 +188,9 @@ CELLS = {"road_closed": (0, 352, 768, 480), "tag_front": (768, 352, 858, 480), "
 LEGEND = "ROAD CLOSED"
 
 WHITE = (244, 244, 240)
+# The sign's white, a light grey: at 246 the white round the legend clipped in the beam and bloomed into the letters,
+# which then read pale grey (in game, 10 Nov 2026). The police car's white paint came down to 224 for the same reason.
+SIGN_WHITE = (200, 200, 196)
 # Pure black, for the legend and the stripes: ksDiffuse multiplies the texture, so no night boost can lift it. At 18
 # (7%) the boost and the near beam lifted the legend into the top of CSP's tone curve with the white around it.
 BLACK = (0, 0, 0)
@@ -269,9 +280,9 @@ def _fit_font(d: ImageDraw.ImageDraw, text: str, width: float, height: float, st
 
 
 def _sign_face(d: ImageDraw.ImageDraw, box) -> None:
-    """T2-4: black legend and border on white."""
+    """T2-4: black legend and border on white (SIGN_WHITE)."""
     x0, y0, x1, y1 = box
-    d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=WHITE)
+    d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=SIGN_WHITE)
     d.rectangle([x0 + 6, y0 + 6, x1 - 7, y1 - 7], outline=BLACK, width=5)
     font = _fit_font(d, LEGEND, 0.84 * (x1 - x0), 0.5 * (y1 - y0), stroke=2)
     d.text(((x0 + x1) / 2, (y0 + y1) / 2), LEGEND, fill=BLACK, font=font, anchor="mm", stroke_width=2,
@@ -318,7 +329,7 @@ def atlas() -> Atlas:
     d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=PICKET)
     d.rectangle([x0 + 13, y0, x0 + 18, y1 - 1], fill=tuple(c + 26 for c in PICKET))  # the star's ridge
     d.rectangle([x0, y0, x1 - 1, y0 + 5], fill=PICKET_CAP)  # the top 4% of the cell: a 6 cm cap
-    for name, colour in (("trestle", TRESTLE_YELLOW), ("white", WHITE), ("black", BLACK)):
+    for name, colour in (("trestle", TRESTLE_YELLOW), ("white", SIGN_WHITE), ("black", BLACK)):
         x0, y0, x1, y1 = CELLS[name]
         d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=colour)
 
