@@ -50,6 +50,29 @@ def test_no_stretch_for_a_late_apex_uphill_slowly_or_for_a_moment():
     assert ai_line.exit_stretches(*profile(offsets=brief)) == []
 
 
+def closing_profile(offsets, n=420):
+    """As `profile`, but the bend closes more slowly, from 200 m at 100 m to 70 m at 180 m (its closing part, within
+    1.5 x its least radius, from 158 m; its tight part from 176 m), held to 280 m and open by 340 m."""
+    s = np.arange(float(n))
+    r = np.interp(s, [0, 100, 180, 280, 340, n], [1000, 200, 70, 70, 1000, 1000])
+    a = np.interp(s, *zip(*offsets))
+    return s, r, np.ones(n), np.full(n, -0.097), 3.5 - a, 3.5 + a
+
+
+def test_an_apex_before_the_tight_part_counts_if_the_line_then_holds_the_outside():
+    # Like 61.9 km: inside in the closing part, out from 166 m, before the tight part starts, and held there 56 m.
+    earlier = [(0, 0.0), (150, 1.0), (160, 1.0), (166, 0.0), (175, -1.2), (212, -1.2), (222, 0.0), (240, 1.0), (420, 0.0)]
+    found = ai_line.exit_stretches(*closing_profile(earlier))
+    assert len(found) == 1
+    x = found[0]
+    assert 165 <= x.start <= 168 and x.room == pytest.approx(2.3, abs=0.01) and x.room < NEED
+    # Back inside after 39 m: under EXIT_HOLD_M, as is a line that never comes off the inside half there.
+    brief = [(0, 0.0), (150, 1.0), (160, 1.0), (166, 0.0), (175, -1.2), (195, -1.2), (205, 0.0), (240, 1.0), (420, 0.0)]
+    assert ai_line.exit_stretches(*closing_profile(brief)) == []
+    outside_in = [(0, 0.0), (150, -1.0), (175, -1.2), (212, -1.2), (222, 0.0), (240, 1.0), (420, 0.0)]
+    assert ai_line.exit_stretches(*closing_profile(outside_in)) == []
+
+
 def test_the_clearance_holds_the_line_past_the_centreline():
     s = np.linspace(0.0, 100.0, 51)
     half = np.full(len(s), 3.5)

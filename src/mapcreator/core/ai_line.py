@@ -370,7 +370,9 @@ def road_banking(road: RoadModel, line: AiLine) -> np.ndarray:
 # from the outside edge, and all 26 passes stayed on. At 27.25 km it apexed early: it crossed to the outside half
 # 10 m into the bend's tight part (68-73 m for 90 m, down 4-5%) and kept 2.0-2.5 m from the edge through it, and
 # 18 of the 22 cars that got there left the road at its outside. So where the line apexes early like that, it
-# keeps room for the slide instead: a later apex.
+# keeps room for the slide instead: a later apex. With that, none left the road there in the next races; but at
+# 61.9 km, where the line came off the inside half before the bend's tight part even started and ran out across it,
+# 9 of 19 did, so an apex that early counts too.
 EXIT_TIGHT = 1.1  # a bend's tight part: its radius within this share of its least
 EXIT_OPEN = 1.5  # the bend has opened where its radius is past this share of its least
 EXIT_HOLD_M = 50.0  # an early apex: the line on the outside half for at least this much of the tight part
@@ -401,11 +403,17 @@ def exit_stretches(s: np.ndarray, radius: np.ndarray, turn: np.ndarray, grade: n
     """The bends where the line apexes early, every PROFILE_M of distances `s` along it, from its radius, turn,
     grade and distances to the left and right edges (as fast_lane.ai holds them, so the validator finds them from
     the file). A bend is a stretch of radius up to BEND_MAX_RADIUS_M; its tight part is where the radius is within
-    EXIT_TIGHT of its least. The line apexes early where it starts the tight part on the inside half and holds the
-    outside half for EXIT_HOLD_M or more of it, the road descends there on average, and the AI's corner speed at the
-    least radius is over racing_line.MARGIN_SLOW_KMH: slower, it keeps close to the line. Each stretch runs from the
-    tight part's start to EXIT_AFTER_M past its end, or to where the bend opens past EXIT_OPEN of its least radius,
-    whichever comes first; `room` is the least the line leaves from the outside edge over it."""
+    EXIT_TIGHT of its least, and its closing part where the radius has come within EXIT_OPEN of its least before it.
+    The line apexes early, the road descending over the tight part on average and the AI's corner speed at the least
+    radius over racing_line.MARGIN_SLOW_KMH (slower, it keeps close to the line), in either of two ways:
+    - it starts the tight part on the inside half, and from where it first reaches the outside half, the tight part
+      runs on for EXIT_HOLD_M or more (Lyell Highway reverse at 27.25 km);
+    - it comes off the inside half in the closing part, before the tight part starts, and holds the outside half
+      unbroken for EXIT_HOLD_M or more before the stretch ends (61.9 km: inside at 61.89-61.90 km, out from 61.915
+      to 61.966 km, with the tight part from 61.93 km).
+    Each stretch runs from the tight part's start, or where the line reached the outside half if that's earlier, to
+    EXIT_AFTER_M past the tight part's end, or to where the bend opens past EXIT_OPEN of its least radius, whichever
+    comes first; `room` is the least the line leaves from the outside edge over it."""
     out = []
     if len(s) < 3:
         return out
@@ -420,17 +428,29 @@ def exit_stretches(s: np.ndarray, radius: np.ndarray, turn: np.ndarray, grade: n
         t0, t1 = int(tight[0]), int(tight[-1])
         left = bool(np.median(turn[t0:t1 + 1]) > 0)
         outward = -middle if left else middle  # + toward the bend's outside
-        later = np.flatnonzero(outward[t0:t1 + 1] > 0)
-        if outward[t0] >= 0 or not len(later) or s[t1] - s[t0 + later[0]] < EXIT_HOLD_M:
-            continue
         if np.mean(grade[t0:t1 + 1]) >= 0:
             continue
         end = t1
         while end + 1 < len(s) and s[end + 1] - s[t1] <= EXIT_AFTER_M and r[end + 1] <= EXIT_OPEN * least:
             end += 1
+        first = t0
+        if outward[t0] < 0:  # inside where the tight part starts
+            later = np.flatnonzero(outward[t0:t1 + 1] > 0)
+            if not len(later) or s[t1] - s[t0 + later[0]] < EXIT_HOLD_M:
+                continue
+        else:  # already outside: off the inside half in the closing part, and held outside since
+            closing = np.flatnonzero(r[i0:t0] <= EXIT_OPEN * least) + i0
+            inside = closing[outward[closing] < 0]
+            if not len(inside):
+                continue
+            first = int(inside[-1]) + 1 + int(np.flatnonzero(outward[int(inside[-1]) + 1:t0 + 1] > 0)[0])
+            back = np.flatnonzero(outward[first:end + 1] <= 0)
+            last = first + int(back[0]) - 1 if len(back) else end
+            if s[last] - s[first] < EXIT_HOLD_M:
+                continue
         room = side_right if left else side_left
-        out.append(ExitStretch(start=float(s[t0]), end=float(s[end]), left=left,
-                               room=float(np.min(room[t0:end + 1])), radius_m=least))
+        out.append(ExitStretch(start=float(s[first]), end=float(s[end]), left=left,
+                               room=float(np.min(room[first:end + 1])), radius_m=least))
     return out
 
 
