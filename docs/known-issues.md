@@ -104,7 +104,7 @@ The AI line runs out-in-out over the whole road (`core/racing_line.py`, 4 Nov). 
 - **Spawns:** the grid and the hot-lap spawn are unchanged; the line stays on the centreline over them, and the AI should leave the grid as before.
 - **Track length:** `log.txt`'s `TRACK LENGTH` on Grasstree Hill and Lyell Highway against the line's real length (the last cumulative length in `fast_lane.ai`; Grasstree Hill forward: 12,737 m). With points 5 m apart, Lyell should read about 1.3% long, against 32.8% with 1 m points.
 
-## Crest bends (#63)
+## Crest bends
 
 On Lyell Highway forward, AC's AI put most of an 8-car field off the road at 0.72-0.80 km on lap 1, in all three races (9 Nov): 3-6 cars of 8, at 110-120 km/h. The bend is a 109-135 m left-hander that starts just over a crest (a 556-673 m vertical radius) and runs down an 8.5% grade, with no banking. The cars drifted right through it, 2-4 m right of the centreline at 720 m and 9-12 m at 785 m, and came to rest 8-18 m off the road at 790-800 m; the two or three that kept to the left got through. The AI line kept 2.6-3.2 m from both edges there.
 
