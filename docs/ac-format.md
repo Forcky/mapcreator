@@ -365,37 +365,42 @@ The objects that close a side road off the stage, after Motorsport Australia's s
 
   - MA asks for "a minimum of 25m" between the obstacle and the tape and sign.
   - A stub under 45 m (60 m on an overshoot stub) has no second tape: the sign goes on the obstacle, in the middle of the boards or raised behind the bales. Under 15 m (30 m) there's no obstacle, only the tape and a lone sign as far in as fits.
-  - Nothing solid stands in an overshoot stub's first 25 m. A lone sign never stands nearer than 6 m (26 m overshooting); where it can't fit, there's only the tape.
+  - No obstacle or sign stands in an overshoot stub's first 25 m. A lone sign never stands nearer than 6 m (26 m overshooting); where it can't fit, there's only the tape.
 - **The local frame:** origin on the stub's centreline at the mainline's edge line; +z into the stub, +x to the right looking in, +y up; metres.
-  - `closures.closure(level, width, overshoot=, length=, obstacle=, ground=, seed=)` returns each element (`tape`, `obstacle`, `warning`: the second tape and its sign, `sign`: a lone sign) at its distance in, with its visual meshes (one per material) and a collider mesh, plus the vehicle slot.
+  - `closures.closure(level, width, overshoot=, length=, obstacle=, ground=, seed=, solid=)` returns each element (`tape`, `obstacle`, `warning`: the second tape and its sign, `sign`: a lone sign) at its distance in, with its visual meshes (one per material), its props' extents, and a collider mesh where any of them is solid, plus the vehicle slot.
   - `width` is the width to close, centred on the centreline: normally the carriageway and its verges. It's a number, or a function of the distance in. `ground(x, z)` gives the cross-section (crown and verge fall) for the feet to stand on.
   - The frame is left-handed, so `closures.place(kit, pose, frame, index)` maps it onto AC's axes by a mirror and rewinds the triangles. `pose` is the stub's centreline at the mouth (easting, northing, height, heading into the stub), or a function of the distance in, so on a bending or climbing stub each element stands square across the stub at its own distance.
   - `closures.merge` packs many closures' meshes into a few under the vertex limit, one run per material.
-- **Collision:** no invisible wall in open air (the maintainer's concern).
-  - Each solid prop has its own box collider, exactly its visible extent: a board or sign with its trestles, from the front feet to the back feet; a bale, its own box. Each reaches from 1 m below the lowest ground under it to its top.
-  - The boards or bales abut across the width, so their colliders are the wall: it spans exactly the width, flush with the obstacle's front.
-  - Tape and stakes are visual only: cars break through them. A limited closure's lone sign stops a car only where it stands.
+- **Collision:** straw bales are solid; barrier boards, trestles and signs are passable, like the tape (the maintainer's decision, 10 Nov 2026). The vehicle, from its own module, is solid too.
+  - Why: in game (10 Nov) the solid props felt like what the car met at about 20 km/h, but at 60 km/h they were a rigid wall. Boards on trestles, which would fold over, stopped the car like concrete, and two of four cars glanced along the face and spun off its end. Bales are believable as a hard stop.
+  - So a major closure's boards don't stop a car, which drives on down the stub; a minor closure built with bales does.
+  - No invisible wall in open air (the maintainer's concern): each bale has its own box collider, exactly its visible extent, from 1 m below the lowest ground under it to its top. The row spans exactly the width, 6 cm between bales, each collider flush with its own bale's face.
+  - **One setting:** `closures.SOLID` (or `closure`'s `solid`) names the solid props by kind (`boards`, `bales`, `signs`) and element (`obstacle`, `warning`, `sign`); a prop is solid when both are named, naming none of either meaning all. Today it's `("bales",)`. Made solid, a board's or sign's collider runs from its trestles' front feet to their back feet.
   - Colliders are `1WALL_CLOSURE_*`: invisible, solid by the name, four sides and a top per box, wound outwards.
 - **Sizes and colours** (the code marks the guesses):
   - Tape: 75 mm, red diagonal stripes on white (MA's Tape A), tied 1.0 m up on star pickets 0.3 m beyond the width and sagging up to 0.15 m, with an A4 warning tag.
   - Barrier boards: up to 2.5 m long, cut equal to fill the width; 0.2 m deep, centred 1.0 m up; yellow and black stripes at 45 degrees on both faces, 0.1 m wide, mirrored either side of the middle and falling towards it. AS 1742.3's rule for the direction is paywalled; the US MUTCD (2009, section 6F.68) asks for stripes falling towards the middle "where no turns are intended" (`STRIPES_FALL_TO_MIDDLE`).
-  - Trestles: yellow (the NSW roads authority's G10 specification), A-frames of two flat legs with their feet 0.3 m either side of the board.
+  - Trestles: yellow (the NSW roads authority's G10 specification), open A-frames: on each side of the board two slim legs (tubes about 40 mm across, 0.48 m apart at the feet and 0.34 m under the board) and a crossbar about 0.3 m up, the feet 0.3 m either side of the board. Along a row the legs stand at most about 1.4 m apart. The first version's solid 0.45 m leg panels read as blocks in game.
   - ROAD CLOSED: AS 1742.3's T2-4, 1800 x 300 mm, black on white, double-sided so it reads from the stage.
-  - Straw bales: big squares, 0.9 m high, 1.2 m deep, up to 2.4 m long, twines along the top and down the ends.
+  - Straw bales: big squares, 0.9 m high, 1.2 m deep, about 2.4 m long at most, twines along the top and down the ends. They stand 6 cm apart, each up to 5 cm out of line, 3 cm taller or lower and 8% longer or shorter. Each face shows one bale, with darker, ragged edges, in one of two tints (one a little weathered), either way round. In game the first row, with no joins, read as one 8 m block.
 - **Two materials on one atlas** (`closures.atlas`: 1024 x 512, 0.35 MB as DXT1 with mips):
   - `closure`: trestles, stakes, bales, edges and the tag;
-  - `closure_retro`: the boards' and signs' faces and the tape. At night it gets the furniture boards' boost (ksDiffuse 2, a `[MATERIAL_ADJUSTMENT_n]` as above): the track stage's `NIGHT_DIFFUSE` includes it.
-  - The tape, the stripes and the straw are bands the atlas's full width, so their texture coordinates run on past 1 and wrap.
+  - `closure_retro`: the boards' and signs' faces and the tape.
+  - The tape and the stripes are bands the atlas's full width, so their texture coordinates run on past 1 and wrap. Each straw band holds two bales' faces side by side.
   - Every texture is drawn by our own code; the legend uses Pillow's built-in Aileron font (CC0), as the speed signs do.
-- **Budgets:** every element and level is held to `closures.BUDGET` at any width up to 14 m. The vehicle isn't counted.
+- **At night** `closure_retro` gets ksDiffuse **1.3** (0.6 by day), a `[MATERIAL_ADJUSTMENT_n]` as above; the track stage's `NIGHT_DIFFUSE` includes it.
+  - In game at 22:00 with the furniture boards' 2.0, the closures glinted like the reflectors from 25 m and more. But at 8-12 m, square to the beam, the sign burnt out (93% near white, the legend unreadable at 12 m), the stripes washed pale, and the straw bales glowed near white (83%) though they're not retroreflective. The tester suggested 1.2-1.4.
+  - The legend, the sign's border and the black stripes are pure black: ksDiffuse multiplies the texture, so no boost lifts them. At 18 (7%) the boost and the near beam had lifted them into the top of CSP's tone curve.
+  - The straw is about 0.72 as light as before (mean luminance 118 against 164). A bale's face is big, flat and square to the beam where it's strongest, and the straw had been nearly as light as the sign's white (208 by day in game, against the sign's 194).
+- **Budgets:** every element and level is held to `closures.BUDGET` and `COLLIDER_BUDGET` at any width up to 14 m. The vehicle isn't counted. The trestles' tubes have a triangle for every corner, so triangles run closer to vertices than on boxes.
 
   | Closure, 8 m wide (14 m) | Vertices | Triangles | Collider vertices |
   |---|---|---|---|
-  | major | 504 (784) | 280 (420) | 120 (160) |
-  | minor, boards | 548 (700) | 302 (378) | 100 (140) |
-  | minor, bales | 292 (316) | 174 (186) | 100 (140) |
-  | limited | 160 | 94 | 20 |
+  | major | 536 (848) | 440 (740) | 0 |
+  | minor, boards | 588 (756) | 502 (658) | 0 |
+  | minor, bales | 324 (364) | 226 (246) | 80 (120) |
+  | limited | 168 | 134 | 0 |
 
-  Per element: the tape 76 vertices, the second tape and its sign 160, a lone sign 84.
+  Per element: the tape 76 vertices, the second tape and its sign 168, a lone sign 92. In game the first version cost no measurable frame rate (164 fps facing a major closure against 160 facing open grass).
 - **Names when placed:** visual meshes `CLOSURE_*`, colliders `1WALL_CLOSURE_*`. Validation doesn't know them yet.
-- **To look at them:** `python scripts/closure_preview.py OUT_DIR` renders each case from the mainline (its colliders drawn in red) and writes a small test track, `mapcreator_closures`, to install with the harness. **To confirm in game:** the look by day and at night, and how the colliders feel.
+- **To look at them:** `python scripts/closure_preview.py OUT_DIR` renders each case from the mainline (its colliders drawn in red) and writes a small test track, `mapcreator_closures`, to install with the harness; `--solid` builds it with other props solid. **To confirm in game:** the night at 8-12 m and from 25 m, the bales' and trestles' looks, and driving through the boards and into the bales.

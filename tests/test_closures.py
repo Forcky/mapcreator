@@ -48,7 +48,7 @@ def test_layout_is_tape_at_4_obstacle_at_12_and_the_second_tape_and_sign_at_37()
     assert C.layout("limited") == {"tape": 4.0, "sign": 12.0}
     kit = C.closure("major", W)
     warning = kit.element("warning")
-    sign_z = np.mean([b.z0 + b.z1 for b in warning.boxes]) / 2
+    sign_z = np.mean([b.z0 + b.z1 for _, b in warning.props]) / 2
     assert sign_z == pytest.approx(37.0 + C.SIGN_BEHIND_TAPE_M)
 
 
@@ -65,7 +65,7 @@ def test_a_short_stub_carries_the_sign_on_the_obstacle_then_gets_a_lone_sign():
     assert any(in_cell(uv, "road_closed") for _, _, uv in quads(retro(short.element("obstacle"))))
     # ... and raised behind bales, showing over them.
     bales = C.closure("minor", W, length=30.0, obstacle="bales")
-    sign = [b for b in bales.element("obstacle").boxes if b.x1 - b.x0 == pytest.approx(C.SIGN[0])]
+    sign = [b for kind, b in bales.element("obstacle").props if kind == "signs"]
     assert len(sign) == 1 and sign[0].y1 > C.BALE[1] + 0.2 and sign[0].z0 >= 12.0 + C.BALE[2] / 2
     # A long stub's minor obstacle carries no sign: it's with the second tape.
     assert not any(in_cell(uv, "road_closed") for _, _, uv in quads(retro(C.closure("minor", W).element("obstacle"))))
@@ -73,11 +73,11 @@ def test_a_short_stub_carries_the_sign_on_the_obstacle_then_gets_a_lone_sign():
 
 @pytest.mark.parametrize("length", [100.0, 60.0, 59.0, 40.0, 30.0, 28.0, 20.0])
 @pytest.mark.parametrize("level,obstacle", KINDS)
-def test_an_overshoot_stub_has_nothing_solid_in_its_first_25_m(level, obstacle, length):
+def test_an_overshoot_stub_has_no_obstacle_or_sign_in_its_first_25_m(level, obstacle, length):
     kit = C.closure(level, W, overshoot=True, length=length, obstacle=obstacle)
     assert kit.element("tape").z == C.TAPE_M
     for e in kit.elements:
-        assert all(b.z0 >= C.OVERSHOOT_CLEAR_M for b in e.boxes)
+        assert all(b.z0 >= C.OVERSHOOT_CLEAR_M for _, b in e.props)  # solid or not
         if e.name != "tape":
             assert points(e.meshes)[:, 2].min() >= C.OVERSHOOT_CLEAR_M
     for s in kit.slots:
@@ -98,9 +98,12 @@ def test_each_element_stands_across_the_stub_on_its_own_line(level, obstacle):
         if e.name == "tape":
             assert p[:, 2] == pytest.approx(np.full(len(p), 4.0), abs=0.03)
         elif e.name == "obstacle":
-            reach = C.BALE[2] / 2 if obstacle == "bales" and level == "minor" else C.TRESTLE_FOOT_M + 0.015
-            assert p[:, 2].min() == pytest.approx(12.0 - reach, abs=0.02)
-            assert p[:, 2].max() == pytest.approx(12.0 + reach, abs=0.02)
+            if obstacle == "bales" and level == "minor":  # each bale a little out of line
+                assert abs(p[:, 2].min() - (12.0 - C.BALE[2] / 2)) <= C.BALE_STAGGER_M + 1e-6
+                assert abs(p[:, 2].max() - (12.0 + C.BALE[2] / 2)) <= C.BALE_STAGGER_M + 1e-6
+            else:
+                assert p[:, 2].min() == pytest.approx(12.0 - C.TRESTLE_FOOT_M, abs=0.005)
+                assert p[:, 2].max() == pytest.approx(12.0 + C.TRESTLE_FOOT_M, abs=0.005)
         # Across the stub, centred on its centreline (+x right, looking in).
         assert p[:, 0].min() == pytest.approx(-p[:, 0].max(), abs=1e-4)
         assert p[:, 1].min() < 0.0 < p[:, 1].max() < 1.4  # +y up: standing on the ground at y = 0
@@ -174,12 +177,37 @@ def test_the_major_barrier_has_its_sign_in_the_middle_of_the_boards():
     assert signs[0][:, 2].mean() == pytest.approx(12.0, abs=0.02)
 
 
-def test_bales_lie_across_the_whole_width():
-    kit = C.closure("minor", W, obstacle="bales")
-    boxes = kit.element("obstacle").boxes
-    assert len(boxes) == math.ceil(W / C.BALE[0])
-    assert all(b.x1 - b.x0 <= C.BALE[0] + 1e-9 and b.z1 - b.z0 == pytest.approx(C.BALE[2]) for b in boxes)
-    assert all(b.y1 == pytest.approx(C.BALE[1]) for b in boxes)
+@pytest.mark.parametrize("width", [3.0, 8.0, 13.0])
+def test_bales_lie_across_the_whole_width_apart_and_a_little_out_of_line(width):
+    for seed in range(4):
+        boxes = sorted(C.closure("minor", width, obstacle="bales", seed=seed).element("obstacle").boxes,
+                       key=lambda b: b.x0)
+        assert len(boxes) == math.ceil((width + C.BALE_GAP_M) / (C.BALE[0] + C.BALE_GAP_M))
+        assert boxes[0].x0 == pytest.approx(-width / 2) and boxes[-1].x1 == pytest.approx(width / 2)
+        gaps = [b.x0 - a.x1 for a, b in zip(boxes, boxes[1:])]
+        assert gaps == pytest.approx([C.BALE_GAP_M] * len(gaps))  # seams: a car can't pass, the eye can see
+        assert all(b.x1 - b.x0 <= C.BALE[0] * (1 + 2 * C.BALE_LENGTH_VARY) for b in boxes)
+        assert all(b.z1 - b.z0 == pytest.approx(C.BALE[2]) for b in boxes)
+        assert all(abs((b.z0 + b.z1) / 2 - 12.0) <= C.BALE_STAGGER_M + 1e-9 for b in boxes)
+        assert all(abs(b.y1 - C.BALE[1]) <= C.BALE_HEIGHT_VARY_M + 1e-9 for b in boxes)
+    rows = [C.closure("minor", 13.0, obstacle="bales", seed=s).element("obstacle").boxes for s in range(4)]
+    assert len({tuple(round(b.z0, 4) for b in r) for r in rows}) > 1  # neighbouring closures differ
+
+
+def test_every_bale_shows_its_own_face_with_both_ends():
+    el = C.closure("minor", 13.0, obstacle="bales", seed=3).element("obstacle")
+    mesh = [m for m in el.meshes if m.material == C.MATERIAL][0]
+    fronts, ends = [], 0
+    for c, n, uv in quads(mesh):
+        if n[2] == -1.0 and in_band(uv, "straw_side"):
+            fronts.append(uv[:, 0])
+        ends += abs(n[0]) == 1.0
+    assert len(fronts) == len(el.boxes) and ends == 2 * len(el.boxes)  # the ends show in the gaps
+    for u in fronts:
+        # One bale's face: half the band, one of its two bales, either way round.
+        assert np.ptp(u) == pytest.approx(0.5, abs=0.01)
+        assert u.min() >= -1e-6 and u.max() <= 1 + 1e-6 and (u.min() < 0.25) == (u.max() < 0.75)
+    assert len({(round(u.min(), 3), u[0] < u[1]) for u in fronts}) > 1  # not all the same bale
 
 
 # -- colours and textures ----------------------------------------------------------------------------------------
@@ -210,7 +238,7 @@ def test_the_atlas_colours():
     assert tuple(img[(y0 + y1) // 2, (x0 + x1) // 2]) == C.TRESTLE_YELLOW
     row, rows, _ = C.BANDS["straw_side"]
     straw = img[row:row + rows].reshape(-1, 3).mean(axis=0)
-    assert straw[0] > straw[1] > straw[2] and straw[0] > 150  # golden
+    assert straw[0] > straw[1] > straw[2] and 110 < straw[0] < 160  # golden, darker than the first version
 
 
 def test_repeating_bands_tile_seamlessly():
@@ -221,6 +249,25 @@ def test_repeating_bands_tile_seamlessly():
         # The first column continues from the last as the pattern does from one column to the next.
         step = np.abs(band[:, 1] - band[:, 0]).mean()
         assert np.abs(band[:, 0] - band[:, -1]).mean() <= step + 25
+
+
+def test_the_legend_and_stripes_are_pure_black_so_no_night_boost_lifts_them():
+    img = np.asarray(C.atlas().image).astype(int)
+    x0, y0, x1, y1 = C.CELLS["road_closed"]
+    legend = img[y0 + 30:y1 - 30, x0 + 60:x1 - 60]
+    assert (legend.max(axis=-1) == 0).mean() > 0.15  # the letters' cores are 0, not a dark grey
+    row, rows, _ = C.BANDS["stripes"]
+    assert (img[row:row + rows].max(axis=-1) == 0).mean() > 0.4
+
+
+def test_the_straw_is_darker_so_bales_dont_glow_in_the_headlights():
+    img = np.asarray(C.atlas().image).astype(float)
+    lum = img @ np.array([0.2126, 0.7152, 0.0722])
+    for name in ("straw_side", "straw_top"):
+        row, rows, _ = C.BANDS[name]
+        assert 105 <= lum[row:row + rows].mean() <= 125  # about 0.72 of the first version's 164
+        band = lum[row:row + rows]
+        assert band[:, :8].mean() < 0.85 * band[:, 64:448].mean()  # each bale's edges darker than its middle
 
 
 def test_texture_size():
@@ -241,29 +288,65 @@ def test_no_arrows_chevrons_or_detour_signs():
 
 # -- colliders ---------------------------------------------------------------------------------------------------
 
+def test_bales_are_solid_and_boards_trestles_and_signs_passable():
+    """The maintainer's decision (10 Nov 2026), after the first in-game test."""
+    for level, obstacle in KINDS:
+        for length in (100.0, 30.0, 12.0):
+            kit = C.closure(level, W, obstacle=obstacle, length=length)
+            for e in kit.elements:
+                assert e.boxes == [b for kind, b in e.props if kind == "bales"]
+            names = {m.name for m in kit.colliders()}
+            assert names == ({"1WALL_CLOSURE_OBSTACLE"} if kit.obstacle == "bales" else set())
+
+
 @pytest.mark.parametrize("width", [3.0, 8.0, 13.0])
 @pytest.mark.parametrize("level,obstacle", [("major", "boards"), ("minor", "boards"), ("minor", "bales")])
 def test_the_obstacles_colliders_are_the_wall_spanning_exactly_the_width_flush_with_its_front(level, obstacle, width):
-    el = C.closure(level, width, obstacle=obstacle).element("obstacle")
-    front = min(b.z0 for b in el.boxes)
-    row = sorted((b for b in el.boxes if b.z0 == front), key=lambda b: b.x0)
+    """The bales by default; boards too, made solid with the switch."""
+    solid = None if obstacle == "bales" else C.SOLID_KINDS
+    el = C.closure(level, width, obstacle=obstacle, solid=solid).element("obstacle")
+    p = points(el.meshes)
+    row = sorted((b for b in el.boxes if b.z0 < 12.0), key=lambda b: b.x0)  # a raised sign stands behind
     assert row[0].x0 == pytest.approx(-width / 2) and row[-1].x1 == pytest.approx(width / 2)
-    assert all(a.x1 == pytest.approx(b.x0) for a, b in zip(row, row[1:]))  # no gap a car could pass
-    # Flush with what's seen: the front of the boards' trestle feet, or of the bales.
-    assert front == pytest.approx(points(el.meshes)[:, 2].min(), abs=0.015)
-    seen_top = points(el.meshes)[np.abs(points(el.meshes)[:, 0]) < width / 2 - 0.5][:, 1]
+    gap = C.BALE_GAP_M if obstacle == "bales" else 0.0
+    assert all(b.x0 - a.x1 == pytest.approx(gap) for a, b in zip(row, row[1:]))  # no gap a car could pass
+    for b in row:
+        # Flush with what's seen: the front of the trestles' feet, or of the bale.
+        seen = p[(p[:, 0] >= b.x0 - 0.01) & (p[:, 0] <= b.x1 + 0.01) & (p[:, 2] < b.z1)]
+        assert b.z0 == pytest.approx(seen[:, 2].min(), abs=0.005)
+    seen_top = p[np.abs(p[:, 0]) < width / 2 - 0.5][:, 1]
     assert max(b.y1 for b in row) <= seen_top.max() + 1e-6
     assert all(b.y0 <= -C.COLLIDER_BELOW_M + 1e-6 for b in row)
 
 
+@pytest.mark.parametrize("width", [2.5, 3.5, 8.0, 10.0, 13.0, 14.0])
+def test_trestles_are_slim_open_a_frames_a_car_always_meets_a_leg_of(width):
+    for level in ("major", "minor"):
+        el = C.closure(level, width).element("obstacle")
+        mesh = [m for m in el.meshes if m.material == C.MATERIAL][0]
+        p, t = mesh.positions.astype(float), mesh.triangles
+        # Slice the frames at bumper height: only the legs cross 0.45 m (the boards are higher, the crossbars lower).
+        # The row's own, not a raised sign's behind it.
+        a, b = p[np.concatenate([t[:, 0], t[:, 1], t[:, 2]])], p[np.concatenate([t[:, 1], t[:, 2], t[:, 0]])]
+        cross = ((a[:, 1] - 0.45) * (b[:, 1] - 0.45) < 0) & (a[:, 2] < 12.0 + C.TRESTLE_FOOT_M + 0.01)
+        s = (0.45 - a[cross, 1]) / (b[cross, 1] - a[cross, 1])
+        xs = np.sort(a[cross, 0] + s * (b[cross, 0] - a[cross, 0]))
+        legs = np.split(xs, np.flatnonzero(np.diff(xs) > 0.1) + 1)
+        assert all(np.ptp(leg) <= 2 * C.LEG_R for leg in legs)  # slim: about 40 mm across
+        centres = [leg.mean() for leg in legs]
+        # Front and back legs line up, so each centre is a pair; they stand no further apart than a car is wide.
+        assert centres[0] - (-width / 2) <= 0.8 and width / 2 - centres[-1] <= 0.8
+        assert max(np.diff(centres)) <= 1.45
+
+
 @pytest.mark.parametrize("level,obstacle", KINDS)
 def test_no_collider_stands_in_open_air(level, obstacle):
-    """Every collider box is filled by its prop: what's seen inside its footprint spans its width and depth and
-    reaches its top."""
+    """Every prop's extent, its collider when it's solid, is filled by it: what's seen inside its footprint spans its
+    width and depth and reaches its top. Every prop, so any of them can be made solid."""
     for length in (100.0, 30.0):
         for e in C.closure(level, W, obstacle=obstacle, length=length).elements:
             p = points(e.meshes)
-            for b in e.boxes:
+            for _, b in e.props:
                 inside = p[(p[:, 0] >= b.x0 - 0.02) & (p[:, 0] <= b.x1 + 0.02) & (p[:, 2] >= b.z0 - 0.02)
                            & (p[:, 2] <= b.z1 + 0.02)]
                 assert inside[:, 0].min() == pytest.approx(b.x0, abs=0.02)
@@ -275,14 +358,16 @@ def test_no_collider_stands_in_open_air(level, obstacle):
 
 
 def test_colliders_are_invisible_solid_walls_wound_outwards():
-    kit = C.closure("major", W)
+    kit = C.closure("major", W, solid=C.SOLID_KINDS)
     cols = kit.colliders()
     assert {m.name for m in cols} == {"1WALL_CLOSURE_OBSTACLE", "1WALL_CLOSURE_WARNING"}
     for m in cols:
         assert not m.renderable
         assert sum(k in m.name for k in package.SURFACE_KEYS + ("WALL",)) == 1  # the validator's physics name rule
-    for e in kit.elements:
+    bales = C.closure("minor", W, obstacle="bales")
+    for e in kit.elements + bales.elements:
         for m in e.colliders:
+            assert not m.renderable
             for k, (c, n, _) in enumerate(quads(m)):  # five faces a box: front, back, left, right, top
                 b = e.boxes[k // 5]
                 centre = np.array([(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2])
@@ -292,7 +377,7 @@ def test_colliders_are_invisible_solid_walls_wound_outwards():
 @pytest.mark.parametrize("level,obstacle", KINDS)
 def test_local_triangles_wind_counter_clockwise_seen_from_the_front(level, obstacle):
     """The frame is left-handed, so in its numbers the edges' cross product points against the normal."""
-    kit = C.closure(level, W, obstacle=obstacle)
+    kit = C.closure(level, W, obstacle=obstacle, solid=C.SOLID_KINDS)
     for m in kit.meshes() + kit.colliders():
         m.validate()
         p = m.positions.astype(float)
@@ -307,10 +392,11 @@ def test_feet_stand_on_the_ground_given():
         x = np.abs(x)
         return -0.025 * np.minimum(x, 3.0) - 0.06 * np.maximum(x - 3.0, 0.0)
 
-    kit = C.closure("minor", W, ground=ground)
+    kit = C.closure("minor", W, ground=ground, solid=C.SOLID_KINDS)
     tape = [m for m in kit.element("tape").meshes if m.material == C.MATERIAL][0].positions.astype(float)
     stake = tape[np.abs(tape[:, 0]) > W / 2]
     assert stake[:, 1].min() == pytest.approx(float(ground(W / 2 + C.STAKE_OUT_M, 4.0)) - C.STAKE_SINK_M, abs=1e-4)
+    assert kit.element("obstacle").boxes
     for b in kit.element("obstacle").boxes:
         lowest = ground(np.array([b.x0, b.x1]), np.array([b.z0, b.z1])).min()
         assert b.y0 <= lowest - C.COLLIDER_BELOW_M + 0.01
@@ -324,7 +410,35 @@ def test_width_may_change_along_the_stub():
     tape = retro(kit.element("tape")).positions.astype(float)
     assert tape[:, 0].max() == pytest.approx(6.0 + C.STAKE_OUT_M)
     obstacle = kit.element("obstacle")
-    assert max(b.x1 for b in obstacle.boxes) == pytest.approx(4.0)
+    assert max(b.x1 for _, b in obstacle.props) == pytest.approx(4.0)
+
+
+def test_which_props_are_solid_is_one_setting():
+    full = C.closure("major", W)
+    assert C.SOLID == ("bales",)  # the maintainer's decision
+    for solid, expect in [
+        (C.SOLID_KINDS, {"obstacle": ("boards", "signs"), "warning": ("signs",)}),
+        ((), {}),
+        (("bales",), {}),
+        (("obstacle",), {"obstacle": ("boards", "signs")}),
+        (("obstacle", "boards"), {"obstacle": ("boards",)}),
+        (("signs",), {"obstacle": ("signs",), "warning": ("signs",)}),
+        (("warning", "signs"), {"warning": ("signs",)}),
+    ]:
+        kit = C.closure("major", W, solid=solid)
+        for e, f in zip(kit.elements, full.elements):
+            kinds = expect.get(e.name, ())
+            assert e.boxes == [box for kind, box in e.props if kind in kinds]
+            assert bool(e.colliders) == bool(kinds)
+            assert sum(len(m.positions) for m in e.meshes) == sum(len(m.positions) for m in f.meshes)  # same looks
+        assert kit.slots == full.slots
+    bales = C.closure("minor", W, obstacle="bales", length=30.0, solid=("bales",)).element("obstacle")
+    assert {kind for kind, _ in bales.props} == {"bales", "signs"}
+    assert bales.boxes == [box for kind, box in bales.props if kind == "bales"]  # the raised sign isn't solid
+    placed = C.place(C.closure("limited", W, solid=()), (0.0, 0.0, 0.0, 0.0), FRAME)
+    assert placed.colliders == [] and C.merge(placed.colliders) == []
+    with pytest.raises(ValueError):
+        C.closure("major", W, solid=("tape",))
 
 
 def test_bad_inputs_are_refused():
@@ -342,7 +456,7 @@ def test_a_major_closure_keeps_a_slot_for_the_vehicle_behind_its_boards():
     for width in (3.0, 8.0, 13.0):
         kit = C.closure("major", width)
         (slot,) = kit.slots
-        back = max(b.z1 for b in kit.element("obstacle").boxes)
+        back = max(b.z1 for _, b in kit.element("obstacle").props)
         a = math.radians(C.VEHICLE_ANGLE_DEG)
         reach = C.VEHICLE[0] / 2 * math.cos(a) + C.VEHICLE[1] / 2 * math.sin(a)
         assert slot.z - reach == pytest.approx(back + C.VEHICLE_GAP_M)
@@ -357,7 +471,8 @@ FRAME = LocalFrame(520_000.0, 5_250_000.0, 100.0)
 
 
 def test_place_maps_the_local_frame_onto_the_track():
-    kit = C.closure("major", W)
+    assert C.place(C.closure("major", W), (0.0, 0.0, 0.0, 0.0), FRAME).colliders == []  # boards are passable
+    kit = C.closure("major", W, solid=C.SOLID_KINDS)
     e0, n0, h0 = 520_100.0, 5_250_200.0, 112.0
     placed = C.place(kit, (e0, n0, h0, math.pi / 2), FRAME, index=7)  # a stub heading north
     assert {m.name.split("_")[1] for m in placed.meshes} == {"007"}
@@ -418,8 +533,9 @@ def test_merge_packs_many_closures_under_the_vertex_limit():
 
 
 def test_a_placed_closure_writes_to_a_kn5_and_reads_back(tmp_path):
-    placed = C.place(C.closure("major", W), (520_010.0, 5_250_010.0, 101.0, 1.0), FRAME)
+    placed = C.place(C.closure("minor", W, obstacle="bales"), (520_010.0, 5_250_010.0, 101.0, 1.0), FRAME)
     meshes = C.merge(placed.meshes) + C.merge(placed.colliders)
+    assert any(not m.renderable for m in meshes)
     mats = list(C.materials().values())
     index = {m.name: i for i, m in enumerate(mats)}
     kmats = [kn5.Kn5Material(m.name, properties={"ksDiffuse": 0.6}, textures={"txDiffuse": f"{m.texture}.dds"})
@@ -439,8 +555,10 @@ def test_a_placed_closure_writes_to_a_kn5_and_reads_back(tmp_path):
 
 # -- night and budgets -------------------------------------------------------------------------------------------
 
-def test_retroreflective_faces_get_the_furnitures_night_treatment():
-    assert C.NIGHT_DIFFUSE == {C.RETRO_MATERIAL: furniture.NIGHT_DIFFUSE[furniture.RETRO_MATERIAL]}
+def test_retroreflective_faces_are_brightened_at_night_less_than_the_furnitures_boards():
+    # In game at 2.0 (the furniture boards') the sign burnt out at 8-12 m; the tester suggested 1.2-1.4.
+    assert 1.2 <= C.NIGHT_DIFFUSE[C.RETRO_MATERIAL] <= 1.4
+    assert C.NIGHT_DIFFUSE[C.RETRO_MATERIAL] < furniture.NIGHT_DIFFUSE[furniture.RETRO_MATERIAL]
     assert track_stage.NIGHT_DIFFUSE[C.RETRO_MATERIAL] == C.NIGHT_DIFFUSE[C.RETRO_MATERIAL]
     reflector = furniture.REFLECTOR_MATERIAL
     assert track_stage.NIGHT_DIFFUSE[reflector] == furniture.NIGHT_DIFFUSE[reflector]
@@ -457,6 +575,7 @@ def test_retroreflective_faces_get_the_furnitures_night_treatment():
         assert in_band(uv, "stripes") or in_cell(uv, "road_closed")
     bales = C.closure("minor", W, obstacle="bales", length=40.0).element("obstacle")
     assert all(in_cell(uv, "road_closed") for _, _, uv in quads(retro(bales)))
+    assert all(m.material == C.MATERIAL for m in C.closure("minor", W, obstacle="bales").element("obstacle").meshes)
 
 
 @pytest.mark.parametrize("level,obstacle", KINDS)

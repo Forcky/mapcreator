@@ -1,18 +1,20 @@
 """Look at the closure props (`core/closures.py`) before they're placed on real tracks.
 
-    python scripts/closure_preview.py OUT_DIR              # renders and a test track
-    python scripts/closure_preview.py OUT_DIR --no-track   # renders only
+    python scripts/closure_preview.py OUT_DIR                   # renders and a test track
+    python scripts/closure_preview.py OUT_DIR --no-track        # renders only
+    python scripts/closure_preview.py OUT_DIR --solid bales signs   # other props solid than closures.SOLID
 
 Keep OUT_DIR outside the repository. It gets:
 - `renders/<case>.png`: each closure seen from the mainline, three panels: driving up to it, from the mouth, and
   from the mouth with its colliders drawn in red. A small software renderer draws them (back faces culled, as the
   game does), so they show the geometry, the textures and the winding, not the game's lighting.
-- `mapcreator_closures/`: a small Assetto Corsa track, a straight 600 m road with a side-road stub every 80 m, each
+- `mapcreator_closures/`: a small Assetto Corsa track, a straight 600 m road with a side-road stub every 65 m, each
   closed a different way (the cases below), to drive past by day and at night. On the PC with the game:
   `.venv\\Scripts\\python harness/ac_harness.py install OUT_DIR/mapcreator_closures`, then pick "Closure props
   (test)" in Content Manager. Night needs Custom Shaders Patch: set the time to about 22:00 and check the boards,
-  signs and tape light up in the headlights. Drive into a closure to feel its colliders. The grey block behind each
-  major closure's boards only marks the vehicle slot: the vehicle comes from its own module.
+  signs and tape light up in the headlights. Drive into a closure to feel its colliders: by default only the bales
+  are solid (`closures.SOLID`), and `--solid` builds the track with others. The grey block behind each major
+  closure's boards only marks the vehicle slot: the vehicle comes from its own module, and isn't solid here.
 
 Runs from a checkout without installing: it puts the checkout's own `src` first on the path.
 """
@@ -75,8 +77,9 @@ def _grid(name, material, e0, e1, n0, n1, cell, uv_of, h=0.0):
     return Mesh(name, material, pos.astype(np.float32), nrm.astype(np.float32), uv.astype(np.float32), tri)
 
 
-def build_scene():
-    """The mainline, the ground, each stub and its closure (placed and merged), and the slot markers."""
+def build_scene(solid=None):
+    """The mainline, the ground, each stub and its closure (placed and merged), and the slot markers. `solid` is
+    `closures.closure`'s: None for `closures.SOLID`."""
     meshes = [
         _grid("1ROAD_000", "road", 0, ROAD_M, -HALF, HALF, 4.0,
               lambda e, n: np.column_stack([(HALF - n) / (2 * HALF), e / textures.ROAD_TILE_M])),
@@ -92,7 +95,8 @@ def build_scene():
         meshes.append(_grid(f"1ROAD_STUB_{k}", "road_plain", e - STUB_W / 2, e + STUB_W / 2, lo, hi, 3.0,
                             lambda ee, nn, e=e: np.column_stack([(ee - e) / STUB_W + 0.5, nn / textures.ROAD_TILE_M]),
                             h=0.0))
-        kit = closures.closure(level, STUB_W + 2 * VERGE, overshoot=overshoot, length=length, obstacle=obstacle, seed=k)
+        kit = closures.closure(level, STUB_W + 2 * VERGE, overshoot=overshoot, length=length, obstacle=obstacle,
+                               seed=k, solid=solid)
         placed = closures.place(kit, (e, n0, 0.0, heading), FRAME, index=k)
         placed_meshes += placed.meshes
         placed_colliders += placed.colliders
@@ -357,9 +361,13 @@ def main(argv=None) -> int:
     p.add_argument("out", type=Path, help="output folder, outside the repository")
     p.add_argument("--no-track", action="store_true", help="renders only")
     p.add_argument("--no-renders", action="store_true", help="the test track only")
+    p.add_argument("--solid", nargs="*", metavar="NAME",
+                   help=f"props with colliders, by kind {closures.SOLID_KINDS} and element {closures.SOLID_ELEMENTS} "
+                        f"(default {closures.SOLID}; none at all with an empty list)")
     args = p.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
-    meshes, stubs = build_scene()
+    meshes, stubs = build_scene(args.solid)
+    print("solid:", closures.SOLID if args.solid is None else tuple(args.solid))
     for name, kit, *_ in stubs:
         c = kit.counts()
         lines = ", ".join(f"{e.name} at {e.z:g} m" for e in kit.elements)
