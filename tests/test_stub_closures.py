@@ -251,7 +251,7 @@ def test_the_track_stage_gives_police_materials_their_values_and_closures_and_po
     assert night["closure_retro"] == (closures.NIGHT_DIFFUSE["closure_retro"], 0.6)
     assert night["police_tas_lens"][0] == police_car.NIGHT_DIFFUSE_BY_PART["lens"]
     assert night["police_tas"][0] == police_car.NIGHT_DIFFUSE_BY_PART["body"]
-    assert "closure" not in night
+    assert night["closure"] == (closures.NIGHT_DIFFUSE["closure"], 0.6)
 
 
 def test_material_values_survive_a_scene_round_trip(tmp_path):
