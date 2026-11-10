@@ -16,7 +16,7 @@ These need the in-game harness on a machine with Assetto Corsa (`docs/dev-handov
 - in the Tree FX model files: the meaning of the trailer's `4`, and whether `size` scales exactly as assumed (model height × size)
 - CSP rewrites each tree `.bin` the first time it loads it: the same entries, re-packed in another order and about 9 KB larger. Harmless so far, but it suggests our zip differs from the layout CSP's own writer uses.
 - what race.ini's `[AUTOSPAWN]` does
-- whether the tree trunk colliders (#15) stop a car at the bark: their radius assumes Tree FX scales a model by `size` all round and by `width` horizontally on top. And what 200-560 colliders per km cost in frame rate.
+- whether the tree trunk colliders stop a car at the bark: their radius assumes Tree FX scales a model by `size` all round and by `width` horizontally on top. And what 200-560 colliders per km cost in frame rate.
 - AI opponents on a road too narrow for pairs, where the grid goes single file: Lower Swamp Road (`examples/lower_swamp_road.json`, 4.0 m) is the first example that narrow (see "Gravel and narrow roads" below)
 - whether trees typed by TASVEG look right: tall wet eucalypts over tea-tree or rainforest understorey, tea-tree in scrub and buttongrass, myrtle in rainforest, pine in plantations. Some families still borrow other models until batch 2: plantation eucalypt (`euc_young`), she-oak (`wattle`), blackwood (`wattle`, then `myrtle` above 12 m), snow gum (`euc_spread`), banksia (`tea_tree`), the highland conifers (`pine`)
 - whether NVIS-typed trees on the mainland look right: one subgroup per 100 m cell, so a stretch of road takes its family from the dominant vegetation around it, and mallee borrows `euc_young` until it has its own multi-stemmed model. The mainland's dry forests are drawn rough-barked where NVIS calls them open forest with a shrubby understorey, and smooth in grassy forests and woodlands: a rule of thumb, not species data
@@ -29,10 +29,10 @@ Answered at milestone M3 (Grasstree Hill, both layouts; CSP 0.2.11, Content Mana
 
 - **Rendering:** triangle winding and the front-face convention are right. The road, terrain, verges, guard rails, houses and water all draw correctly.
 - **Spawn:** the car spawns on the road with all four wheels loaded, facing along it.
-- **Without CSP:** not supported, by the maintainer's decision (#28). Plain AC wouldn't load multi-layout tracks (it wants a `<track>.kn5`), built the AI grid on every load (4 minutes for 12.8 km), and its AI crashed on our open AI line. The website, the track description and ATTRIBUTION.txt say CSP is required.
+- **Without CSP:** not supported, by the maintainer's decision. Plain AC wouldn't load multi-layout tracks (it wants a `<track>.kn5`), built the AI grid on every load (4 minutes for 12.8 km), and its AI crashed on our open AI line. The website, the track description and ATTRIBUTION.txt say CSP is required.
 - **Tree FX:** the models load, and trees stand on the ground with surface alignment on. A comment line in `trees.txt` made CSP load none (fixed: the list has no comments now).
-- **Frame rate:** at about 2,500 trees per km, Tree FX costs about 60% of the frame rate on a GTX 1660 Ti at 1440p, mostly from the trees near the road. Canopy-model builds keep every real crown (#9), with no distance bands or cap, and are faster: Grasstree Hill 90 / 63 fps (median / slowest) against 68 / 45 for the capped WorldCover build, because the near-road trees halve. WorldCover builds keep the bands and the cap, which counts only the trees within 250 m since the scenery reach went to 600 m.
-- **AI:** AC's AI drives both layouts from the spawn to the finish. It ignores the 130 km/h cap in the line's speed data. After the finish it eases off and comes to rest on the road about 60 m before the end of its line, about 100 m short of the end wall (#30).
+- **Frame rate:** at about 2,500 trees per km, Tree FX costs about 60% of the frame rate on a GTX 1660 Ti at 1440p, mostly from the trees near the road. Canopy-model builds keep every real crown, with no distance bands or cap, and are faster: Grasstree Hill 90 / 63 fps (median / slowest) against 68 / 45 for the capped WorldCover build, because the near-road trees halve. WorldCover builds keep the bands and the cap, which counts only the trees within 250 m since the scenery reach went to 600 m.
+- **AI:** AC's AI drives both layouts from the spawn to the finish. It ignores the 130 km/h cap in the line's speed data. After the finish it eases off and comes to rest on the road about 60 m before the end of its line, about 100 m short of the end wall.
   - The last hint is 0. A hint scales the speed AC allows for the line's curvature, so at 0.05 the AI crawled off the end of its line, and on a straight run-off it barely slowed at all (`docs/ac-format.md`).
   - At M3 the line ended 50 m past the finish gate, and the AI turned round there and left the road.
 - **Timing:** the A→B timer starts and stops at the gates. `race_out.json` records the run as a lap with its time. Laps the AI drove for the player are recorded as time −1 with a cut.
@@ -62,7 +62,7 @@ Lower Swamp Road and Hartz Road have been raced by the AI in game (5 Nov), but n
 
 - **The AI overdrove the gravel (5 Nov), so its friction is lower and it has a pace hint, both untested.** With friction 0.88 and no hints, the AI drove the gravel at near-tarmac pace, with wheel slip as on a seal: about 106 km/h on average over Hartz Road (up to 140), and a median of 93-96 km/h on Lower Swamp Road's one lane (up to 156). In reverse on Lower Swamp Road, all 5 cars jumped the crest the validator warns about, about 1.8 km in, landed on the steep slope beyond it and took about 70 damage each.
   - The maintainer's decisions: GRAVEL friction 0.80 (chosen without a test by hand), and a pace hint of 0.8 over each unsealed run up to the finish (`docs/ac-format.md`).
-  - **The hint may not slow the AI over the crest.** An earlier test (#17, #18) showed a hint scales AC's corner speed: on a straight run-off, 0.05 to 0.2 did nothing, and only 0 stopped a car. So 0.8 may do nothing on a straight, and the crest on Lower Swamp Road is on one. The lower friction is the other lever.
+  - **The hint may not slow the AI over the crest.** An earlier test at the finish showed a hint scales AC's corner speed: on a straight run-off, 0.05 to 0.2 did nothing, and only 0 stopped a car. So 0.8 may do nothing on a straight, and the crest on Lower Swamp Road is on one. The lower friction is the other lever.
   - **To check in game (the AI re-test):** Lower Swamp Road in reverse, over the crest about 1.8 km in: whether the cars still leave the ground there, and still take damage. Then the gravel speeds on both roads against those above, and that nothing breaks: no car off the narrow road or stuck, the run-off stop as before, the grid and start as before.
 - **To check in game** (CSP 0.2.11):
   - **Lower Swamp Road** (`examples/lower_swamp_road.json`, both layouts): one lane at 4.0 m, sealed for 1.6 km and then unsealed for 5.2 km.
@@ -90,17 +90,17 @@ Lower Swamp Road and Hartz Road have been raced by the AI in game (5 Nov), but n
 ## Racing line
 
 The AI line runs out-in-out over the whole road (`core/racing_line.py`, 4 Nov). Static checks pass on Grasstree Hill (both layouts) and Brinktop Road. To check in game, against the same track built from main:
-- **Running wide at speed (#50):** in game on 4-5 Nov, AC's AI ran 1.0-1.3 m outside the line at 127 km/h. Where the line came within 1.2 m of the edge at that speed, cars left the road: Grasstree Hill forward at 5.95-6.03 km (alone it crashed out; in an 8-car race every car put two tyres off and 4 crashed out) and Brinktop Road at about 5.6 km (two tyres off for 3 cars of 8).
+- **Running wide at speed:** in game on 4-5 Nov, AC's AI ran 1.0-1.3 m outside the line at 127 km/h. Where the line came within 1.2 m of the edge at that speed, cars left the road: Grasstree Hill forward at 5.95-6.03 km (alone it crashed out; in an 8-car race every car put two tyres off and 4 crashed out) and Brinktop Road at about 5.6 km (two tyres off for 3 cars of 8).
   - The fix: the line's margin from the edges grows with its planned speed, from 1.2 m at 60 km/h to 2.5 m at 120 km/h, and its planned braking shares the grip with cornering, so it slows before a bend tightens (`docs/ac-format.md`). Through Grasstree Hill's bend, at 5,926 m: 2.52 m from the edge at 117 km/h, where it was 1.20 m at 127 km/h. At Brinktop Road's 5,619 m: 2.50 m at 130 km/h, where it was 1.20 m.
-  - **Re-tested in game (5 Nov, #52):** fixed. Grasstree Hill forward alone: no tyre off; 8 cars: all finished, none off in the bend. Brinktop Road at 5.6 km: no tyre off. AC doesn't use the planned speeds (`docs/ac-format.md`): the wider margin did it.
+  - **Re-tested in game (5 Nov):** fixed. Grasstree Hill forward alone: no tyre off; 8 cars: all finished, none off in the bend. Brinktop Road at 5.6 km: no tyre off. AC doesn't use the planned speeds (`docs/ac-format.md`): the wider margin did it.
   - **A new weak spot, Brinktop Road's kink at 9.95-10.0 km,** taken at 190-200 km/h: 5 of 8 cars put 2-4 tyres off (no damage, all finished). The margin stopped at 2.5 m because the planned speed stops at 130 km/h. It now follows the speed the cars may reach, up to 3.3 m at 200 km/h, and the line there keeps 3.05 m from the edge.
   - **To check in game:** Brinktop Road's kink with 8 cars, and Grasstree Hill forward's 6 km bend with 8 cars (unchanged by the last step, as a check).
   - The cost: the planned run is about 2% quicker than the centreline line's on Grasstree Hill, where it was 3%. On a 4 m road (Lower Swamp Road) the line keeps to the middle above about 97 km/h.
   - If cars still run wide, the next step is a limit on how fast the line may move across the road at speed.
-- **AI lap time:** the AI's time from gate to gate, both layouts. Its planned run is about 2% quicker on Grasstree Hill (381.5 s against 389.0 s), but AC sets its own speed. In game, before #50's fix, the racing line's cars were about 7% quicker than the centreline line's (reverse: 332 s alone against 351.3 s).
+- **AI lap time:** the AI's time from gate to gate, both layouts. Its planned run is about 2% quicker on Grasstree Hill (381.5 s against 389.0 s), but AC sets its own speed. In game, before the fix for running wide, the racing line's cars were about 7% quicker than the centreline line's (reverse: 332 s alone against 351.3 s).
 - **On the road:** the AI stays on the road through the tight bends in both layouts, and doesn't run wide on the exits. The line now comes within 1.2 m of the edge only at or below 60 km/h. The probe (`harness/ac_harness.py probe-points`) teleports a car onto the line every 200 m and checks all four wheels.
 - **8-car races:** the cars now share one line that crosses the whole road. Whether they still race clean, side by side and passing, and get away from the grid in pairs as before.
-- **Run-off:** as before (#30), every car should come to rest on the road about 60 m before the end of the line.
+- **Run-off:** as before, every car should come to rest on the road about 60 m before the end of the line.
 - **Spawns:** the grid and the hot-lap spawn are unchanged; the line stays on the centreline over them, and the AI should leave the grid as before.
 - **Track length:** `log.txt`'s `TRACK LENGTH` on Grasstree Hill and Lyell Highway against the line's real length (the last cumulative length in `fast_lane.ai`; Grasstree Hill forward: 12,737 m). With points 5 m apart, Lyell should read about 1.3% long, against 32.8% with 1 m points.
 
@@ -142,7 +142,7 @@ Trees and buildings now stand within 600 m of the road (`core.reach`); they stop
 
 In Tasmania the terrain is split into ground classes from TASVEG, each with its own ground texture and Grass FX configuration, and Grass FX draws our own atlas (`docs/ac-format.md`, "Grass FX"). Every number is a starting point.
 
-- **In game, 9 Nov 2026** (#59; CSP 0.2.11, Grass FX Medium, interleaved with main in one session against #58's setup):
+- **In game, 9 Nov 2026** (CSP 0.2.11, Grass FX Medium, interleaved with main in one session, set up as for main's frame-rate baseline):
   - **Frame rate:** Lyell Highway 1.5% faster than main (its forest, 63% of the ground within 250 m, no longer grows grass); Grasstree Hill 5.4% slower, just over its 5% budget, worst at 9.8-12.5 km, up to 11% at single points. The slowest 10% was within budget on both.
   - **Looks, kept:** buttongrass moorland (straw and olive-tan tussocks, the verge still mown green), the brown forest floor, grassy woodland and regrowth reading differently, canopy-dark far hillsides, the sandy band on lake shores. Pasture and town lawn looked almost as on main.
   - **Problems:** a straight-edged brown block on the paddock at Grasstree Hill's 11.5 km, and faint rows of tussocks on Lyell's moorland plain at 15.3 km. The heights table was left for a viewpoint with the guide post in frame.
@@ -167,7 +167,7 @@ In Tasmania the terrain is split into ground classes from TASVEG, each with its 
 
 - **Answered in game (4 Nov, Grasstree Hill, with towers then allowed 700 m out):**
   - The wires sag sensibly and cross the road 22-57 m above it.
-  - Towers beyond the 300 m terrain stood in the sky. Supports are now built only on the terrain, and since #34 that reaches 700 m, so Grasstree Hill's two lines are back: 8 towers, the farthest 650 m out.
+  - Towers beyond the 300 m terrain stood in the sky. Supports are now built only on the terrain, and that has since been widened to 700 m, so Grasstree Hill's two lines are back: 8 towers, the farthest 650 m out.
   - CSP's `[WIND] DYNAMIC_CABLES` redrew the wires about 8 times thicker, so it isn't used.
 - **Still to check in game:**
   - towers turned along their line, seen from near;
