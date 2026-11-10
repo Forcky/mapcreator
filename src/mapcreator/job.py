@@ -37,6 +37,12 @@ class Layouts(StrEnum):
     BOTH = "both"
 
 
+class Junctions(StrEnum):
+    """What becomes of the side roads that meet the route."""
+    CLOSED = "closed"  # found, and kept clear of roadside objects (the closures to come build on them)
+    NONE = "none"  # left out: the road is built as it was before junctions were found
+
+
 class Waypoint(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -69,6 +75,8 @@ class Job(BaseModel):
     # Build even with a bend tighter than validation's 5 m (down to its 2.5 m floor): for a road that really
     # is that tight, after the person who drew it has been told where the bend is.
     allow_tight_bends: bool = False
+    # Side-road junctions (`core.junctions`): "none" builds without them, as before, for a comparison build.
+    junctions: Junctions = Junctions.CLOSED
 
     @field_validator("waypoints")
     @classmethod

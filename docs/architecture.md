@@ -5,17 +5,19 @@
 Every stage reads files and writes files, so each one can be tested and rerun on its own. The CLI and the hosted service use the same `job.json`.
 
 ```
-job.json (waypoints, width option, layouts)
+job.json (waypoints, width option, layouts, junctions)
    │
-route     01_route     snapped OSM centreline and its ways' tags (roads from the local OSM index)
+route     01_route     snapped OSM centreline and its ways' tags (roads from the local OSM index); the side-road
+                       junctions and roundabouts along it (junctions.json)
 profile   02_profile   DEM sampling, smoothing with a grade-change limit and grade cap, bridge dips filled
 section   03_section   sealed or unsealed (OSM surface, short runs merged), width (OSM width → lanes × lane width →
                        narrow → class default, narrower on gravel; +15% / +30%), camber from the DEM (limited by
                        width), crown
 mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, adaptive terrain corridor (in ground classes from
-                       TASVEG in Tasmania, for Grass FX), guard rails, AC dummies
-scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), typed by TASVEG in Tasmania, trunk colliders, buildings from footprints
-track     05_track     numpy KN5 writer, DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,
+                       TASVEG in Tasmania, for Grass FX), guard rails and furniture (none in side roads' mouths), AC
+                       dummies
+scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), typed by TASVEG in Tasmania, trunk colliders, buildings from footprints (none on a side road's first 100 m)
+track     05_track     numpy KN5 writer (timing gates clear of side roads' mouths), DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,
                        centreline.geojson (ODbL), the zip
 validate  06_validate  static checks (report.json); the in-game harness is for development only
 ```
@@ -41,8 +43,8 @@ Geofabrik extract (.osm.pbf) ──build once (pyosmium)──▶ index (SQLite)
 ```
 src/mapcreator/
   core/        centreline, profile, section, mesh, scene, scenery, sprites, textures, roadside, kn5, ai_line,
-               layout, package, validate, grass and grassfx (data-agnostic: arrays and geometry in, meshes and
-               files out)
+               layout, package, validate, grass, grassfx and junctions (data-agnostic: arrays and geometry in,
+               meshes and files out)
   providers/   one package per source; each declares its licence and attribution
                base, raster (windowed reads and tile cache)
                tas_list/: 2 m DEM, canopy height model, building footprints (Tasmania)

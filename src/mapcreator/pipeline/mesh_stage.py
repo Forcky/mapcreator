@@ -14,7 +14,7 @@ from dataclasses import asdict
 import numpy as np
 
 from mapcreator.config import Settings
-from mapcreator.core import furniture, grass, mesh, reach, roadside
+from mapcreator.core import furniture, grass, junctions, mesh, reach, roadside
 from mapcreator.core import water as water_core
 from mapcreator.core.scene import LocalFrame, Material, Scene
 from mapcreator.job import Job
@@ -111,6 +111,11 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, ground, frame, ground=gmap.materials,
                                       classes=grass.MESHES, fold_skirt=True)
     meshes += water_core.meshes(water, frame)
+    # Side roads' mouths (`core.junctions`): no guard rail, guide post, curve marker or sign stands in one.
+    found = route_stage.junctions(work, job)
+    mouths = junctions.masks(junctions.mouths(found, c["s"], c["xy"], c["heading"], sec["half_left"],
+                                              sec["half_right"]), c["s"]) if found else None
+    junction_stats = {"found": len(found)} if found else None
     rails, rail_stats = [], {"skipped": "DEM too coarse to place rails"}
     fine = c["fine"] if "fine" in c else np.full(len(c["s"]), getattr(dem, "resolution_m", 2.0) <= FINE_DEM_M)
     no_rail = np.zeros(len(c["s"]), dtype=bool)
@@ -118,6 +123,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     if fine.any():  # only where the DEM shows real drops: a coarse one shows hillsides as cliffs
         masks = roadside.rail_masks(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"], sec["half_right"],
                                     sec["slope_left"], sec["slope_right"], dem.sample, allowed=fine)
+        if mouths is not None:
+            masks, junction_stats["rail_m_removed"] = roadside.clear_mouths(masks, mouths, c["s"])
         rails, rail_stats = roadside.guard_rails(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"],
                                                  sec["half_right"], sec["slope_left"], sec["slope_right"],
                                                  dem.sample, frame, allowed=fine, masks=masks)
@@ -127,7 +134,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     furn, furn_stats, atlas = furniture.furniture(
         c["s"], c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
         sec["slope_left"], sec["slope_right"], sec["superelevation"], limits, frame, masks["L"], masks["R"],
-        unsealed=sec["unsealed"] if "unsealed" in sec else None)
+        unsealed=sec["unsealed"] if "unsealed" in sec else None,
+        mouth_l=mouths["L"] if mouths is not None else None, mouth_r=mouths["R"] if mouths is not None else None)
     meshes += furn
     textures = {}
     if furn:
@@ -179,4 +187,4 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "furniture": furn_stats,
         "water": water_summary,
         "ground": ground_summary,
-    }
+    } | ({"junctions": junction_stats} if junction_stats is not None else {})

@@ -78,6 +78,7 @@ A job with `"layouts": "both"` produces:
 - **Logic dummies:**
   - `AC_AB_START_L/R` and `AC_AB_FINISH_L/R` sit 0.5 m outside each road edge. L is left of the driving direction.
   - The start gate is 50 m from the layout's start. The finish gate leaves a run-off of real road after it: 250 m, or 15% of a short route, never under 50 m. With only 50 m, AC's AI crossed the finish, reached the end of its line, turned round and left the road (M3).
+  - A gate that would stand in a side road's mouth moves a few metres along the road to clear it ("Side-road junctions" below).
   - **Grid:** `AC_PIT_k` and `AC_START_k` share each grid spot (`layout.grid`), up to 8 per layout.
     - Spot 0 is on the centreline 8 m before the start gate.
     - Behind it come pairs 8 m apart, 2 m either side of the centreline, where both half-widths are at least 3 m. Otherwise single file.
@@ -280,7 +281,7 @@ The atlas, `extension/grass_fx/mapcreator.dds` (`core/grassfx.py`): 8 x 4 cells 
 
 ## Validation
 
-`mapcreator validate` reads every file back and checks the rules above, including measured heights of spawns and AI points against the actual road triangles. The road is every `1ROAD` and `1GRAVEL` mesh: spawns, the AI line, and the tree and power colliders' clearance are all measured against both. The in-game checks (does it load, are the wheels on the ground, can the AI drive it) live in `harness/`.
+`mapcreator validate` reads every file back and checks the rules above, including measured heights of spawns and AI points against the actual road triangles. The road is every `1ROAD` and `1GRAVEL` mesh: spawns, the AI line, and the tree and power colliders' clearance are all measured against both. The in-game checks (does it load, are the wheels on the ground, can the AI drive it) live in `harness/`. With side-road junctions, it also lists them and checks nothing stands on them ("Side-road junctions" below).
 
 For the AI line it also checks:
 - distances strictly increase, and each spawn faces along the line;
@@ -333,6 +334,7 @@ Built in the mesh stage, visual only, in `FURNITURE_n` meshes and a texture atla
   - Spacing follows Main Roads WA's "Design of Guide Posts" (citing AS 1742.2-2009 clause 4.2.4.4): 150 m on straights. On curves it's closer, and closer still on the outside: 6/12 m (outside/inside) below 100 m radius, 10/20 m to 200 m, 15/30 m to 300 m, 20/40 m to 400 m, then 40, 50, 60 and 90 m both sides out to 2,000 m.
   - The spacing is checked at every station, so posts close up as soon as a curve begins.
   - None where a guard rail runs, and none on unsealed road.
+  - None in a side road's mouth: a post due there goes up just past it ("Side-road junctions" below). A CAM there is left out, and a speed sign moves to the nearest place clear of it.
 - **Curve alignment markers** (CAMs: black chevron on yellow, 0.45 x 0.6 m, 1.2 m up, 2 m beyond the edge) go on the outside of a bend whose advisory speed is at least 15 km/h below the speed limit and no more than 60 km/h.
   - Advisory speed is v = sqrt(127 R (e + 0.35)) km/h. The limit comes from OSM; where it's unknown, 80 km/h. (At 100 km/h and with no 60 km/h ceiling, the Esperance Coast Road got 723 CAMs over 20 km.)
   - Three to six per bend, spaced at twice the outside guide post spacing (12-40 m), starting one spacing before the bend and ending one after.
@@ -345,3 +347,49 @@ Built in the mesh stage, visual only, in `FURNITURE_n` meshes and a texture atla
   - One where OSM's `maxspeed` changes between two known values.
   - One near each layout's start (70 m in), where the limit there is known.
   - Unknown or non-km/h limits make no sign. The numerals use Pillow's built-in Aileron font (CC0).
+
+## Side-road junctions (`core/junctions.py`)
+
+The route stage finds the real side roads that meet the route and writes them to `01_route/junctions.json` (below). Nothing is drawn for them yet: guard rails, roadside furniture, trees, buildings and power-line supports are kept out of their mouths, and the timing gates move clear of them. The side roads' stubs and closures are to build on the file. A job with `"junctions": "none"` builds without any of it, exactly as before (`Job.junctions`, `closed` by default, and left out of the track id while it holds its default).
+
+- **Which side roads count** (the maintainer's decision, 10 Nov 2026). At each node of the route, a way leaving it is a junction when:
+  - its way is a class the router uses (`overpass.DRIVABLE`: motorway to living_street, `road` and the links). The road data holds no other kind, so driveways, other service roads and tracks never count;
+  - it isn't private: the most specific of `motor_vehicle`, `vehicle` and `access` that's tagged isn't `private` or `no`;
+  - it leaves at least 15° off the mainline, against both the road ahead and the road behind, measured to its point 15 m out;
+  - it's clear of the rest of the route. It's followed until it comes within 10 m of another part of the route (one where the road distance is more than 1.4 times the straight distance, plus 5 m), and one that does so within 15 m isn't a junction;
+  - it has no `bridge`, `tunnel` or `layer` other than 0 in its first 30 m: a road passing over or under isn't a junction.
+- **How far:** each is followed out to 100 m, the stubs' length to come. It follows its own way, then, at the way's end, the straightest way that turns less than 60°. It stops sooner at a dead end, at a branch, or where it meets the route. A side road at the route's very first or last point isn't one: the end wall closes it.
+- **Closure level**, for the closures to come: `limited` where the most specific access tag is `permit`, `forestry`, `agricultural`, `destination`, `delivery`, `customers` or `military`; else `major` (motorway, trunk, primary, secondary, tertiary and their links) or `minor` (unclassified, residential, living_street, road).
+- **On the examples:** Grasstree Hill 8, Brinktop Road 18, Esperance Coast Road 10, Lower Swamp Road 3, Lyell Highway 4 (Burns Dam Road, `access=permit`, is limited) and Mount Dandenong Tourist Road 73.
+- **Roundabouts** the route drives or touches (`junction=roundabout` or `circular`) are recorded with their ring and exits, and built as before: the route drives only its arc of the ring, its exits aren't junctions, and nothing is cleared at them. The validator names them. None of the examples passes one.
+- **The mouth** of a junction is the stretch of the mainline where the side road's carriageway crosses the band from the road's edge to 3 m beyond it (`MOUTH_BAND_M`: guide posts stand at 0.8 m, rails at 1 m, signs at 2 m), plus 5 m along the road either side (`MOUTH_MARGIN_M`). The carriageway is its line as `junctions.json` has it, at its tagged or class-default width as mapped (`section.width_from_tags`). In it:
+  - no guard rail or rail collider. The rail mask is cut after `rail_mask` has closed its gaps and extended its runs, so a mouth stays open, and a piece left shorter than 24 m beside it goes too;
+  - no guide post (one due there goes up at the first station past it), no CAM (left out) and no speed sign (it moves to the nearest station clear of the mouth);
+  - no timing gate (below).
+- **Along the side road**, for its first 100 m and on its own side of the mainline, the mainline's own clearances apply from the side road's edge: no tree within 4 m (the 2 m verge and 2 m more), and so no trunk collider; no building within 2 m; no power-line support whose base comes within 0.5 m (it's dropped with its spans, as one on the road is).
+  - They're taken out after everything else is chosen, and every other tree and building keeps its random draws, so the rest of the scenery is as without junctions. Trees also stay out of the 3 m round a building taken out, as round every building.
+- **What doesn't change:** the road, the verges and the terrain, the AI line and the racing line, `ai_hints.ini`, the grid and the spawns. On the six examples every road, verge, terrain and wall mesh, every `fast_lane.ai` and `ai_hints.ini`, and `centreline.geojson` are byte for byte as without junctions.
+- **Timing gates:** a gate whose place falls in a mouth moves to the nearest place clear of every mouth, 0.5 m past its end, by at most 40 m (`layout.gate_distances`). A start gate moved back stays at least 4 m ahead of the grid's front spot (so at 46 m or more), and the finish gate leaves at least 50 m of run-off. With nowhere clear, it stays, and the validator warns. The grid, the hot-lap spawn, the AI line and its hints keep to the gate's usual place, so the timed length changes by those few metres. No gate moves on the examples: the nearest mouth to a gate is Percy Street's on Brinktop Road, from 58 m, 8 m past its start gate.
+- **Validation:** a warning listing the junctions (name, class, closure level and where), and checks that no guard rail or rail collider, guide post or sign has a vertex on a side road's carriageway within 3 m of the road's edge, and no tree or power collider has one on a side road's carriageway in its first 100 m. A timing gate's end on a mouth's carriageway is a warning: the stubs to come would make it a failure ("gate spans the road").
+
+### `01_route/junctions.json`
+
+Coordinates are in the region's metric CRS (`crs`), as `route.npz`'s are, rounded to the centimetre; distances in metres. A new field may be added at any time; a change to an existing field's meaning raises `version`.
+
+- `version`: 1. `crs`: e.g. `EPSG:28355`.
+- `rule`: the rule's numbers as built: `leg_m` (100), `min_angle_deg` (15), `angle_at_m` (15), `min_leg_m` (15), `grade_free_m` (30), and the `classes`, `private` and `limited_access` values.
+- `junctions`, in order along the route, each:
+  - `id`: its index; `node`: the OSM node where it leaves the route;
+  - `at_m`: where, along `route.npz`'s polyline from its start. The later stages find the junction on the smoothed centreline by projecting `xy` onto it, with `at_m` only breaking a tie where the road passes the node twice (`junctions.mouths`): the smoothed centreline's stations drift from the routed line's (67 m by 53 km on Lyell Highway);
+  - `xy`: the node; `lonlat`: the same in longitude and latitude, to find it on a map;
+  - `side`: `left` or `right` of the route's direction (the forward layout);
+  - `angle_deg`: its direction to its point 15 m out, against the route's direction there (the bisector of the road ahead and behind), positive to the left; `off_mainline_deg`: the smaller angle to the road ahead or the road behind, which the 15° rule reads; `route_turn_deg`: how much the route itself turns there;
+  - `way_id`: its first way; `way_ids`: every way it was followed along;
+  - `highway`, `name`, `closure` (`major`, `minor` or `limited`) and `access` (the most specific access tag, or null);
+  - `tags`: those of `highway`, `name`, `ref`, `surface`, `lanes`, `width`, `narrow`, `lane_markings`, `oneway`, `maxspeed`, `access`, `motor_vehicle`, `vehicle` and `junction` its first way has;
+  - `surface_class`: `sealed`, `unsealed`, or null where its `surface` gives neither;
+  - `width_m` and `width_source`: its carriageway from `section.width_from_tags`, as mapped (before the job's width option); `unsealed` widths where `surface_class` is unsealed;
+  - `length_m`: how far it was followed; `ends`: why it stopped: `length` (100 m), `dead_end`, `branches` (no way on within 60°), `joins` (only ways already followed go on) or `meets_route`;
+  - `line`: its centreline from the junction node outwards, `length_m` long.
+- `roundabouts`, each: `id`, `way_ids` (the ring's ways), `highway`, `name`, `tags`, `ring` (its nodes in order round it, the first repeated at the end when it closes), `closed`, `centre`, `radius_m` (the nodes' mean distance from their centre), `on_route`, `route_from_m` and `route_to_m` (where the route is on it, as `at_m`), and `exits`: each drivable, public way leaving the ring that isn't the route, with `node`, `xy`, `on_route` (whether it leaves the ring where the route is on it) and the junctions' fields from `way_id` to `line`.
+- `skipped`: the side roads that leave the route but aren't junctions, for checking the rule: `node`, `at_m`, `xy`, `side`, `angle_deg`, `off_mainline_deg`, `way_id`, `highway`, `name`, and `reason`: `class`, `private`, `grade_separated`, `roundabout` (an entry or exit of a roundabout the route drives), `angle` or `meets_route`. On the examples only Brinktop Road has any: Bridge Street behind its start and the Tasman Highway beyond its finish, each the road carrying straight on past the route's end (`angle`).

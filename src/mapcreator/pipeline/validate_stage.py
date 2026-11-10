@@ -8,14 +8,15 @@ where the bend is, and whether they can ask for the road to be built anyway.
 from __future__ import annotations
 
 import numpy as np
+import shapely
 from scipy.spatial import cKDTree
 
 from mapcreator.config import Settings
-from mapcreator.core import ai_line, validate
+from mapcreator.core import ai_line, junctions, validate
 from mapcreator.core.layout import AI_END_SHORT_M, RoadModel, layouts_for
 from mapcreator.core.scene import Scene
-from mapcreator.job import Job
-from mapcreator.pipeline import mesh_stage, profile_stage, section_stage, track_stage
+from mapcreator.job import Job, Junctions
+from mapcreator.pipeline import mesh_stage, profile_stage, route_stage, section_stage, track_stage
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.regions import job_region
 
@@ -74,9 +75,49 @@ def road_radius(job: Job, work: WorkDir) -> dict[str, tuple[np.ndarray, np.ndarr
     return out
 
 
+def _roundabouts(job: Job, work: WorkDir) -> list[str]:
+    """The roundabouts the route passes, by name, as the route stage recorded them."""
+    path = work.root / route_stage.STAGE / route_stage.JUNCTIONS
+    if job.junctions != Junctions.CLOSED or not path.exists():
+        return []
+    rings = work.read_json(route_stage.STAGE, route_stage.JUNCTIONS).get("roundabouts", [])
+    return [f"{r.get('name') or 'unnamed'}, {r['radius_m']:.0f} m radius" for r in rings if r.get("on_route")]
+
+
+def junction_checks(job: Job, work: WorkDir) -> list[validate.JunctionCheck]:
+    """The side roads' junctions the route stage found, in AC x/z, for the validator: each mouth's carriageway out to
+    MOUTH_BAND_M beyond the road's edge, and the side road's carriageway out to its end."""
+    found = route_stage.junctions(work, job)
+    if not found:
+        return []
+    frame = Scene.load(work.root / mesh_stage.STAGE).frame
+    c = np.load(work.root / profile_stage.STAGE / "centreline.npz")
+    sec = np.load(work.root / section_stage.STAGE / "section.npz")
+    s, xy = c["s"], c["xy"]
+
+    def to_ac(geom):
+        return shapely.transform(geom, lambda p: frame.to_ac(p[:, 0], p[:, 1], np.zeros(len(p)))[:, [0, 2]])
+
+    out = []
+    for m in junctions.mouths(found, s, xy, c["heading"], sec["half_left"], sec["half_right"]):
+        near = np.abs(s - m.station_m) <= m.s1 - m.s0 + 30.0
+        edge = float(sec["half_left" if m.side == "L" else "half_right"][near].max())
+        j = m.junction
+        label = (f"{j.get('name') or 'an unnamed road'} ({j['highway']}, {j['closure']}) at "
+                 f"{m.station_m / 1000:.2f} km on the {j['side']}")
+        mouth = m.corridor().intersection(junctions.side_band(m, s, xy, edge + junctions.MOUTH_BAND_M))
+        road = m.corridor().intersection(junctions.side_band(m, s, xy))
+        out.append(validate.JunctionCheck(label, to_ac(mouth), to_ac(road)))
+    return out
+
+
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     rep = validate.track_folder(work.root / track_stage.STAGE / job.track_id, allow_tight_bends=job.allow_tight_bends,
-                                road_radius=road_radius(job, work))
+                                road_radius=road_radius(job, work), junctions=junction_checks(job, work))
+    rings = _roundabouts(job, work)
+    if rings:
+        rep.warnings.append(f"The route passes {len(rings)} roundabout{'s' if len(rings) != 1 else ''} "
+                            f"({', '.join(rings)}): recorded in junctions.json, and built as before.")
     work.write_json(STAGE, "report.json", {"ok": rep.ok, "passed": rep.passed, "failed": rep.failed,
                                            "route_failed": rep.route_failed, "warnings": rep.warnings})
     if rep.failed:

@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+import shapely
 from scipy.interpolate import CubicSpline
 from scipy.ndimage import minimum_filter1d, uniform_filter1d
 from scipy.spatial import cKDTree
@@ -53,6 +54,21 @@ MIN_RADIUS_M = 5.0  # tighter than any real hairpin: usually a routing artefact
 # sqrt(MU * G * r), above the 5 m/s the speed check wants.
 FLOOR_RADIUS_M = 2.5
 MIN_AI_SPEED = 5.0
+
+
+@dataclass(frozen=True)
+class JunctionCheck:
+    """A side road's junction (`core.junctions`), as the checks see it, in AC x/z."""
+    label: str  # how the report names it
+    mouth: shapely.Geometry  # its carriageway beside the road, out to MOUTH_BAND_M beyond the edge
+    road: shapely.Geometry  # its carriageway out to its end (100 m)
+
+
+# What must stand clear of side roads, and where: (what, mesh name prefixes, the JunctionCheck area).
+JUNCTION_CLEAR = (("guard rails", ("RAIL_", "1WALL_RAIL_"), "mouth"),
+                  ("guide posts and signs", ("FURNITURE_",), "mouth"),
+                  ("tree colliders", (TRUNK_MESH,), "road"),
+                  ("power colliders", (POWER_COLLIDER,), "road"))
 
 
 @dataclass(frozen=True)
@@ -480,11 +496,47 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
         rep.check(float(fwd @ ai_dir) > 0.8, f"{label}: {name} faces the AI line's direction")
 
 
+def junction_checks(rep: Report, label: str, data: dict, dummies: dict, junctions: list[JunctionCheck], *,
+                    meshes: bool = True) -> None:
+    """Side roads' junctions: a warning listing them, then (`meshes`) checks that no guard rail, guide post or sign
+    stands in a mouth and no tree or power collider on a side road, and a warning for a timing gate end that stands
+    in a mouth (the track stage moves gates clear where it can: `layout.gate_distances`)."""
+    if not junctions:
+        return
+    if meshes:
+        rep.warnings.append(f"{len(junctions)} side-road junction{'s' if len(junctions) != 1 else ''} found and kept "
+                            "clear of guard rails, guide posts, signs, trees, buildings and power poles: "
+                            + "; ".join(j.label for j in junctions))
+        for what, prefixes, area in JUNCTION_CLEAR:
+            found = [n for n in data["nodes"] if n["class"] == 2 and n["name"].startswith(prefixes)]
+            if not found:
+                continue
+            xz = np.concatenate([m["vertices"]["pos"][:, [0, 2]] for m in found]).astype(float)
+            standing = [j.label for j in junctions
+                        if shapely.contains_xy(getattr(j, area), xz[:, 0], xz[:, 1]).any()]
+            where = "in a side road's mouth" if area == "mouth" else "on a side road"
+            rep.check(not standing, f"{label}: no {what} {where}" + (f" ({'; '.join(standing[:5])})" if standing else ""))
+    stuck = []
+    for gate in ("AC_AB_START", "AC_AB_FINISH"):
+        for side in "LR":
+            d = dummies.get(f"{gate}_{side}")
+            if d is None:
+                continue
+            x, _, z = d["matrix"][3, :3]
+            stuck += [f"{gate}_{side} in {j.label}" for j in junctions if shapely.contains_xy(j.mouth, x, z)]
+    if stuck:
+        rep.warnings.append(f"{label}: a timing gate stands in a side road's mouth, with nowhere clear to move it to: "
+                            + "; ".join(stuck))
+    else:
+        rep.passed.append(f"{label}: timing gates clear of side roads' mouths")
+
+
 def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
-                 road_radius: dict[str, tuple[np.ndarray, np.ndarray]] | None = None) -> Report:
+                 road_radius: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+                 junctions: list[JunctionCheck] | None = None) -> Report:
     """`road_radius`: by layout label ("main", "forward", "reverse"), the centreline's radius every metre over the
     layout's AI line, as (AC x/z points, radii). The validate stage passes it from the profile, so a bend is judged
-    as main's 1 m centreline line judged it."""
+    as main's 1 m centreline line judged it. `junctions`: the side roads' junctions, for `junction_checks`."""
     rep = Report()
     tid = track_dir.name
     kn5_materials: set[str] = set()
@@ -535,6 +587,8 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
             merged = {"nodes": [n for d in datas for n in d["nodes"]], "materials": datas[0]["materials"]}
             _layout_checks(rep, label, merged, all_dummies, base / "ai" / "fast_lane.ai",
                            allow_tight_bends=allow_tight_bends, road_radius=(road_radius or {}).get(label))
+            # Every layout's KN5 holds the same meshes; only the gates differ.
+            junction_checks(rep, label, merged, all_dummies, junctions or [], meshes=lay == layouts[0])
     for rel in ("ATTRIBUTION.txt", "centreline.geojson", "extension/ext_config.ini"):
         rep.check((track_dir / rel).exists(), f"{rel} present")
     if (track_dir / "extension" / "ext_config.ini").exists() and kn5_materials:

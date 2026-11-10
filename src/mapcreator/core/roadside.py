@@ -70,6 +70,27 @@ def rail_masks(s, xy, z, heading, half_l, half_r, slope_l, slope_r, dem_sample,
     return out
 
 
+def clear_mouths(masks: dict[str, np.ndarray], mouths: dict[str, np.ndarray], s: np.ndarray
+                 ) -> tuple[dict[str, np.ndarray], dict]:
+    """The rail masks with each side's side-road mouths cut out (`core.junctions.masks`), and the metres taken out.
+
+    Cut after `rail_mask` has closed gaps and extended its runs, so a mouth stays open: a real rail ends at a junction.
+    A piece left shorter than MIN_RUN_M goes too, rather than stand alone beside the mouth.
+    """
+    step = float(s[1] - s[0]) if len(s) > 1 else 1.0
+    out, removed = {}, {}
+    for side, mask in masks.items():
+        mouth = mouths[side]
+        kept = mask & ~mouth
+        for i0, i1 in _runs(kept):
+            cut = (i0 > 0 and mouth[i0 - 1]) or (i1 + 1 < len(mouth) and mouth[i1 + 1])
+            if cut and (i1 - i0 + 1) * step < MIN_RUN_M:
+                kept[i0:i1 + 1] = False
+        out[side] = kept
+        removed[side] = round(float((mask & ~kept).sum() * step), 1)
+    return out, removed
+
+
 def guard_rails(s, xy, z, heading, half_l, half_r, slope_l, slope_r, dem_sample, frame: LocalFrame,
                 allowed: np.ndarray | None = None, masks: dict | None = None) -> tuple[list[Mesh], dict]:
     nrm = np.column_stack([-np.sin(heading), np.cos(heading)])

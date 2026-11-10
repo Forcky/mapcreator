@@ -162,10 +162,12 @@ class Plan:
     supports: list[Support] = field(default_factory=list)
     spans: list[Span] = field(default_factory=list)
     misplaced: int = 0  # supports dropped for standing on the road
+    in_junctions: int | None = None  # supports dropped for standing on a side road (None: none were looked for)
 
     def summary(self) -> dict:
         lengths = [float(np.hypot(*(self.supports[s.b].xy - self.supports[s.a].xy))) for s in self.spans]
-        return {
+        junction = {} if self.in_junctions is None else {"side_road_supports": self.in_junctions}
+        return junction | {
             "lines": len({s.ref for s in self.spans}),
             "towers": sum(s.design == "tower" for s in self.supports),
             "poles": sum(s.design == "pole" for s in self.supports),
@@ -197,11 +199,17 @@ def footprint_m(template: str) -> float:
 
 
 def plan(lines: list[Line], centre_xy: np.ndarray, road_half_m: float, *,
-         reach_m: float = SUPPORT_REACH_M) -> Plan:
+         reach_m: float = SUPPORT_REACH_M, blocked: shapely.Geometry | None = None) -> Plan:
     """The supports and spans to build: spans whose supports' bases stand within `reach_m` of the centreline and
-    off the road. Supports that lines share are merged, and so are duplicate spans."""
+    off the road. Supports that lines share are merged, and so are duplicate spans.
+
+    `blocked` is more ground no support's base may reach onto (side roads, `core.junctions.zone`): a support there is
+    dropped with its spans, as one on the road is, and counted in `Plan.in_junctions`."""
     tree = cKDTree(_densified(centre_xy, 2.0))
     out = Plan()
+    if blocked is not None:
+        shapely.prepare(blocked)
+        out.in_junctions = 0
     keys: dict[tuple[int, int], int] = {}
     spans: dict[tuple[int, int], Span] = {}
     rank = {name: i for i, name in enumerate(TEMPLATES)}
@@ -215,7 +223,12 @@ def plan(lines: list[Line], centre_xy: np.ndarray, road_half_m: float, *,
         # A support whose base would reach onto the road is misplaced (a mapping error): drop it and its spans.
         base = np.array([footprint_m(t) for t in templates])
         misplaced = d < road_half_m + ON_ROAD_MARGIN_M + base
-        ok = (d + base <= reach_m) & ~misplaced
+        side_road = np.zeros(len(line.xy), bool)
+        if blocked is not None:
+            side_road = (shapely.distance(blocked, shapely.points(line.xy)) < base) & ~misplaced
+            side_road &= d + base <= reach_m
+            out.in_junctions += int(side_road.sum())
+        ok = (d + base <= reach_m) & ~misplaced & ~side_road
         keep = ok[:-1] & ok[1:] & (np.hypot(*np.diff(line.xy, axis=0).T) > 0.5)
         out.misplaced += int(misplaced.sum())
         for k in np.flatnonzero(keep):

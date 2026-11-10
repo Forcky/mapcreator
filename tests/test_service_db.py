@@ -80,9 +80,9 @@ def test_hashes_and_stored_jobs_are_unchanged_by_later_fields(store):
     import json
 
     j = job("a")
-    # The formula every hash was made with before allow_tight_bends and the 64 km limit.
-    old = json.dumps({**j.model_dump(mode="json", exclude={"track_id", "allow_tight_bends"}), "max_length_km": 30.0},
-                     sort_keys=True, separators=(",", ":"))
+    # The formula every hash was made with before allow_tight_bends, junctions and the 64 km limit.
+    old = json.dumps({**j.model_dump(mode="json", exclude={"track_id", "allow_tight_bends", "junctions"}),
+                      "max_length_km": 30.0}, sort_keys=True, separators=(",", ":"))
     assert route_hash(j) == hashlib.sha256(old.encode()).hexdigest()
     longer = Job.model_validate({**j.model_dump(), "max_length_km": 75})
     assert route_hash(longer) == route_hash(j)  # a limit, not part of the road
@@ -91,6 +91,11 @@ def test_hashes_and_stored_jobs_are_unchanged_by_later_fields(store):
     # A worker that predates the flag (its Job forbids unknown fields) still gets jobs it can read.
     assert "allow_tight_bends" not in store.create(j, ip_hash="ip").job
     assert store.create(anyway, ip_hash="ip").job["allow_tight_bends"] is True
+    # Built without side-road junctions: a different track. Closed (the default) is today's track id.
+    bare = Job.model_validate({**j.model_dump(), "junctions": "none"})
+    assert route_hash(bare) != route_hash(j)
+    assert "junctions" not in store.create(j, ip_hash="ip").job
+    assert store.create(bare, ip_hash="ip").job["junctions"] == "none"
 
 
 def test_a_failure_code_is_kept_and_cleared_on_requeue(store):

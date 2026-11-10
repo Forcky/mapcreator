@@ -83,8 +83,8 @@ def test_power_line_supports_reach_the_terrains_edge_past_the_trees(tmp_path, mo
     class Stop(Exception):
         pass
 
-    def fake_plan(lines, xy, half, *, reach_m):
-        seen["reach"] = reach_m
+    def fake_plan(lines, xy, half, *, reach_m, blocked=None):
+        seen["reach"], seen["blocked"] = reach_m, blocked
         raise Stop
 
     def fake_lines(bbox, settings):
@@ -97,6 +97,7 @@ def test_power_line_supports_reach_the_terrains_edge_past_the_trees(tmp_path, mo
     with pytest.raises(Stop):
         scenery_stage._power(region, None, CENTRE, 3.0, None, None, tmp_path, [], None, None)
     assert seen["reach"] == reach.POWER_M == 695.0
+    assert seen["blocked"] is None  # no side roads to keep the supports off
     # The lines are asked for over the whole reach.
     assert seen["bbox"][1] <= 5_200_000 - reach.POWER_M and seen["bbox"][3] >= 5_200_000 + reach.POWER_M
 
