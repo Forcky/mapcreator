@@ -1069,7 +1069,11 @@ def _draw_cells(img: Image.Image, d: ImageDraw.ImageDraw, livery: Livery, body: 
 @lru_cache(maxsize=None)
 def atlas(code: str, body: str) -> Image.Image:
     """The jurisdiction's texture for `body`: its sides, top, ends, wheel, glass and light bar (see CELLS)."""
-    livery, shape = LIVERIES[code], BODIES[body]
+    return draw_atlas(LIVERIES[code], BODIES[body])
+
+
+def draw_atlas(livery: Livery, shape: Body) -> Image.Image:
+    """The texture for any livery on `shape` (`atlas` keeps each jurisdiction's)."""
     canvas = ATLAS * SUPERSAMPLE
     img = Image.new("RGB", (canvas, canvas), livery.paint)
     _draw_cells(img, ImageDraw.Draw(img), livery, shape)
@@ -1332,7 +1336,7 @@ def _crest_act(p: _Pen):
     white paint read only as its gold centre from 6 m (in game, 11 Nov 2026)."""
     c = CREST_Y
     navy = (15, 26, 51)
-    p.poly(_star(0, c, 0.86, 0.58, 8), (150, 158, 170), navy, 0.05)
+    p.poly(_star(0, c, 0.86, 0.58, 8), (128, 136, 148), navy, 0.05)
     p.circle(0, c, 0.58, navy)
     p.circle(0, c, 0.36, WHITE)
     p.poly(_shield(0, c, 0.34, 0.40), GOLD, navy, 0.025)
@@ -1361,8 +1365,9 @@ def draw_crest(img: Image.Image, name: str, cx: float, cy: float, w: float, h: f
 # -- the liveries ------------------------------------------------------------------------------------------------
 # From the services' releases and dated photos, 2019-2026 (THIRD_PARTY_NOTICES.md lists the sources). Where the
 # sources leave it open (which side the light bar's red is on, what crosses the rear), a common Australian layout is
-# drawn and the docs say so. Crests are drawn 0.30-0.38 m across, larger than on most real cars, so they read from
-# the road; Tasmania's moves above the chequer on the rear door to find the room.
+# drawn and the docs say so. Crests are drawn 0.30-0.40 m across, larger than on most real cars, so they read from
+# the road; Tasmania's moves above the chequer on the rear door to find the room. Where the chequer runs along the
+# shoulder (NSW, Victoria, SA, WA, the ACT) the crest goes below it, there being only the windows above.
 
 LIVERIES = {
     # Silver SUVs: a two-row chequer low on the doors with a lime line on top; "Police" above it on the front doors;
@@ -1409,11 +1414,12 @@ LIVERIES = {
                  (31, 63, 143), (0.44, 0.55, 0.13, 0.9), stripes=(((224, 122, 42), 0.915, 0.012),
                                                                    ((224, 122, 42), 0.695, 0.012)),
                  word_bonnet=(31, 63, 143), crest="nt", crest_bonnet=0.50),
-    # ACT Policing (AFP), white cars since May 2019: a three-row near-black chequer between lime lines, bigger squares
-    # on the front guard, lime flashes on the bumper; "Police" low on the rear door, ghosted on the bonnet; the AFP's
-    # crest low on the front door; a POLICE sign in the bar.
-    "act": Livery("act", "ACT Policing (Australian Federal Police)", "sedan", ((15, 26, 51), WHITE), 3, (0.68, 0.90),
+    # ACT Policing (AFP), white cars since May 2019 (a Subaru Liberty then, an Outback in the 2022 photos, so the SUV):
+    # a three-row near-black chequer between lime lines, bigger squares on the front guard, lime flashes on the bumper;
+    # "Police" low on the rear door, ghosted on the bonnet; the AFP's crest on the front door, below the chequer at the
+    # other states' height (on the real cars it's smaller and lower); a POLICE sign in the bar.
+    "act": Livery("act", "ACT Policing (Australian Federal Police)", "suv", ((15, 26, 51), WHITE), 3, (0.68, 0.90),
                   "Police", (15, 26, 51), (0.645, 0.32, 0.13, 0.85), front="enlarge",
                   stripes=(((200, 220, 0), 0.925, 0.012), ((200, 220, 0), 0.655, 0.012)), word_bonnet=(160, 164, 170),
-                  corner_flash=(200, 220, 0), crest="act", crest_side=(0.42, 0.42, 0.34), bar_word="POLICE"),
+                  corner_flash=(200, 220, 0), crest="act", crest_side=(0.427, 0.38, 0.40), bar_word="POLICE"),
 }

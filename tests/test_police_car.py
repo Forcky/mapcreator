@@ -1,6 +1,7 @@
 """Police cars: every jurisdiction builds, in its frame, within budget, from drawn textures; placement; the picker."""
 
 import builtins
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -336,6 +337,78 @@ def test_crests_are_drawn_large_and_stand_off_the_paint(code):
     size = livery.crest_side[2] if livery.crest_side else livery.crest_bonnet
     assert livery.crest in police_car.CRESTS and size >= 0.30
     assert crest_visible_area(code) >= (0.35 if code == "act" else 0.27)
+
+
+def crest_on_body(code):
+    """Where the crest lands on the built car, in its frame: the atlas's crest pixels (the atlas against the same one
+    drawn without the crest) carried through each face's UVs onto the face. So it checks the drawing and the mesh's
+    UVs together, as the game sees them."""
+    livery = police_car.LIVERIES[code]
+    shape = police_car.BODIES[livery.body]
+    mask = np.abs(np.asarray(police_car.draw_atlas(livery, shape), float)
+                  - np.asarray(police_car.draw_atlas(replace(livery, crest=""), shape), float)).max(axis=2) > 40
+    pts = []
+    for m in police_car.police_car(code).meshes:
+        if m.material.endswith("_lens"):
+            continue
+        pos, uv = m.positions.astype(float), m.uvs.astype(float) * police_car.ATLAS
+        for tri in m.triangles:
+            t, q = uv[tri], pos[tri]
+            (x0, y0), (x1, y1) = np.floor(t.min(axis=0)).astype(int), np.ceil(t.max(axis=0)).astype(int)
+            ys, xs = np.nonzero(mask[y0:y1 + 1, x0:x1 + 1])
+            basis = np.column_stack([t[1] - t[0], t[2] - t[0]])
+            if not len(xs) or abs(np.linalg.det(basis)) < 1e-9:
+                continue
+            w = np.linalg.solve(basis, (np.column_stack([xs + x0 + 0.5, ys + y0 + 0.5]) - t[0]).T).T
+            inside = (w >= -1e-6).all(axis=1) & (w.sum(axis=1) <= 1 + 1e-6)
+            pts.append(q[0] + w[inside] @ np.vstack([q[1] - q[0], q[2] - q[0]]))
+    return np.vstack(pts), livery, shape
+
+
+@pytest.mark.parametrize("code", JURISDICTIONS)
+def test_each_crest_lands_on_the_car_where_meant(code):
+    """In game the ACT's crest read as a small shape low on the door (11 Nov 2026). Traced from the atlas through the
+    UVs, each crest is on both sides at the same place, the size and height its livery gives, off the chequer. A
+    crest's size is its box: its crown and scroll fill nearly all of the box's height, a wreath about 75% of its
+    width."""
+
+    def fills(extents, size):
+        tall, wide = max(extents), min(extents)
+        return size * 0.85 <= tall <= size * 1.02 and wide >= size * 0.6
+
+    pts, livery, shape = crest_on_body(code)
+    if livery.crest_bonnet:
+        # On the bonnet, read from in front (its height along the car): centred, and on the bonnet's top.
+        assert fills((np.ptp(pts[:, 0]), np.ptp(pts[:, 2])), livery.crest_bonnet)
+        assert abs(pts[:, 0].mean()) < 0.02
+        cowl = shape.stations[next(i for i, s in enumerate(shape.stations) if s.roof is not None) - 1]
+        assert pts[:, 2].min() > cowl.z and pts[:, 1].min() > cowl.belt - 0.2
+        return
+    along, height = police_car._side_frame(shape)
+    za, frac, size = livery.crest_side
+    assert 0.30 <= size <= 0.40
+    b0, b1 = police_car.band_heights(shape, livery)
+    sides = {"right": pts[pts[:, 0] > 0.3], "left": pts[pts[:, 0] < -0.3]}
+    for name, side in sides.items():
+        assert len(side), name
+        (z0, y0), (z1, y1) = side[:, [2, 1]].min(axis=0), side[:, [2, 1]].max(axis=0)
+        assert fills((z1 - z0, y1 - y0), size), name
+        assert (z0 + z1) / 2 == pytest.approx(along(za), abs=0.03)
+        assert (y0 + y1) / 2 == pytest.approx(height(frac), abs=0.03)
+        assert y0 > shape.cabin.sill + 0.05  # clear of the sill's dark trim
+        if livery.pattern != "wedge":
+            assert y1 <= b0 or y0 >= b1, name  # below or above the chequer, not on it
+    right, left = sides["right"], sides["left"]
+    assert right[:, 2].mean() == pytest.approx(left[:, 2].mean(), abs=0.01)  # the same door on both sides
+    assert right[:, 1].mean() == pytest.approx(left[:, 1].mean(), abs=0.01)
+
+
+def test_the_act_crest_sits_with_the_other_states():
+    """At the SUV states' crest height (NSW, Victoria, SA, WA: 0.56-0.63 m), on the front door."""
+    pts, _, _ = crest_on_body("act")
+    centre = (pts[:, 1].min() + pts[:, 1].max()) / 2
+    assert 0.55 <= centre <= 0.65 and np.ptp(pts[pts[:, 0] > 0, 1]) >= 0.36
+    assert pts[:, 2].min() > police_car.B_PILLAR  # ahead of the pillar between the doors
 
 
 def test_lettering_and_crests_keep_their_size_in_metres():
