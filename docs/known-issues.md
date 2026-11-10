@@ -135,6 +135,31 @@ Trees and buildings now stand within 600 m of the road (`core.reach`); they stop
   - Buildings: Grasstree Hill 718 (was 253), Esperance 347 (was 246).
   - Build: the terrain and the DEM read don't change. KN5s grow under 3% (buildings), zips 0.3-1.5 MB and `trees.txt` 32-44%. Build time and peak memory barely move (Lyell Highway: 104 → 109 s, 1.85 → 1.86 GiB, on a laptop).
 
+## Grass pack (ground classes and Grass FX)
+
+In Tasmania the terrain is split into ground classes from TASVEG, each with its own ground texture and Grass FX configuration, and Grass FX draws our own atlas (`docs/ac-format.md`, "Grass FX"). Every number is a starting point.
+
+- **In game, 9 Nov 2026** (#59; CSP 0.2.11, Grass FX Medium, interleaved with main in one session against #58's setup):
+  - **Frame rate:** Lyell Highway 1.5% faster than main (its forest, 63% of the ground within 250 m, no longer grows grass); Grasstree Hill 5.4% slower, just over its 5% budget, worst at 9.8-12.5 km, up to 11% at single points. The slowest 10% was within budget on both.
+  - **Looks, kept:** buttongrass moorland (straw and olive-tan tussocks, the verge still mown green), the brown forest floor, grassy woodland and regrowth reading differently, canopy-dark far hillsides, the sandy band on lake shores. Pasture and town lawn looked almost as on main.
+  - **Problems:** a straight-edged brown block on the paddock at Grasstree Hill's 11.5 km, and faint rows of tussocks on Lyell's moorland plain at 15.3 km. The heights table was left for a viewpoint with the guide post in frame.
+  - **Tuned after it** (the maintainer's Q9: "tune until it fits"): pasture and towns back to today's ground and CSP's default grass, with no atlas pieces (the 9.8-12.5 km stretch is 98-100% pasture within 60 m); the mown verge (A) never denser than CSP's default; terrain gathered into about as many meshes as main (Grasstree Hill 32, main 33, the first test 167); class edges dithered; the open classes' textures repeat every 16 m, warped. To re-measure, interleaved with main as before.
+
+- **To check in game** (CSP 0.2.11, then the visual checks again on 0.3.1; Grass FX quality Medium, also Very low and High on Grasstree Hill; the Grass FX debug app on, `APP_GRASSFX_DEBUG` in CSP's `gui.ini`). Build each road on main and on the pack with the same job:
+  - **Loads cleanly:** `ac_harness.py check-log`: no CSP texture or config errors. The grass shows our atlas, not CSP's default: the tussocks, buttongrass and bracken are recognisable. Tree FX trees still stand on every new material, and Rain FX puts no puddles on the ground classes.
+  - **Frame rate,** at fixed probe points and in an AI race, against main with Grass FX off and on, run interleaved in one session (the gaming PC loses about 2.4% a run as it warms, so numbers from another session don't compare): the budget is the median within 5% of main's on Grasstree Hill and 10% on Lyell Highway, and the slowest 10% within 10% / 15% (the maintainer's, 5 Nov 2026). Over it: lower the heights first, then the pieces' chances, then the number of tall pieces. Also a moorland `SHAPE_SIZE` sweep (2, 3, 4, 6) on Lyell.
+  - **Heights:** what `SHAPE_SIZE` is in metres, beside a guide post (1.0 m tall, 0.8 m off the edge), then set: verge about 0.05-0.15 m, pasture 0.1-0.3 m, tussock and buttongrass 0.5-1 m (stalks to 1.5 m), bracken 0.5-1.5 m.
+  - **Colour:** do the blades take each class's ground (straw, olive-tan, dark green)? Is CSP's colour sync per pixel, so the buttongrass stalks stay brown on green-only hummocks in one piece? How far out do coloured pieces (bracken, the stalks and Themeda's heads) fade to green on 0.2.11? Does the colour mask leave moorland's peat and the woodland's litter bare, and grow on the rest? (The mask's formula isn't documented: whether its luminance is linear or not decides whether the peat is dark enough.) Record the `MASK_*` values that work.
+  - **Class edges:** the ground's colour changes at a class's edge by triangle, dithered over about 12 m near the road. Does the 11.5 km blue gum patch on Grasstree Hill still read as a block? Try `MASK_BLUR` 1, 2 and 3. If the edges still look bad, the answer is a multilayer ground with a blended class mask (the design's mechanism B), a PR of its own. So is the dithered change to canopy green 220-280 m out in forest.
+  - **Rows:** are the tussocks on Lyell's moorland plain at 15.3 km irregular now? If rows remain, they're CSP's own placement, not our ground.
+  - **Near the car:** on 0.2.11 CSP spawns its base blades nearby in every class ("custom types of grass only affect third generation pass onwards"): thin blades in moorland and tussock colours, acceptable?
+  - **Near water:** on Lyell's lake shores, with Extra FX on, does tall grass look see-through against CSP's water? If so, try `[EXTRA_FX] FORCE_GRASSFX_GBUFFER_PASS = 1` and measure what it costs.
+  - **Road safety:** the 2 m verge stays mown everywhere, so the tall classes never hide a guide post or CAM; the gravel's centre strip stays short (A); no grass through the seal or the gravel.
+  - **Not documented:** how a part weight (`MAP = D, 0.6` on regrowth, `MAP = B, 0.5` in grassy woodland) mixes the texture groups' chances: is regrowth sparser in bracken than bracken fernland?
+- **The ground textures and the atlas are procedural.** If a piece looks poor in game (bracken most likely), a CC0 photo card (ambientCG's `Foliage` atlases, Poly Haven's `fern_02`) can replace it, its luminance in green for the synced pieces.
+- **One weight per class.** TASVEG codes the design gives a lower weight within a class (coastal grass and herbfield, rockplate grassland, sparse buttongrass on slopes) take their class's full weight: one material per class. A part-weight material can follow if they look too dense.
+- **The mainland keeps today's grass:** NVIS and WorldCover classes are for a later PR, as is a mainland atlas group for spinifex.
+
 ## Power lines
 
 - **Answered in game (4 Nov, Grasstree Hill, with towers then allowed 700 m out):**

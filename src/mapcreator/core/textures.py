@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import struct
+from functools import partial
 
 import numpy as np
 from PIL import Image
@@ -77,6 +78,56 @@ def ground(size: int = 512, seed: int = 3) -> Image.Image:
     return Image.fromarray((dirt * (1 - t) + veg * t).astype(np.uint8))
 
 
+# The ground of each grass class (`core.grass`): a base colour, then patches over it, each as (colour, share of the
+# texture, noise exponent: higher makes bigger, smoother patches). CSP's Grass FX colours its blades from the ground
+# under them and grows them only where that colour passes the class's mask, so the patches decide where grass
+# grows as well as how the class looks beyond the grass. A class's texture repeats every 16 m with warped
+# coordinates (`mesh.warped_uv`), and its patches are small beside that (exponents near 1): with one big patch a
+# repeat, the repeat itself shows as rows across open ground. Pasture and towns use today's `ground`. Starting
+# points, to tune in game with the Grass FX debug app (`docs/known-issues.md`).
+GROUND_COVERS = {
+    # Saltmarsh, cushion moor and other short herbland: green and fine, hardly any dry patches.
+    "ground_short": ((82, 124, 54), (((104, 136, 66), 0.3, 0.9), ((146, 140, 92), 0.05, 1.2))),
+    # Native grassland: straw, olive and blue-green tussocks, with a little bare soil.
+    "ground_tussock": ((158, 146, 96), (((124, 124, 76), 0.35, 1.0), ((110, 122, 96), 0.2, 1.1),
+                                         ((122, 108, 82), 0.06, 0.9))),
+    # Buttongrass moorland: olive-tan, with small dark peat pools that stay bare (below the configuration's
+    # luminance).
+    "ground_moor": ((136, 124, 80), (((112, 114, 66), 0.3, 1.0), ((48, 40, 32), 0.14, 0.9),
+                                      ((164, 148, 100), 0.12, 0.8))),
+    # Sedgeland and wetland: dark green, with water-dark patches.
+    "ground_wet": ((60, 82, 46), (((86, 96, 54), 0.25, 1.0), ((34, 42, 36), 0.16, 1.0))),
+    # Bracken fernland: green-brown, with russet dead fronds.
+    "ground_bracken": ((92, 100, 54), (((124, 90, 56), 0.3, 1.1), ((64, 86, 42), 0.15, 0.9))),
+    # Regrowth, weeds and easements: rank grass between pasture and bracken, with scrub.
+    "ground_rough": ((88, 108, 58), (((142, 132, 88), 0.15, 1.1), ((118, 90, 58), 0.12, 1.0),
+                                      ((62, 80, 46), 0.15, 1.1))),
+    # Grassy woodland: mostly leaf litter, with straw-green grassy patches.
+    "ground_woodland": ((116, 98, 74), (((110, 114, 68), 0.35, 1.1), ((76, 64, 50), 0.1, 0.9),
+                                         ((136, 126, 110), 0.06, 0.6))),
+    # Forest, plantation and scrub floor: grey-brown litter and bark flakes.
+    "ground_forest": ((96, 82, 64), (((66, 56, 46), 0.25, 1.0), ((134, 120, 100), 0.06, 0.6))),
+    # Forest seen from afar, where it has few or no trees: a dark canopy green.
+    "ground_canopy": ((46, 62, 38), (((34, 46, 30), 0.3, 1.1), ((60, 78, 46), 0.15, 1.0))),
+    # Sand, mud, rock and pans.
+    "ground_bare": ((150, 142, 124), (((124, 122, 116), 0.3, 1.1), ((98, 92, 82), 0.1, 0.9))),
+}
+PATCH_EDGE = 0.12  # how soft a patch's edge is, as a share of the pixels ranked across it
+
+
+def ground_cover(name: str, size: int = 512, seed: int | None = None) -> Image.Image:
+    """The ground texture `name` from GROUND_COVERS: tileable, a base colour with each patch layer over it."""
+    base, patches = GROUND_COVERS[name]
+    seed = 50 + 20 * list(GROUND_COVERS).index(name) if seed is None else seed
+    grain = 0.55 * tileable_noise(size, 1.5, seed) + 0.45 * tileable_noise(size, 0.4, seed + 1)
+    rgb = _mix(np.array(base, dtype=float), grain, np.full(3, 0.4)).astype(float)
+    for k, (colour, share, beta) in enumerate(patches):
+        rank = _uniform(tileable_noise(size, beta, seed + 2 + k))
+        t = np.clip((rank - (1 - share)) / PATCH_EDGE + 0.5, 0.0, 1.0)[..., None]  # about `share` of the pixels
+        rgb = rgb * (1 - t) + _mix(np.array(colour, dtype=float), grain, np.full(3, 0.35)) * t
+    return Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
+
+
 def _blocks(im: Image.Image, fmt: str) -> bytes:
     buf = io.BytesIO()
     im.save(buf, format="DDS", pixel_format=fmt)
@@ -85,11 +136,13 @@ def _blocks(im: Image.Image, fmt: str) -> bytes:
     return data[header:]
 
 
-def to_dds(im: Image.Image, fmt: str = "DXT1") -> bytes:
+def to_dds(im: Image.Image, fmt: str = "DXT1", fill=None) -> bytes:
     """DXT1 (opaque) or DXT5 (with alpha) DDS with a mip chain down to 4 px.
 
     For DXT5 each level is downsized with alpha premultiplied and then
     un-premultiplied, so transparent pixels never bleed dark into a sprite's edges.
+    `fill`, if given, takes each level's image and returns it with its transparent pixels' colour set, before
+    it's encoded: the samples beside a sprite's edge then blend into its own colour, not black.
     """
     if fmt not in ("DXT1", "DXT5"):
         raise ValueError(f"unsupported DDS format {fmt}")
@@ -100,6 +153,8 @@ def to_dds(im: Image.Image, fmt: str = "DXT1") -> bytes:
     levels = []
     cur = im.convert(mode)
     while True:
+        if fill is not None:
+            cur = fill(cur)
         levels.append(_blocks(cur, fmt))
         if min(cur.size) <= 4:
             break
@@ -300,4 +355,5 @@ def water(size: int = 512, seed: int = 31) -> Image.Image:
 
 
 LIBRARY = {"asphalt": asphalt, "road_marked": road_marked, "road_plain": road_plain, "gravel_road": gravel_road,
-           "gravel_road_narrow": gravel_road_narrow, "grass": grass, "ground": ground, "steel": steel, "water": water}
+           "gravel_road_narrow": gravel_road_narrow, "grass": grass, "ground": ground, "steel": steel, "water": water,
+           **{name: partial(ground_cover, name) for name in GROUND_COVERS}}

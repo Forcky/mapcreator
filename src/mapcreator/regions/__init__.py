@@ -3,7 +3,8 @@
 Regions are checked in order, best data first:
 - Tasmania has 2 m LiDAR elevation, a canopy model, building footprints,
   TasNetworks' transmission lines and towers, and TASVEG's vegetation
-  communities, which say what kind of tree each one is.
+  communities, which say what kind of tree each one is and what grows on
+  the ground.
 - Anywhere else in Australia falls back to national data: GA's 5 m LiDAR DEM where it covers
   the whole road (the populated coast, the Murray-Darling and towns), else GA's ~30 m DEM-S,
   ESA WorldCover trees typed by NSW's State Vegetation Type Map in NSW and NVIS 7.0's
@@ -54,6 +55,9 @@ class Region:
     # (`attributions`); the region's is credited for one that doesn't.
     vegetation: Callable[..., object] | None = None
     vegetation_attribution: Attribution | None = None
+    # The ground's classes for the grass (`core.grass.GroundMap`), by centreline and reach; None leaves the terrain
+    # one material with CSP's default grass, as the mainland is until its classes are mapped.
+    grass: Callable[..., object] | None = None
     country: str = "Australia"
     state: str = ""
     height_datum: str = "AHD"
@@ -102,6 +106,13 @@ def _tas_vegetation(centre_xy, reach_m: float, settings: Settings):
     return VegetationMap(communities(centre_xy, reach_m, settings))
 
 
+def _tas_grass(centre_xy, reach_m: float, settings: Settings):
+    from mapcreator.core.grass import GroundMap, tasveg_areas
+    from mapcreator.providers.tas_list.tasveg import ATTRIBUTION, communities
+
+    return GroundMap(tasveg_areas(communities(centre_xy, reach_m, settings)), attributions=(ATTRIBUTION,))
+
+
 def _tas_vegetation_attribution() -> Attribution:
     from mapcreator.providers.tas_list.tasveg import ATTRIBUTION
 
@@ -140,6 +151,7 @@ TASMANIA = Region(
     power_attribution=_tas_power_attribution(),
     vegetation=_tas_vegetation,
     vegetation_attribution=_tas_vegetation_attribution(),
+    grass=_tas_grass,
     state="Tasmania",
 )
 

@@ -94,7 +94,7 @@ Taken from reading CM's source and CSP's docs (Nov 2026). What has since been co
   - `length` must carry a unit ("12.80 km"); CM ignores a bare number.
   - CM also warns when the preview, outline or map is missing. We ship all of them.
 - **`extension/ext_config.ini`:**
-  - CSP's Grass FX grows grass on our grass and terrain materials, with the road occluding it. On a one-lane gravel road it also grows on the grass strip.
+  - CSP's Grass FX grows grass on our grass and terrain materials, with the road occluding it. On a one-lane gravel road it also grows on the grass strip. In Tasmania the terrain is in ground classes from TASVEG, each with its own Grass FX configuration, and the grass comes from our atlas, `extension/grass_fx/mapcreator.dds` (`docs/ac-format.md`, "Grass FX").
   - Rain FX puddles and soaks the road.
   - On a track with gravel, `[TYRES_FX]` sets the dust and tyre-dirt colours from our textures.
   - Vanilla AC ignores it.
@@ -124,6 +124,7 @@ These are written down as defaults in the code. Change them in one place if the 
 | Do houses stop the car? (`1WALL_BUILDINGS`) | they should | `core/scenery.py` |
 | Do tree trunks stop the car at the bark? (invisible `1WALL_TRUNK_*` prisms, trunks within 20 m of the road edge) | they should | `core/scenery.py` `trunk_colliders` |
 | Do TASVEG-typed trees read as the right forest? (Huon Highway: tall wet eucalypts; Lyell Highway: wet eucalypt over tea-tree and rainforest, tea-tree in the buttongrass) | they should | `core/species.py`, `core/treefx.py` `FAMILY_BANDS` |
+| Does each ground class grow its own grass (tussock, buttongrass, bracken), at a height that fits, and within the frame-rate budget? | starting values | `core/grass.py` `CONFIGURATIONS`, `core/grassfx.py`; the checklist in `docs/known-issues.md` |
 | Do both layouts show in Content Manager with names and previews? | they should | `pipeline/track_stage.py` |
 
 ## Rules that still apply

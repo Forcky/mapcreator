@@ -487,6 +487,7 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
     as main's 1 m centreline line judged it."""
     rep = Report()
     tid = track_dir.name
+    kn5_materials: set[str] = set()
     rep.check(bool(re.fullmatch(r"[a-z0-9_]{1,32}", tid)), f"track folder name '{tid}' is valid")
     models = sorted(track_dir.glob("models_*.ini"))
     layouts = [m.stem.removeprefix("models_") for m in models] or [""]
@@ -514,6 +515,7 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
             res = _kn5_checks(rep, track_dir / f)
             if res:
                 datas.append(res[0])
+                kn5_materials.update(m["name"] for m in res[0]["materials"])
                 all_dummies.update(res[1])
         if (ui / "ui_track.json").exists():
             meta = json.loads((ui / "ui_track.json").read_text(encoding="utf-8"))
@@ -535,4 +537,32 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
                            allow_tight_bends=allow_tight_bends, road_radius=(road_radius or {}).get(label))
     for rel in ("ATTRIBUTION.txt", "centreline.geojson", "extension/ext_config.ini"):
         rep.check((track_dir / rel).exists(), f"{rel} present")
+    if (track_dir / "extension" / "ext_config.ini").exists() and kn5_materials:
+        _grass_fx_checks(rep, track_dir / "extension", kn5_materials)
     return rep
+
+
+def ini_sections(text: str) -> list[tuple[str, dict[str, str]]]:
+    """An ini file's sections in order, as (name, {key: value}); repeated names stay separate."""
+    out: list[tuple[str, dict[str, str]]] = []
+    for line in text.splitlines():
+        line = line.split(";", 1)[0].strip()
+        if line.startswith("[") and line.endswith("]"):
+            out.append((line[1:-1], {}))
+        elif "=" in line and out:
+            key, value = line.split("=", 1)
+            out[-1][1][key.strip()] = value.strip()
+    return out
+
+
+def _grass_fx_checks(rep: Report, ext: Path, materials: set[str]) -> None:
+    """Grass FX in ext_config.ini names only materials the KN5 has, and its atlas, if it has one, is there."""
+    named = set()
+    for name, values in ini_sections((ext / "ext_config.ini").read_text(encoding="ascii")):
+        if name == "GRASS_FX" or name.startswith("GRASS_FX_ADJUSTMENT_"):
+            for key in ("GRASS_MATERIALS", "MATERIALS"):
+                named.update(m.strip() for m in values.get(key, "").split(",") if m.strip())
+        if name == "GRASS_FX" and "TEXTURE" in values:
+            rep.check((ext / values["TEXTURE"]).is_file(), f"extension/{values['TEXTURE']} (Grass FX atlas) present")
+    missing = sorted(named - materials)
+    rep.check(not missing, "Grass FX names only materials the KN5 has" + (f" (not {missing})" if missing else ""))

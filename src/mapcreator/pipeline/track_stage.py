@@ -12,7 +12,7 @@ import numpy as np
 
 from mapcreator import __version__, buildinfo
 from mapcreator.config import Settings
-from mapcreator.core import ai_line, furniture, kn5, package, textures, treefx, validate
+from mapcreator.core import ai_line, furniture, grass, grassfx, kn5, package, textures, treefx, validate
 from mapcreator.core.layout import AI_END_SHORT_M, Layout, RoadModel, finish_distance, layouts_for, logic_dummies
 from mapcreator.core.scene import Scene
 from mapcreator.job import Job
@@ -109,7 +109,7 @@ def _attributions(region, work: WorkDir):
     from mapcreator.providers.base import Attribution
 
     out = list(region.attributions)
-    for stage in (profile_stage.STAGE, scenery_stage.STAGE):
+    for stage in (profile_stage.STAGE, scenery_stage.STAGE, mesh_stage.STAGE):
         path = work.root / stage / "attributions.json"
         if path.exists():
             for d in json.loads(path.read_text(encoding="utf-8")):
@@ -262,15 +262,22 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     water_file = work.root / mesh_stage.STAGE / "water.json"
     water_type = json.loads(water_file.read_text(encoding="utf-8")).get("type") if water_file.exists() else None
     summary["tree_fx_trees"] = tree_list[1] if tree_list else 0
+    # The terrain's materials: `terrain`, or with ground classes those of the classes present (`core.grass`).
+    ground = [c.material for c in grass.CLASSES if c.material in mat_index]
+    pack = any(m in mat_index for m in grass.PACK_MATERIALS)
+    if pack:
+        summary["grass_fx_atlas_mb"] = _write_grass_atlas(work, ext)
     _write_text(ext / "ext_config.ini", package.ext_config_ini(
-        grass_materials=[n for n in ("grass", "terrain") if n in mat_index],
+        grass_materials=[n for n in ["grass", *ground] if n in mat_index and grass.grows(n)],
         road_materials=[n for n in ("road", "road_plain") if n in mat_index], version=__version__,
         gravel_materials=[n for n in ("gravel", "gravel_narrow") if n in mat_index],
         grassy_gravel=[n for n in ("gravel_narrow",) if n in mat_index],
+        bare_ground=[n for n in ground if not grass.grows(n)],
+        grass_fx=grass.grass_fx(mat_index) if pack else None,
         dirt_colours=textures.tyre_dirt_colours() if has_gravel else None,
         water_materials=["water"] if "water" in mat_index else [], water_type=water_type or "LAKE",
         tree_list=tree_list[0] if tree_list else None,
-        tree_surfaces=[n for n in ("terrain", "grass") if n in mat_index],
+        tree_surfaces=[*ground, "grass"] if "grass" in mat_index else ground,
         retro_materials={m.name: (furniture.NIGHT_DIFFUSE[m.name], m.properties["ksDiffuse"])
                          for m in mats if m.name in furniture.NIGHT_DIFFUSE}),
         encoding="ascii")
@@ -319,6 +326,18 @@ def unsealed_runs(s: np.ndarray, unsealed: np.ndarray, *, reverse: bool = False)
         return runs
     total = float(s[-1] - s[0])
     return [(total - b, total - a) for a, b in reversed(runs)]
+
+
+def _write_grass_atlas(work: WorkDir, ext) -> float:
+    """Write the Grass FX atlas (`core.grassfx`) next to ext_config.ini; it's the same for every track, so it's
+    drawn once per work folder. Returns its size in MB."""
+    cached = work.stage(STAGE + "_cache") / "grass_fx_atlas.dds"
+    if not cached.exists():
+        cached.write_bytes(grassfx.atlas_dds())
+    out = ext / grassfx.FILE
+    out.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(cached, out)
+    return round(out.stat().st_size / 1e6, 2)
 
 
 def _write_tree_fx(work: WorkDir, ext) -> tuple[str, int] | None:
