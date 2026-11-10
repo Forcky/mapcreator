@@ -33,6 +33,11 @@ STAGE = "04_mesh"
 TERRAIN_CORRIDOR_M = reach.TERRAIN_M
 # The closures on the side roads' stubs, one record each (`core.stub_closures`; the format is in docs/ac-format.md).
 CLOSURES = "closures.json"
+# The stubs as built: the section stage's plan less any left out here for failing the checks on the built meshes
+# (`stubs.faults`), which join its `skipped` (`built_stubs`). The track and validate stages read this one.
+STUBS = "stubs.json"
+# A stub left out this way means building the road and ground again without it; after this many tries, all are.
+STUB_REBUILDS = 3
 
 log = logging.getLogger(__name__)
 
@@ -88,24 +93,18 @@ def _ground_shares(meshes, frame: LocalFrame, centre_xy: np.ndarray) -> dict:
     return out
 
 
-def frame_for(xy: np.ndarray, z: np.ndarray) -> LocalFrame:
-    lo, hi = xy.min(axis=0), xy.max(axis=0)
-    return LocalFrame(e0=float(round((lo[0] + hi[0]) / 2)), n0=float(round((lo[1] + hi[1]) / 2)),
-                      h0=float(math.floor(np.nanmin(z))))
-
-
-def run(job: Job, settings: Settings, work: WorkDir) -> dict:
-    region = job_region(job.waypoints)
-    c = np.load(work.root / profile_stage.STAGE / "centreline.npz")
-    sec = np.load(work.root / section_stage.STAGE / "section.npz")
-    dem = region.elevation(settings)
-    dem.load_corridor(c["xy"], profile_stage.CORRIDOR_M)
-
-    frame = frame_for(c["xy"], c["z"])
-    gmap, ground_note = _ground(region, c, settings)
-    # Side roads' stubs (`core.stubs`): the road's skirt is held short of them, its verge and skirt cut across their
-    # mouths, and its edge lines broken there. Without a plan the road is built exactly as before.
+def built_stubs(work: WorkDir, job: Job) -> list[dict]:
+    """The side roads' stubs as the mesh stage built them (`STUBS`): the section stage's plan, less any it left out.
+    The section stage's plan where the mesh stage hasn't run, or ran before stubs could be left out."""
     plan = section_stage.stubs(work, job)
+    path = work.root / STAGE / STUBS
+    if not plan or not path.exists():
+        return plan
+    return work.read_json(STAGE, STUBS)["stubs"]
+
+
+def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region):
+    """The road's ribbon, the stubs (`stubs.build`), water, and the road, verge, stub and terrain meshes for `plan`."""
     caps = stubs.mainline_caps(plan, c["xy"], c["heading"]) if plan else (None, None)
     rb = mesh.build_ribbon(c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
                            sec["slope_left"], sec["slope_right"], dem.sample, skirt_cap_l=caps[0], skirt_cap_r=caps[1])
@@ -130,14 +129,65 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, ground, frame, ground=gmap.materials,
                                       classes=grass.MESHES, fold_skirt=True, extra=extra)
     meshes += water_core.meshes(water, frame)
-    # Side roads' mouths (`core.junctions`): no guard rail, guide post, curve marker or sign stands in one.
+    return rb, built, water, meshes
+
+
+def frame_for(xy: np.ndarray, z: np.ndarray) -> LocalFrame:
+    lo, hi = xy.min(axis=0), xy.max(axis=0)
+    return LocalFrame(e0=float(round((lo[0] + hi[0]) / 2)), n0=float(round((lo[1] + hi[1]) / 2)),
+                      h0=float(math.floor(np.nanmin(z))))
+
+
+def run(job: Job, settings: Settings, work: WorkDir) -> dict:
+    region = job_region(job.waypoints)
+    c = np.load(work.root / profile_stage.STAGE / "centreline.npz")
+    sec = np.load(work.root / section_stage.STAGE / "section.npz")
+    dem = region.elevation(settings)
+    dem.load_corridor(c["xy"], profile_stage.CORRIDOR_M)
+
+    frame = frame_for(c["xy"], c["z"])
+    gmap, ground_note = _ground(region, c, settings)
+    out = work.stage(STAGE)
     found = route_stage.junctions(work, job)
+    # Side roads' stubs (`core.stubs`): the road's skirt is held short of them, its verge and skirt cut across their
+    # mouths, and its edge lines broken there. Without a plan the road is built exactly as before. Each stub, and its
+    # closure, is then checked on the meshes just built (`stubs.faults`, the validator's own checks): one that fails
+    # is left out and the road and ground built again without it, so a side road never fails a build.
+    plan = section_stage.stubs(work, job)
+    lonlat = region.to_lonlat().transform(c["xy"][::50, 0], c["xy"][::50, 1])
+    jurisdiction = police_car.jurisdiction_for(region, list(zip(*lonlat)))
+    reverses = tuple(lay.reverse for lay in layouts_for(job.layouts.value))
+
+    def build(stubs_now):
+        rb, built, water, ground_meshes = _road_and_ground(stubs_now, c, sec, frame, dem, gmap, settings, region)
+        closed = None
+        if stubs_now:
+            # Each stub closed off the stage, and police cars at some of the major closures (`core.stub_closures`),
+            # standing on the ground just built.
+            top = stub_closures.TopSurface(ground_meshes, frame, stub_closures.areas(stubs_now))
+            closed = stub_closures.place(stubs_now, found, c, sec, frame, top, jurisdiction=jurisdiction,
+                                         reverses=reverses)
+        return rb, built, water, ground_meshes, closed
+
+    def check(stubs_now, result):
+        return stubs.faults(stubs_now, result[3], result[4].meshes if result[4] is not None else [], c, sec, frame)
+
+    planned = bool(plan)
+    plan, (rb, built, water, meshes, closed), dropped = stubs.settle(plan, build, check, STUB_REBUILDS, log)
+    (out / STUBS).unlink(missing_ok=True)
+    if planned:
+        doc = work.read_json(section_stage.STAGE, section_stage.STUBS)
+        work.write_json(STAGE, STUBS, {**doc, "stubs": plan,
+                                       "skipped": sorted(doc["skipped"] + dropped, key=lambda d: d["junction"])})
+    # Side roads' mouths (`core.junctions`): no guard rail, guide post, curve marker or sign stands in one.
     mouths = junctions.masks(junctions.mouths(found, c["s"], c["xy"], c["heading"], sec["half_left"],
                                               sec["half_right"], stubs=stubs.by_junction(plan)),
                              c["s"]) if found else None
     junction_stats = {"found": len(found)} if found else None
     if built is not None:
         junction_stats["stubs"] = built.stats
+    if dropped:
+        junction_stats["stubs_left_out"] = len({d["junction"] for d in dropped})
     rails, rail_stats = [], {"skipped": "DEM too coarse to place rails"}
     fine = c["fine"] if "fine" in c else np.full(len(c["s"]), getattr(dem, "resolution_m", 2.0) <= FINE_DEM_M)
     no_rail = np.zeros(len(c["s"]), dtype=bool)
@@ -151,7 +201,6 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
                                                  sec["half_right"], sec["slope_left"], sec["slope_right"],
                                                  dem.sample, frame, allowed=fine, masks=masks)
     meshes += rails
-    out = work.stage(STAGE)
     limits = furniture.speed_limits(c["run"], work.read_json(route_stage.STAGE, "runs.json"))
     furn, furn_stats, atlas = furniture.furniture(
         c["s"], c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
@@ -164,16 +213,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         textures[furniture.MATERIAL] = str(out / "furniture.png")
         atlas.image.save(textures[furniture.MATERIAL])
     meshes += roadside.end_walls(c["s"], c["xy"], c["z"], c["heading"], dem.sample, frame)
-    # Each stub closed off the stage, and police cars at some of the major closures (`core.stub_closures`), standing
-    # on the ground just built.
-    closed = None
+    # The closures placed and checked above, last, as before.
     (out / CLOSURES).unlink(missing_ok=True)
-    if plan:
-        top = stub_closures.TopSurface(meshes, frame, stub_closures.areas(plan))
-        lonlat = region.to_lonlat().transform(c["xy"][::50, 0], c["xy"][::50, 1])
-        closed = stub_closures.place(plan, found, c, sec, frame, top,
-                                     jurisdiction=police_car.jurisdiction_for(region, list(zip(*lonlat))),
-                                     reverses=tuple(lay.reverse for lay in layouts_for(job.layouts.value)))
+    if closed is not None:
         meshes += closed.meshes
         for name, image in closed.textures.items():
             textures[name] = str(out / f"{name}.png")

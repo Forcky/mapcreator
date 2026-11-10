@@ -195,7 +195,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     multi = len(layouts) > 1
     summary = {"title": title, "unsealed_m": round(unsealed_m, 1), "layouts": {}}
     # Side roads' mouths, their stubs' flares included: no timing gate stands in one (`layout.gate_distances`).
-    plan = section_stage.stubs(work, job)
+    plan = mesh_stage.built_stubs(work, job)  # as built: less any the mesh stage left out
     mouths = junctions.mouths(route_stage.junctions(work, job), c["s"], c["xy"], c["heading"], sec["half_left"],
                               sec["half_right"], stubs=stubs.by_junction(plan))
     for lay in layouts:
