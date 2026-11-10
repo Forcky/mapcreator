@@ -13,6 +13,10 @@ are no gaps for a car to fall through:
   beyond 300 m, out to the corridor width. One triangulation spans every ring,
   so they join without seams. Its inner boundary is the skirt's outer edge,
   vertex for vertex.
+
+Side roads' stubs (`core.stubs`) add more ground the road takes (`Footprint`): the mainline's verge and skirt are
+cut across each mouth, and the terrain leaves room for the stubs, their flares and verges, sharing their outline
+vertices as it shares the ribbon's.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ import shapely
 from scipy.ndimage import minimum_filter1d, uniform_filter1d
 from scipy.spatial import Delaunay, cKDTree
 
+from mapcreator.core import textures
 from mapcreator.core.scene import MAX_VERTICES, LocalFrame, Mesh
 from mapcreator.core.section import STYLES, is_unsealed
 from mapcreator.core.textures import GRAVEL_TILE_M, ROAD_TILE_M
@@ -50,6 +55,9 @@ CLASS_MESH_CHUNKS = 8
 # beside the lattice, and since it's a function of position alone, neighbouring meshes still meet without a seam.
 UV_WARP_M = 4.0
 UV_WARP_WAVES_M = (71.0, 113.0, 83.0, 127.0)
+# Across a side road's mouth the edge line breaks (`ribbon_meshes(edge_break=)`): the outer road column's u moves
+# this far inside the painted line's outer edge (`textures.edge_line_u`), so the quad beside it shows plain asphalt.
+EDGE_BREAK_MARGIN_U = 0.012
 
 
 @dataclass
@@ -114,27 +122,39 @@ def _side_limits(curvature: np.ndarray, full_m: float, step: float, cap_left=Non
     return uniform_filter1d(lim_left, win), uniform_filter1d(lim_right, win)
 
 
-def build_ribbon(xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, dem_sample) -> Ribbon:
+def build_ribbon(xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, dem_sample, *,
+                 skirt_cap_l=None, skirt_cap_r=None) -> Ribbon:
+    """`skirt_cap_l`/`skirt_cap_r`, per station: how far from the centreline the skirt may reach on that side, where
+    it shares the ground with something beside the road (a side road's stub, `core.stubs`). The skirt then stops
+    there, but always reaches 0.5 m past the verge, and the verge keeps its width. Without them the ribbon is built
+    as it always was."""
     nrm = np.column_stack([-np.sin(heading), np.cos(heading)])  # left
     step = float(np.median(np.hypot(*np.diff(xy, axis=0).T))) if len(xy) > 1 else 1.0
     full = VERGE_M + SKIRT_STEPS_M[-1]
     cap_l, cap_r = _neighbour_limits(np.asarray(xy, dtype=float), nrm, max(half_l.max(), half_r.max()) + full)
     lim_l, lim_r = _side_limits(curvature, half_l.max() + full, step, cap_l, cap_r)
 
-    def side(half, slope, lim):
+    def side(half, slope, lim, skirt_cap):
         edge_h = z - slope * half
         verge_h = edge_h - VERGE_M * VERGE_FALL
         reach = np.clip(lim - half, VERGE_M + 0.5, full)  # how far past the road edge we may go
-        offs = [half + VERGE_M * np.minimum(1.0, reach / full)]
+        verge = VERGE_M * np.minimum(1.0, reach / full)
+        offs = [half + verge]
         hs = [verge_h]
+        if skirt_cap is None:
+            for d in SKIRT_STEPS_M:
+                frac = (VERGE_M + d) / full
+                offs.append(half + reach * frac)
+                hs.append(None)  # from the DEM
+            return offs, hs
+        skirt = np.minimum(reach, np.maximum(np.asarray(skirt_cap, dtype=float) - half, verge + 0.5)) - verge
         for d in SKIRT_STEPS_M:
-            frac = (VERGE_M + d) / full
-            offs.append(half + reach * frac)
-            hs.append(None)  # from the DEM
+            offs.append(half + verge + skirt * (d / SKIRT_STEPS_M[-1]))
+            hs.append(None)
         return offs, hs
 
-    lo, lh = side(half_l, slope_l, lim_l)
-    ro, rh = side(half_r, slope_r, lim_r)
+    lo, lh = side(half_l, slope_l, lim_l, skirt_cap_l)
+    ro, rh = side(half_r, slope_r, lim_r, skirt_cap_r)
 
     # Columns left (outermost) -> right (outermost). Offsets positive to the left.
     cols_off = [o for o in reversed(lo)] + [half_l, half_l / 2, np.zeros_like(half_l), -half_r / 2, -half_r] + \
@@ -227,13 +247,17 @@ def _skirts(rb: Ribbon) -> tuple[slice, slice]:
 
 def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, style: np.ndarray | None = None,
                   road_uv_m: float = ROAD_TILE_M, gravel_uv_m: float = GRAVEL_TILE_M,
-                  grass_uv_m: float = 6.0, skirt: bool = True) -> list[Mesh]:
+                  grass_uv_m: float = 6.0, skirt: bool = True, cut: dict[str, np.ndarray] | None = None,
+                  edge_break: dict[str, np.ndarray] | None = None) -> list[Mesh]:
     """Road chunks named 1ROAD_### (sealed) or 1GRAVEL_### (unsealed), verge/skirt chunks named 1GRASS_V###.
 
     `style` is the section's style code per station (`section.STYLES`); without it the road is all sealed and
     marked. The chunk number ### runs on across both surfaces, so every name is unique.
     With `skirt` False the verge meshes are the 2 m verge alone, and `terrain_meshes(fold_skirt=True)` draws the
     skirt with the ground beside it.
+    Side roads' mouths (`core.stubs`): `cut`, per side ("L", "R"), is True for each quad between rows i and i+1 whose
+    verge and skirt are taken out, where a stub's flares join the road; `edge_break`, per side, is True for each row
+    whose outer road vertex takes a u inside the painted edge line, so a sealed road's line breaks across the mouth.
     """
     rows = len(s)
     step = s[1] - s[0] if rows > 1 else 1.0
@@ -252,12 +276,57 @@ def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, style: np.nda
             tri = _grid_triangles(nr, nc)
             if kind == "road":
                 u = np.tile(np.linspace(0, 1, nc), nr)
+                if edge_break is not None and not gravel:
+                    inside = textures.edge_line_u(ROAD_TEXTURE[material]) + EDGE_BREAK_MARGIN_U
+                    grid = u.reshape(nr, nc)
+                    grid[edge_break["L"][sl], 0] = inside
+                    grid[edge_break["R"][sl], nc - 1] = 1.0 - inside
                 v = np.repeat(s[sl] / (gravel_uv_m if gravel else road_uv_m), nc)
                 name = f"{'1GRAVEL' if gravel else '1ROAD'}_{k:03d}"
                 out.append(_mesh(name, material, pos, tri, np.column_stack([u, v])))
             else:
+                side = kind[-1].upper()
                 uv = np.column_stack([pos[:, 0], pos[:, 2]]) / grass_uv_m
-                out.append(_mesh(f"1GRASS_V{k:03d}{kind[-1].upper()}", "grass", pos, tri, uv))
+                if cut is not None and cut[side][r0:last].any():
+                    keep = np.repeat(~cut[side][r0:last], nc - 1)
+                    pos, uv, tri = compact(pos, uv, tri[np.concatenate([keep, keep])])
+                    if not len(tri):
+                        continue
+                out.append(_mesh(f"1GRASS_V{k:03d}{side}", "grass", pos, tri, uv))
+    return out
+
+
+def compact(pos: np.ndarray, uv: np.ndarray, tri: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A mesh's vertices and texture coordinates with only those its triangles use, and the triangles renumbered."""
+    used, local = np.unique(tri, return_inverse=True)
+    return pos[used], uv[used], local.reshape(tri.shape)
+
+
+def soup_meshes(name: str, material: str, pieces: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+                frame: LocalFrame) -> list[Mesh]:
+    """Pieces of one material, each (positions (n, 3) as easting, northing, height; texture coordinates (n, 2);
+    triangles (m, 3)), packed in order into meshes under the vertex limit: `name`, then `name_1` and so on. A piece's
+    vertices no triangle uses are left out."""
+    out, batch, held = [], [], 0
+    pieces = [compact(*piece) for piece in pieces]
+
+    def flush():
+        if not batch:
+            return
+        pos = np.vstack([p for p, _, _ in batch])
+        uv = np.vstack([u for _, u, _ in batch])
+        starts = np.cumsum([0] + [len(p) for p, _, _ in batch[:-1]])
+        tri = np.vstack([t + k for (_, _, t), k in zip(batch, starts)])
+        suffix = f"_{len(out)}" if out else ""
+        out.append(_mesh(name + suffix, material, frame.to_ac(pos[:, 0], pos[:, 1], pos[:, 2]), tri, uv))
+
+    for piece in pieces:
+        if held + len(piece[0]) > MAX_VERTICES:
+            flush()
+            batch, held = [], 0
+        batch.append(piece)
+        held += len(piece[0])
+    flush()
     return out
 
 
@@ -321,10 +390,105 @@ def _outline(rb: Ribbon) -> tuple[np.ndarray, np.ndarray]:
     return np.column_stack([rb.e[ri, ci], rb.n[ri, ci]]), rb.h[ri, ci]
 
 
-def terrain_region(rb: Ribbon, corridor_m: float):
-    """(corridor, footprint): the terrain covers the corridor around the road minus the ribbon's footprint."""
-    ring, _ = _outline(rb)
-    footprint = shapely.Polygon(ring).buffer(0)
+@dataclass
+class Footprint:
+    """Ground the road takes besides its own ribbon: side roads' stubs (`core.stubs`), for the terrain.
+
+    - `cut`: per side ("L", "R"), True for each quad between rows i and i+1 of the road's ribbon whose verge and
+      skirt are taken out (`ribbon_meshes(cut=)`).
+    - `ribbons`: whole ribbons beside the road (the stubs). Their outlines bound the terrain, less their first row's
+      road (which meets the flares), and their skirts join it as the road's does (`terrain_meshes(fold_skirt=True)`).
+    - `patches`: other pieces' outlines (n, 2): the throats and the flares' verges, which the terrain stays off.
+    - `edges`: the points (n, 2) and heights (n,) of their outlines that face the terrain: the flares' verges' outer
+      edges. Only points on the outside of all the pieces together go into the terrain's triangulation: one shared
+      by two pieces could join a triangle reaching across one of them, and leave a hole where it's dropped.
+
+    Pieces meet each other only along shared vertices, so the terrain shares the outline points they have in common.
+    """
+
+    cut: dict[str, np.ndarray]
+    ribbons: list[Ribbon]
+    patches: list[np.ndarray]
+    edges: list[tuple[np.ndarray, np.ndarray]]
+
+
+def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """(first, last + 1) of each run of True."""
+    m = np.concatenate([[False], np.asarray(mask, bool), [False]]).astype(np.int8)
+    d = np.diff(m)
+    return list(zip(np.flatnonzero(d == 1).tolist(), np.flatnonzero(d == -1).tolist()))
+
+
+def _cut_cells(rb: Ribbon, side: str, a: int, b: int) -> list[tuple[int, int]]:
+    """The (row, column) ring of the verge and skirt cut away between rows a and b on one side, road edge included:
+    the outer edge from row a to b, row b in to the road's edge, the road's edge back to row a, and row a out."""
+    if side == "L":
+        edge = rb.road_cols.start
+        return ([(r, 0) for r in range(a, b + 1)] + [(b, c) for c in range(1, edge + 1)]
+                + [(r, edge) for r in range(b - 1, a - 1, -1)] + [(a, c) for c in range(edge - 1, 0, -1)])
+    edge, outer = rb.road_cols.stop - 1, rb.e.shape[1] - 1
+    return ([(r, outer) for r in range(a, b + 1)] + [(b, c) for c in range(outer - 1, edge - 1, -1)]
+            + [(r, edge) for r in range(b - 1, a - 1, -1)] + [(a, c) for c in range(edge + 1, outer)])
+
+
+def _footprint(rb: Ribbon, fp: Footprint) -> tuple[dict, np.ndarray, np.ndarray, shapely.Geometry]:
+    """The terrain's inner boundary with stubs: every outline vertex of the road's ribbon (less those cut away) and
+    of each other piece, each once, as (index by (easting, northing), points, heights), and the ground they all
+    cover."""
+    ri, ci = _outline_index(rb)
+    rows, cols = rb.e.shape
+    gone = np.zeros((rows, cols), bool)  # outline vertices of the cut verge and skirt, which no mesh has now
+    cells: list[tuple[int, int]] = []  # the cut's edges, rows a and b, from the road's verge outwards
+    cut_rings = []
+    for side, mask in fp.cut.items():
+        edge = rb.road_cols.start if side == "L" else rb.road_cols.stop - 1
+        for a, b in _runs(mask):  # quads a .. b-1, so rows a .. b
+            ring = _cut_cells(rb, side, a, b)
+            cut_rings.append(shapely.Polygon([(rb.e[r, c], rb.n[r, c]) for r, c in ring]).buffer(0))
+            gone[a + 1:b, 0 if side == "L" else cols - 1] = True
+            cells += [(r, c) for r, c in ring if r in (a, b) and c != edge]
+    cells = [(r, c) for r, c in cells if not gone[r, c]]
+    index: dict[tuple[float, float], int] = {}
+    xy: list[tuple[float, float]] = []
+    hs: list[float] = []
+
+    def add(x, y, h):
+        key = (float(x), float(y))
+        if key not in index:
+            index[key] = len(xy)
+            xy.append(key)
+            hs.append(float(h))
+
+    for r, c in zip(ri.tolist(), ci.tolist()):
+        if not gone[r, c]:
+            add(rb.e[r, c], rb.n[r, c], rb.h[r, c])
+    for r, c in cells:
+        add(rb.e[r, c], rb.n[r, c], rb.h[r, c])
+    polygons = []
+    for other in fp.ribbons:
+        oi, oc = _outline_index(other)
+        first_road = (oi == 0) & (oc >= other.road_cols.start) & (oc < other.road_cols.stop)
+        for r, c in zip(oi[~first_road].tolist(), oc[~first_road].tolist()):
+            add(other.e[r, c], other.n[r, c], other.h[r, c])
+        polygons.append(shapely.Polygon(np.column_stack([other.e[oi, oc], other.n[oi, oc]])).buffer(0))
+    for points, heights in fp.edges:
+        for (x, y), h in zip(np.asarray(points, float).tolist(), np.asarray(heights, float).tolist()):
+            add(x, y, h)
+    polygons += [shapely.Polygon(ring).buffer(0) for ring in fp.patches]
+    road = shapely.Polygon(np.column_stack([rb.e[ri, ci], rb.n[ri, ci]])).buffer(0)
+    if cut_rings:
+        road = road.difference(shapely.unary_union(cut_rings))
+    return index, np.array(xy), np.array(hs), shapely.unary_union([road, *polygons])
+
+
+def terrain_region(rb: Ribbon, corridor_m: float, extra: Footprint | None = None):
+    """(corridor, footprint): the terrain covers the corridor around the road minus the ribbon's footprint, and with
+    `extra` the stubs' too."""
+    if extra is None:
+        ring, _ = _outline(rb)
+        footprint = shapely.Polygon(ring).buffer(0)
+    else:
+        footprint = _footprint(rb, extra)[3]
     centre_cols = rb.road_cols.start + 2
     centre_xy = np.column_stack([rb.e[:, centre_cols], rb.n[:, centre_cols]])
     return shapely.LineString(centre_xy).buffer(corridor_m, quad_segs=16), footprint
@@ -350,9 +514,36 @@ def _skirt_triangles(rb: Ribbon, first: int) -> tuple[np.ndarray, np.ndarray, np
             np.vstack(tris))
 
 
+def _fold_skirts(rb: Ribbon, fp: Footprint, index: dict, first: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """`_skirt_triangles` with stubs: the road's skirt less its cut quads, and each stub's, over the terrain's points.
+    A vertex already among them (by its easting and northing, `index`) is shared; the others are added, numbered from
+    `first`. Returns their (easting, northing), heights, and the triangles."""
+    new_xy: list[tuple[float, float]] = []
+    new_h: list[float] = []
+    tris = []
+    for ribbon, cut in [(rb, fp.cut)] + [(other, None) for other in fp.ribbons]:
+        rows = ribbon.e.shape[0]
+        for side, cs in zip("LR", _skirts(ribbon)):
+            e, n, h = ribbon.e[:, cs], ribbon.n[:, cs], ribbon.h[:, cs]
+            ids = np.empty(e.size, np.int64)
+            for k, (x, y, z) in enumerate(zip(e.ravel().tolist(), n.ravel().tolist(), h.ravel().tolist())):
+                i = index.get((x, y))
+                if i is None:
+                    i = index[(x, y)] = first + len(new_xy)
+                    new_xy.append((x, y))
+                    new_h.append(z)
+                ids[k] = i
+            t = ids[_grid_triangles(rows, e.shape[1])]
+            if cut is not None and cut[side].any():
+                keep = np.repeat(~cut[side], e.shape[1] - 1)
+                t = t[np.concatenate([keep, keep])]
+            tris.append(t)
+    return np.array(new_xy).reshape(-1, 2), np.array(new_h), np.vstack(tris)
+
+
 def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame, *,
                    uv_m: float = 8.0, ground=None, classes: dict[str, tuple[str, float, bool]] | None = None,
-                   fold_skirt: bool = False) -> list[Mesh]:
+                   fold_skirt: bool = False, extra: Footprint | None = None) -> list[Mesh]:
     """Terrain from the skirt's outer edge out to `corridor_m`, chunked under the vertex limit.
 
     - `fold_skirt` adds the skirt (verge edge outwards) to the terrain, for verge meshes made without it
@@ -363,9 +554,14 @@ def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame,
       (`warped_uv`). Each material's triangles go in meshes of a few 400 m chunks each (`_class_groups`), named by
       their first chunk and the letter (`1GRASS_T012P`). Without it every triangle is `terrain`, in a mesh per chunk
       named `1GRASS_T###`, as before.
+    - `extra`: the stubs' ground (`Footprint`). The terrain then leaves room for them too, sharing their outlines.
     """
-    ring, ring_h = _outline(rb)
-    corridor, footprint = terrain_region(rb, corridor_m)
+    if extra is None:
+        ring, ring_h = _outline(rb)
+        corridor, footprint = terrain_region(rb, corridor_m)
+    else:
+        index, ring, ring_h, footprint = _footprint(rb, extra)
+        corridor, _ = terrain_region(rb, corridor_m)
     centre_cols = rb.road_cols.start + 2
     centre_xy = np.column_stack([rb.e[:, centre_cols], rb.n[:, centre_cols]])
     region = corridor.difference(footprint)
@@ -385,7 +581,8 @@ def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame,
     keep = shapely.contains_xy(corridor, cen[:, 0], cen[:, 1]) & ~shapely.contains_xy(footprint, cen[:, 0], cen[:, 1])
     tri = tri[keep]
     if fold_skirt:
-        skirt_xy, skirt_h, skirt_tri = _skirt_triangles(rb, len(pts))
+        skirt_xy, skirt_h, skirt_tri = (_skirt_triangles(rb, len(pts)) if extra is None
+                                        else _fold_skirts(rb, extra, index, len(pts)))
         pts, hts, tri = np.vstack([pts, skirt_xy]), np.concatenate([hts, skirt_h]), np.vstack([tri, skirt_tri])
 
     # Chunk along the road: each triangle goes with its nearest centreline station.

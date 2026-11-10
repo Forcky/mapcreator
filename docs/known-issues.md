@@ -165,17 +165,40 @@ In Tasmania the terrain is split into ground classes from TASVEG, each with its 
 
 ## Side-road junctions
 
-The route stage finds the real side roads that meet the route, and nothing stands in their mouths (`docs/ac-format.md`, "Side-road junctions"). No road is drawn for them yet: that's the stubs, to come.
+The route stage finds the real side roads that meet the route; each gets its first 100 m drawn as road, joined to the mainline by a corner flare either side, and nothing stands in its mouth or on its stub (`docs/ac-format.md`, "Side-road junctions" and "Side roads' stubs"). The closures (tape, an obstacle, the vehicle) come next and stand on the stubs.
 
-- **To check in game** (Grasstree Hill and Brinktop Road):
-  - nothing stands in a side road's mouth: no guide post, CAM, sign or guard rail across it, and no tree on the side road. Before (laptop builds, made-up WorldCover trees), forward distances: on Grasstree Hill a post or marker stood in the mouths of Sugarloaf Road (1.34 km), the unnamed road at 5.51 km and Downhams Town Road (6.76 km), and trunk colliders on Downhams Town Road and Malcolms Hut Road (9.43 km); on Brinktop Road a rail ran across Bridge Street's mouth (0.49 km), and a post or marker stood in those of Bakers Road (9.41 km) and the Tasman Highway (10.37 km);
-  - the guide posts either side of a mouth read naturally (the one due in it now stands just past it), and a rail ending at a mouth doesn't look cut off;
-  - the start and finish gates: none moves on the examples.
-- **The mouth's margin is a guess:** 5 m along the road either side of the side road's carriageway, and the band 3 m beyond the edge. The stubs' corners (about 8 m radius) will show whether it's enough.
-- **Side roads' widths are class defaults:** no side road on the examples has a `width` tag and few have `lanes`, so the cleared corridor is as wide as the class default.
+- **To check in game** (Grasstree Hill, Brinktop Road, and an acute junction):
+  - **the seams:** drive slowly across each mouth, on and off the edge, along the mainline's edge across the mouth, across the stub's first full row (about 8-30 m in) and along each flare's verge. No bump, no gap to fall through, no ground showing through the asphalt, no flicker where two surfaces meet. Grasstree Hill: Sugarloaf Road (1.34 km, right), the unnamed gravel road at 5.51 km (right, 54°: a long flare on its acute side, closing round a grass gore), Back Tea Tree Road (9.50 km, left, 76°) and Cold Blow Road (12.48 km, left, gravel); Brinktop Road: the Franklin and Edward Street crossroads (0.18 km), Bridge Street (0.50 km, right), Parramore Street (0.84 km, right);
+  - **the edge lines** break across each mouth, from one flare's tangent point to the other's, and taper back over a metre either side; the throat is plain asphalt (or loose gravel), and the stub has its own lines from its first full row;
+  - **the terrain at the mouths:** the ground meets the flares' verges and the stubs' skirts without a step or a cliff, and a stub climbing or falling away from the road (Sugarloaf Road drops about 12%) reads as a road, not a ramp;
+  - **driving into a stub:** a car that runs wide can turn in on the flare and drive the stub to its end, where the asphalt stops square and the side road carries on as ground. The closures will stop it 12 m in; whether the stub's end shows past them is to judge then;
+  - the timing gates: only Brinktop Road's start gate moves, 0.5 m back, clear of Percy Street's flare;
+  - as before: nothing stands in a side road's mouth or on its stub, the guide posts either side of a mouth read naturally, and a rail ending at a mouth doesn't look cut off.
+- **Flares are 8 m corners,** the route's own corner radius, and longer on the acute side. Real rural Tasmanian junctions may be wider (heavy vehicles) or tighter (minor roads). The mouth's margin (5 m either side of the flares) and the 3 m band are as before.
+- **Side roads' widths are class defaults:** no side road on the examples has a `width` tag and few have `lanes`, so stubs are as wide as their class default, times the job's width option.
+- **A stub's heights come from the DEM along its line,** smoothed over 15 m and blended from the mainline's cross-fall over 15 m or more. Victoria's 10 m DEM blurs a side road's formation, so Mount Dandenong Tourist Road's stubs follow the hillside more than the road.
+- **Stubs left out:** where a side road's mouth would overlap another's on the same side (Brinktop Road's Charles Street, which leaves Gunning Street's node; Mount Dandenong Tourist Road's clusters, 6 of them), at the route's very ends (Henry Street and the Tasman Highway on Brinktop Road), beside another part of the route (School Lane on Mount Dandenong Tourist Road), too short for a ribbon past its flares (a 33 m dead-end spur on Lyell Highway), or where Bridge Street's one-way arm runs into its other arm. They keep their mouths clear as before. Drawing a cluster as one patch, a shared throat, is the obvious next step for town roads.
+- **Flares on bending roads:** a flare is drawn in the mainline's frame, which folds over itself far out on the inside of a tight bend, and a side road can bend hard inside a long flare. Either way the flare is drawn again at half the size, then a quarter, or the stub is left out. Two did on the examples (Perrins Creek Road on Mount Dandenong Tourist Road, Gunning Street on Brinktop Road). A side road that runs alongside the route after leaving it (Bella Vista Crescent) gets a long paved gore before its flare closes it.
+- **Slivers in the terrain:** its triangulation isn't constrained, so where a stub's skirt meets the mainline's, a terrain triangle can overlap a skirt by a few square centimetres: 6 points of a 0.3 m grid across Grasstree Hill's 8 mouths, against none without stubs. Too small to see, probably; a constrained triangulation would remove them.
+- **A gravel side road off a sealed road** brings the gravel material, its 2048 x 512 texture and the `GRAVEL` surface into the track: most of Grasstree Hill's 1 MB growth.
 - **Driveways, service roads and tracks** aren't junctions (the maintainer's decision, 10 Nov 2026): the road data doesn't hold them. Grasstree Hill has 37 driveways and Lower Swamp Road 39, and guide posts, rails and trunk colliders still stand in some of their mouths. Clearing them needs the OSM index to keep those ways too, a PR of its own.
 - **Roundabouts** are recorded and built as before: only the route's arc of the ring is road, and nothing is cleared at their exits. A later PR draws them.
 - **Mount Dandenong Tourist Road** has 73 junctions in 14.6 km, 8 clusters within 30 m of each other: its guide posts fall from 1,535 to 1,443, and 1,053 trees (420 trunk colliders) come off its side roads.
+- **Cost** (laptop builds, made-up WorldCover trees; mesh-stage vertices and triangles, and each layout's KN5, without stubs and with them):
+
+| Road | Junctions | Stubs | Stubs' own meshes, vertices | Mesh-stage vertices | Triangles | KN5, each layout |
+|---|---|---|---|---|---|---|
+| Grasstree Hill | 8 | 8 | 4,802 | 419,430 → 425,301 (+1.4%) | 636,289 → 644,078 (+1.2%) | 29.2 → 30.2 MB (+3.4%) |
+| Brinktop Road | 18 | 14 | 8,062 | 307,052 → 317,207 (+3.3%) | 492,450 → 505,965 (+2.7%) | 21.2 → 22.4 MB (+5.8%) |
+| Esperance Coast Road | 10 | 10 | 5,937 | 699,050 → 706,449 (+1.1%) | 1,001,332 → 1,010,602 (+0.9%) | 43.6 → 45.4 MB (+4.1%) |
+| Lower Swamp Road | 3 | 3 | 1,757 | 208,271 → 210,416 (+1.0%) | 331,503 → 334,205 (+0.8%) | 15.5 → 15.6 MB (+0.7%) |
+| Lyell Highway | 4 | 3 | 1,387 | 1,891,998 → 1,893,671 (+0.1%) | 2,919,669 → 2,921,694 (+0.1%) | 121.9 → 122.7 MB (+0.6%) |
+| Mount Dandenong Tourist Road | 73 | 66 | 54,272 | 431,150 → 472,967 (+9.7%) | 682,085 → 736,832 (+8.0%) | 30.6 → 33.6 MB (+9.9%) |
+
+  - The mesh stage grows by less than the stubs' own meshes: the terrain gives up its lattice under them. The KN5s grow more than their vertices suggest where a stub brings a material the road didn't have: a gravel side road off a seal (every example but Lower Swamp Road, which is gravel already) or a one-lane seal (Mount Dandenong Tourist Road).
+  - The stubs' rows are a metre apart for their first 20 m and 2 m beyond: about 40% fewer stub vertices than 1 m rows all the way (Grasstree Hill: 4,800 against 7,500 with ground classes, 7,000 against 11,600 without).
+  - Further savings if it's too heavy: rows 4 m apart past 40 m (the stubs are nearly straight out there), no skirt on the stubs (the terrain fills to their verges), or 60 m stubs on dense town roads.
+  - Frame rate: the stubs add a few meshes per 400 m (packed by material), and fewer vertices than the trees do. To measure with the harness's `probe-points` at Olinda (about 6.8 km on Mount Dandenong Tourist Road) against a `junctions: none` build.
 
 ## Power lines
 

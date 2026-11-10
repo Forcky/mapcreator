@@ -181,6 +181,9 @@ ROAD_TILE_M = 12.0  # one texture repeat along the road: a 3 m dash and a 9 m ga
 LINE_W_M = 0.10
 EDGE_INSET_M = 0.15
 DASH_M = 3.0
+# The carriageway each sealed texture is drawn for: u = 0..1 stretches it to the road's real width.
+ROAD_MARKED_WIDTH_M = 6.4
+ROAD_PLAIN_WIDTH_M = 4.0
 
 
 def _sealed(width_m: float, size: int, seed: int, centre_line: bool) -> Image.Image:
@@ -200,7 +203,7 @@ def _sealed(width_m: float, size: int, seed: int, centre_line: bool) -> Image.Im
     return Image.fromarray(np.clip(img, 0, 255).astype(np.uint8))
 
 
-def road_marked(width_m: float = 6.4, size: int = 512, seed: int = 1) -> Image.Image:
+def road_marked(width_m: float = ROAD_MARKED_WIDTH_M, size: int = 512, seed: int = 1) -> Image.Image:
     """Asphalt with white edge lines and a dashed centre line.
 
     The road mesh stretches u = 0..1 across the carriageway and repeats the
@@ -210,11 +213,18 @@ def road_marked(width_m: float = 6.4, size: int = 512, seed: int = 1) -> Image.I
     return _sealed(width_m, size, seed, centre_line=True)
 
 
-def road_plain(width_m: float = 4.0, size: int = 512, seed: int = 1) -> Image.Image:
+def road_plain(width_m: float = ROAD_PLAIN_WIDTH_M, size: int = 512, seed: int = 1) -> Image.Image:
     """Asphalt with edge lines and no centre line, for single-lane seals (`lanes=1` or `lane_markings=no`).
     Australian narrow seals generally carry no centre line; most single-lane ones in Tasmania have no edge lines
     either, but v1 keeps them."""
     return _sealed(width_m, size, seed, centre_line=False)
+
+
+def edge_line_u(texture: str) -> float:
+    """How far in from u = 0 a sealed texture's edge line reaches (and out from u = 1 on the other side): its
+    outer edge, as a share of the carriageway. 0 for a texture with no edge lines."""
+    width = {"road_marked": ROAD_MARKED_WIDTH_M, "road_plain": ROAD_PLAIN_WIDTH_M}.get(texture)
+    return 0.0 if width is None else (EDGE_INSET_M + LINE_W_M / 2) / width
 
 
 GRAVEL_TILE_M = 24.0  # one gravel repeat along the road: twice ROAD_TILE_M, so the period shows less
