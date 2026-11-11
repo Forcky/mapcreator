@@ -195,11 +195,18 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     if fine.any():  # only where the DEM shows real drops: a coarse one shows hillsides as cliffs
         masks = roadside.rail_masks(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"], sec["half_right"],
                                     sec["slope_left"], sec["slope_right"], dem.sample, allowed=fine)
+    # The route's own bridges: rails on both sides wherever the deck stands clear of the ground, on any DEM.
+    on_bridge = roadside.bridge_mask(c["s"], c["bridge"], c["z"] - c["z_raw"]) if "bridge" in c else no_rail
+    if on_bridge.any():
+        masks = {side: mask | on_bridge for side, mask in masks.items()}
+    if fine.any() or on_bridge.any():
         if mouths is not None:
             masks, junction_stats["rail_m_removed"] = roadside.clear_mouths(masks, mouths, c["s"])
         rails, rail_stats = roadside.guard_rails(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"],
                                                  sec["half_right"], sec["slope_left"], sec["slope_right"],
                                                  dem.sample, frame, allowed=fine, masks=masks)
+        if on_bridge.any():
+            rail_stats["on_bridges_m"] = round(float(on_bridge.sum() * (c["s"][1] - c["s"][0])), 1)
     meshes += rails
     limits = furniture.speed_limits(c["run"], work.read_json(route_stage.STAGE, "runs.json"))
     furn, furn_stats, atlas = furniture.furniture(

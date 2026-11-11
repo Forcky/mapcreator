@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.ndimage import uniform_filter1d
+from scipy.ndimage import binary_dilation, uniform_filter1d
 
 CROWN = 0.025
 # NATSPEC AUS-SPEC 0052 (geometric rural road design, unsealed): "Minimum cross-fall: More than 4%".
@@ -230,6 +230,19 @@ def eased(s: np.ndarray, values: np.ndarray, ease_m: float = WIDTH_EASE_M) -> np
     step = s[1] - s[0] if len(s) > 1 else 1.0
     size = max(int(round(ease_m / step)), 1)
     return uniform_filter1d(values.astype(float), size=size, mode="nearest")
+
+
+def off_ground_factor(s: np.ndarray, mask: np.ndarray, ease_m: float = WIDTH_EASE_M) -> np.ndarray:
+    """0 on every station of `mask`, 1 from `ease_m` away, eased between: what the DEM's camber is multiplied by where
+    the DEM beside the road isn't the road (a bridge deck, a tunnel, a hump bridged under a crossing road). The mask
+    is widened by half the ease before easing, so a short bridge carries no camber at all, not a reduced one."""
+    mask = np.asarray(mask, dtype=bool)
+    if not mask.any():
+        return np.ones(len(mask))
+    step = s[1] - s[0] if len(s) > 1 else 1.0
+    half = max(int(round(ease_m / 2 / step)), 1)
+    wide = binary_dilation(mask, structure=np.ones(2 * half + 1, dtype=bool))
+    return np.clip(eased(s, (~wide).astype(float), ease_m), 0.0, 1.0)
 
 
 def narrowness(width) -> np.ndarray:

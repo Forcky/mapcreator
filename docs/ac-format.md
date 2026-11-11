@@ -451,6 +451,34 @@ Coordinates are in the region's metric CRS (`crs`), as `route.npz`'s are, rounde
 - `roundabouts`, each: `id`, `way_ids` (the ring's ways), `highway`, `name`, `tags`, `ring` (its nodes in order round it, the first repeated at the end when it closes), `closed`, `centre`, `radius_m` (the nodes' mean distance from their centre), `on_route`, `route_from_m` and `route_to_m` (where the route is on it, as `at_m`), and `exits`: each drivable, public way leaving the ring that isn't the route, with `node`, `xy`, `on_route` (whether it leaves the ring where the route is on it) and the junctions' fields from `way_id` to `line`.
 - `skipped`: the side roads that leave the route but aren't junctions, for checking the rule: `node`, `at_m`, `xy`, `side`, `angle_deg`, `off_mainline_deg`, `way_id`, `highway`, `name`, and `reason`: `class`, `private`, `grade_separated`, `roundabout` (an entry or exit of a roundabout the route drives), `angle` or `meets_route`. On the examples only Brinktop Road has any: Bridge Street behind its start and the Tasman Highway beyond its finish, each the road carrying straight on past the route's end (`angle`).
 
+## Crossings and the route's own bridges (`core/crossings.py`)
+
+OpenStreetMap draws a bridge over a road without joining the two, so a road crossing over or under the route is never a junction. The route stage lists every one in `01_route/crossings.json` (below), for every job, whatever its `junctions` option. No bridge structure is drawn yet: the route's own bridge is still an embankment at deck height, and a crossing road isn't drawn. What is built on the list and the route's tags today:
+
+- **Humps under a road crossing over** (`profile.humps_under`, the profile stage). On a bare-earth DEM a road passing under another can read the embankment beside the underpass, or ground from before its cutting was dug: 9 m, and 39% over 10 m, on the Kingston Bypass under Summerleas Road. Near each crossing where the other road is on top (and the route isn't in a tunnel), a hump is what a grey-scale opening across 61 m removes, taking the largest rise over the profile tilted by each grade from -15% to +15%, so a hump on a slope is found out to its foot on both sides. It counts if it rises more than 1 m and comes within 40 m of the crossing, and it's bridged out to where it rises less than 0.2 m, with a straight grade as the route's own bridges are (`profile.fill_runs`). A smooth crest rises at most (30.5 m)² / 2R in that test, so no crest flatter than about 470 m vertical radius is touched. Elsewhere the profile keeps the real ground.
+- **Crown only** (the section stage) on the route's own bridges and tunnels (by their tags) and on those humps: the DEM beside the road there is the ground under the deck, the hill over the tunnel or the embankment, not the road. The camber eases to the crown over the 60 m before and back over the 60 m after, so even a short bridge carries none (`section.off_ground_factor`).
+- **Guard rails on bridges** (`roadside.bridge_mask`, the mesh stage): a rail and its collider on both sides of each tagged bridge whose deck stands 1.5 m or more above the DEM's ground under it anywhere along it (or over no DEM at all: the sea), extended 8 m past each end, on any DEM. The DEM's own rails still need LiDAR ground; they're added to, not replaced. Side roads' mouths are cleared as before.
+- `centreline.npz` carries `bridge`, `tunnel` and `under` (bool per station) for these. A profile stage from before them is read as having none.
+
+### `01_route/crossings.json`
+
+Coordinates are in the region's metric CRS (`crs`), as `route.npz`'s are, rounded to the centimetre; distances in metres. A new field may be added at any time; a change to an existing field's meaning raises `version`. Only the road data's classes are listed (the router's: motorway to living street, `road` and the links), so footbridges, railways and waterways aren't.
+
+- `version`: 1. `crs`: e.g. `EPSG:28355`.
+- `rule`: `levels` (how each way's level is read) and `clip_m` (150: how much of each crossing way's line is kept).
+- **Which is on top:** each way's level is its `layer` (the first value, if there are several), else 1 on a bridge (`bridge` other than `no` or `low_water_crossing`), -1 in a tunnel, else 0. OSM's `layer` says only which of two crossing ways is above the other, never a height.
+- `crossings`, in order along the route, each a point where another way's line crosses the route's without a node the two share:
+  - `id`: its index; `at_m`: where, along `route.npz`'s polyline from its start (the profile stage finds it on the smoothed centreline by its `xy`, within 50 m of where `at_m` falls); `xy`; `lonlat`;
+  - `relation`: `over` (the other way passes over the route) or `under` (it passes under the route's own bridge);
+  - `angle_deg`: the angle between the two at the crossing, 0-90;
+  - `way_id`, `highway`, `name`; `level` (as read above), `bridge` and `tunnel` (bools, as read above);
+  - `tags`: those of `highway`, `name`, `ref`, `bridge`, `tunnel`, `layer`, `lanes`, `width`, `oneway`, `surface`, `maxspeed`, `bridge:structure`, `bridge:name` and `maxheight` it has;
+  - `way_length_m`: the whole way's length (a bridge is usually its own way, so this is the bridge's length when `bridge` is true); `line`: the way's line within 150 m of the crossing, along it; `line_at_m`: where the crossing is along `line`;
+  - `route`: the route's own way there: `way_id`, `level`, `bridge`, `tunnel`.
+  - A way crossing the route twice (a loop under a highway's two decks) is listed at each point.
+- `unresolved`: crossings where the two ways' levels are the same (a missing junction node or a missing `layer`), with the same fields but no `relation`. Nothing is built on them.
+- The route's own ways are left out, so a route crossing itself on a loop isn't listed.
+
 ## Closure props (`core/closures.py`)
 
 The objects that close a side road off the stage, after Motorsport Australia's stage-rally rules (2026 Special Stage Rally standing regulations, art. 11.10 "Road Closure Standards"). The mesh stage places them on every side road's stub ("Closures on the stubs" below).
