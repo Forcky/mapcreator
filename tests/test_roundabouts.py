@@ -234,9 +234,12 @@ def test_the_ring_island_and_exit_are_built_and_pass_the_stub_checks():
     assert kerb.material == roundabouts.KERB_MATERIAL and "kerb" in textures.LIBRARY
 
 
-def test_the_island_rises_a_kerb_then_domes_and_no_mesh_but_the_island_s_covers_it():
+def test_the_island_is_a_flush_apron_then_a_kerb_then_grass_and_nothing_else_covers_it():
+    from mapcreator.core import stub_closures
+
     found, c, sec, rings, plan, ring, meshes, checks = built()
-    island = shapely.Polygon(rings[0]["island"]["outline"])
+    r = rings[0]
+    island = shapely.Polygon(r["island"]["outline"])
     inside = island.buffer(-0.5)
     for m in meshes:
         p = m.positions.astype(float)[m.triangles].mean(axis=1)
@@ -244,13 +247,25 @@ def test_the_island_rises_a_kerb_then_domes_and_no_mesh_but_the_island_s_covers_
         hit = shapely.contains_xy(inside, e, n)
         if hit.any():
             assert m.name in ("1GRASS_RB0_I", "1ROAD_RB0_K"), m.name
-    # The road's edges are its crown below the centreline (8 cm on 3.2 m); the kerb's top is 15 cm above them.
-    edge = GROUND - section.CROWN * HALF
+    # Across the island's edge where it meets the road (the route's arc, where the line apexes): flush with the road's
+    # edge and falling gently over the apron, so a wheel just past the edge never meets the kerb; then the kerb.
+    top = stub_closures.TopSurface(meshes, FRAME, [tuple(island.buffer(5.0).bounds)])
+    k = (r["island"]["mainline_rows"][0] + r["island"]["mainline_rows"][1]) // 2
+    nrm = cl.normals(c["heading"][k:k + 1])[0]
+    edge_pt = c["xy"][k] - nrm * sec["half_right"][k]  # the island is on the road's right
+    edge_h = float(top(*(edge_pt + nrm * 0.02)))  # just inside the road
+    apron, kerb_w, rise = roundabouts.ISLAND_APRON_M, roundabouts.ISLAND_KERB_W, roundabouts.ISLAND_KERB_H
+    out = np.arange(0.05, apron - 0.05, 0.05)
+    on_apron = top(*(edge_pt[:, None] - nrm[:, None] * out[None, :])) - edge_h
+    assert on_apron.max() <= 0.005 and on_apron.min() >= -roundabouts.ISLAND_APRON_FALL * apron - 0.01
+    beyond = float(top(*(edge_pt - nrm * (apron + kerb_w + 0.3)))) - edge_h
+    assert beyond == pytest.approx(rise - roundabouts.ISLAND_APRON_FALL * apron, abs=0.03)
+    concrete = next(m for m in meshes if m.name == "1ROAD_RB0_K")
+    assert concrete.material == roundabouts.KERB_MATERIAL
     grass = next(m for m in meshes if m.name == "1GRASS_RB0_I")
     e, n, h = FRAME.from_ac(grass.positions.astype(float))
-    on = shapely.contains_xy(island.buffer(-roundabouts.ISLAND_KERB_W - 0.01), e, n)
-    assert h[on].min() >= edge + roundabouts.ISLAND_KERB_H - 0.03
-    assert h[on].max() <= GROUND + roundabouts.ISLAND_KERB_H + roundabouts.DOME_MAX_M + 0.03
+    on = shapely.contains_xy(island.buffer(-apron - kerb_w - 0.01), e, n)
+    assert h[on].max() <= GROUND + rise + roundabouts.DOME_MAX_M + 0.03
 
 
 def test_the_road_s_island_side_loses_its_verge_and_edge_line_between_the_ring_s_ends_only():

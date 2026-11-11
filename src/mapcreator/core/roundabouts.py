@@ -29,10 +29,12 @@ like any other, so `core.stubs` closes it. The rest are this module's.
   and between them the throat, triangulated over the road's own edge vertices. The road's edge rows between the
   flares are the mouth. The flare on the island's side is short: there the ring's inner edge peels off the road's.
 - **The island:** inside the ring's inner edge and the road's island-side edge, between the two ends. Its edge is
-  every vertex of the road's edge, the island-side flares and the ring's inner edge, shared exactly. It rises
-  ISLAND_KERB_H over ISLAND_KERB_W at its edge (a mountable kerb, concrete), then domes gently (DOME_GRADE, at most
-  DOME_MAX_M) under mown grass: the verge's `grass` material, Grass FX class A where the grass pack is on. No
-  collider: a car that cuts across it drives on grass. Trees stay off it unless its inner radius is at least
+  every vertex of the road's edge, the island-side flares and the ring's inner edge, shared exactly. Its first
+  ISLAND_APRON_M is a concrete apron, flush with the road's edge and falling ISLAND_APRON_FALL towards the island (a
+  mountable apron, as real roundabouts have); then it rises ISLAND_KERB_H over ISLAND_KERB_W (the kerb), then domes
+  gently (DOME_GRADE, at most DOME_MAX_M) under mown grass: the verge's `grass` material, Grass FX class A where the
+  grass pack is on. The route's line apexes 1.2-1.4 m from the island's edge on a small ring, so a wheel just past
+  the road's edge there meets the flush apron, not the kerb. No collider: a car that cuts across it drives on. Trees stay off it unless its inner radius is at least
   TREES_INNER_RADIUS_M, and then they keep the road's clearance from its edge; guide posts and rails never stand
   on it.
 - **The road beside it:** its verge and skirt on the island's side come out from one end's mouth to the other's
@@ -88,6 +90,12 @@ CORNER_WITHIN_M = 40.0  # each of the ring's edges must leave the road's edge wi
 END_FLARE_RADIUS_M = 4.0
 # An exit that doesn't fit on the ring with a side road's 8 m flares tries again with these shares of them.
 EXIT_FLARE_SCALES = (1.0, 0.5)
+# The island's apron: a concrete band this wide inside its edge, flush with the road there and falling this much a
+# metre towards the island, before the kerb. In game (11 Nov), with the kerb flush against the road's edge, a car on
+# Sugarloaf Road's 10 m ring took its inside wheels onto the kerb at the apex, where the racing line comes within
+# 1.2 m of the edge: a bump of 0.7 g where main had 0.4. Narrower on an island too small for it.
+ISLAND_APRON_M = 1.5
+ISLAND_APRON_FALL = 0.025
 ISLAND_KERB_H = 0.15  # the island's kerb: 150 mm high (a mountable kerb)
 ISLAND_KERB_W = 0.3  # and this wide
 DOME_GRADE = 0.03  # inside the kerb the grass rises this much a metre in from the kerb
@@ -345,6 +353,7 @@ def plan(rings: list[dict], c, section, dem_sample, *, width_factor: float = 1.0
             out.append(rec)
     return {"version": FORMAT_VERSION,
             "rule": {"extend_m": EXTEND_M, "fit_inside_m": FIT_INSIDE_M, "ease_m": EASE_M,
+                     "island_apron_m": ISLAND_APRON_M, "island_apron_fall": ISLAND_APRON_FALL,
                      "island_kerb_h": ISLAND_KERB_H, "island_kerb_w": ISLAND_KERB_W, "dome_grade": DOME_GRADE,
                      "dome_max_m": DOME_MAX_M, "trees_inner_radius_m": TREES_INNER_RADIUS_M,
                      "width_factor": width_factor},
@@ -461,7 +470,8 @@ def _plan_ring(ring: dict, m: stubs._Mainline, c, section, dem_sample, width_fac
                  _end_record(end2, back, z[::-1], zr[::-1], zl[::-1], "joining", side, m)],
         "island": {"outline": r2(boundary), "area_m2": round(float(island.area), 1), "inner_radius_m": round(inner_r, 1),
                    "trees": inner_r >= TREES_INNER_RADIUS_M, "mainline_rows": [int(r_from), int(r_to)],
-                   "kerb_h": ISLAND_KERB_H, "kerb_w": ISLAND_KERB_W},
+                   "apron_m": ISLAND_APRON_M, "apron_fall": ISLAND_APRON_FALL, "kerb_h": ISLAND_KERB_H,
+                   "kerb_w": ISLAND_KERB_W},
         "outline": r2(np.asarray(paved.exterior.coords)[:-1]),
     }
     # Its exits off the rest of the ring, closed as side roads are.
@@ -745,25 +755,64 @@ def _densify(points: np.ndarray, step: float = 1.0) -> np.ndarray:
     return np.vstack(out)
 
 
-def _island(boundary: np.ndarray, heights: np.ndarray, frame: LocalFrame):
-    """The island's kerb (a band ISLAND_KERB_W wide, rising ISLAND_KERB_H from the road's edge) and its grass inside,
-    domed gently: (kerb piece, grass pieces), each (positions, uv, triangles) in region axes, the grass sharing the
-    kerb's top edge exactly. (None, None) if there's no room inside the kerb."""
-    poly = shapely.Polygon(boundary)
-    inner = poly.buffer(-ISLAND_KERB_W, join_style="mitre", mitre_limit=2.0)
-    parts = [p for p in sorted(shapely.get_parts(inner), key=lambda g: -g.area) if p.area > 1.0] \
+def _inset(poly: shapely.Geometry, by: float) -> list[shapely.Polygon]:
+    """A polygon's parts `by` metres inside it, the biggest first, leaving out slivers."""
+    inner = poly.buffer(-by, join_style="mitre", mitre_limit=2.0)
+    return [p for p in sorted(shapely.get_parts(inner), key=lambda g: -g.area) if p.area > 1.0] \
         if not inner.is_empty else []
+
+
+def _band(outer: np.ndarray, outer_h: np.ndarray, parts: list[shapely.Polygon], heights_in, frame: LocalFrame):
+    """The concrete band between a ring of points (in order, with their heights) and the inset `parts` inside it:
+    (piece, the parts' rings densified to 1 m, their heights from `heights_in(points)`), or None if it can't be
+    triangulated over exactly those points."""
+    rings = [_densify(np.asarray(p.exterior.coords)[:-1], 1.0) for p in parts]
+    hs = [heights_in(r) for r in rings]
+    tri = _cdt(outer, rings)
+    if not len(tri):
+        return None
+    xy = np.vstack([outer] + rings)
+    h = np.concatenate([outer_h] + hs)
+    uv = frame.to_ac(xy[:, 0], xy[:, 1], h)[:, [0, 2]] / KERB_TILE_M
+    return (np.column_stack([xy, h]), uv, tri), rings, hs
+
+
+def _island(boundary: np.ndarray, heights: np.ndarray, frame: LocalFrame):
+    """The island's apron (a concrete band ISLAND_APRON_M wide, flush with the road's edge and falling
+    ISLAND_APRON_FALL inwards), its kerb (a band ISLAND_KERB_W wide rising ISLAND_KERB_H) and its grass inside, domed
+    gently: (concrete pieces, grass pieces), each (positions, uv, triangles) in region axes, each sharing the next's
+    edge exactly. The apron narrows, to none, on an island too small for it. (None, None) if there's no room inside
+    the kerb."""
+    poly = shapely.Polygon(boundary)
+    apron = ISLAND_APRON_M
+    while apron > 0.1 and not _inset(poly, apron + ISLAND_KERB_W + ISLAND_POINT_CLEAR_M):
+        apron /= 2
+    concrete = []
+    if apron > 0.1:
+        fall = ISLAND_APRON_FALL * apron
+        got = _band(boundary, heights, _inset(poly, apron), lambda r: _idw(boundary, heights, r) - fall, frame)
+        if got is None:
+            return None, None
+        piece, feet, feet_h = got
+        concrete.append(piece)
+        bases = list(zip(_inset(poly, apron), feet, feet_h))
+    else:
+        bases = [(poly, boundary, heights)]
+    parts, rings, tops = [], [], []
+    for base, ring, ring_h in bases:
+        inner = _inset(base, ISLAND_KERB_W)
+        if not inner:
+            continue
+        got = _band(ring, ring_h, inner, lambda r, ring=ring, ring_h=ring_h: _idw(ring, ring_h, r) + ISLAND_KERB_H,
+                    frame)
+        if got is None:
+            return None, None
+        concrete.append(got[0])
+        parts += inner
+        rings += got[1]
+        tops += got[2]
     if not parts:
         return None, None
-    rings = [_densify(np.asarray(p.exterior.coords)[:-1], 1.0) for p in parts]
-    tops = [_idw(boundary, heights, r) + ISLAND_KERB_H for r in rings]
-    tri = _cdt(boundary, rings)
-    if not len(tri):
-        return None, None
-    kerb_xy = np.vstack([boundary] + rings)
-    kerb_h = np.concatenate([heights] + tops)
-    kerb_uv = frame.to_ac(kerb_xy[:, 0], kerb_xy[:, 1], kerb_h)[:, [0, 2]] / KERB_TILE_M
-    kerb = (np.column_stack([kerb_xy, kerb_h]), kerb_uv, tri)
     grass = []
     for p, ring, top in zip(parts, rings, tops):
         minx, miny, maxx, maxy = p.bounds
@@ -773,12 +822,12 @@ def _island(boundary: np.ndarray, heights: np.ndarray, frame: LocalFrame):
         lattice = lattice[shapely.contains_xy(p, lattice[:, 0], lattice[:, 1])]
         dist = cKDTree(ring).query(lattice)[0] if len(lattice) else np.zeros(0)
         lattice, dist = lattice[dist >= ISLAND_POINT_CLEAR_M], dist[dist >= ISLAND_POINT_CLEAR_M]
-        h_lat = _idw(boundary, heights, lattice) + ISLAND_KERB_H + np.minimum(DOME_GRADE * dist, DOME_MAX_M)
+        h_lat = _idw(ring, top, lattice) + np.minimum(DOME_GRADE * dist, DOME_MAX_M)
         t = stubs._triangulate(ring, lattice.reshape(-1, 2))
         xy = np.vstack([ring, lattice]) if len(lattice) else ring
         h = np.concatenate([top, h_lat])
         grass.append((np.column_stack([xy, h]), frame.to_ac(xy[:, 0], xy[:, 1], h)[:, [0, 2]] / 6.0, t))
-    return kerb, grass
+    return concrete, grass
 
 
 def _throat(end: dict, rb: mesh.Ribbon, side: str, rr: mesh.Ribbon, row: int, cols: list[int], material: str):
@@ -962,10 +1011,10 @@ def build(rings: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
         bxy, bh = stubs._dedupe(bxy, bh)
         if np.hypot(*(bxy[-1] - bxy[0])) < 1e-6:
             bxy, bh = bxy[:-1], bh[:-1]
-        kerb, island_grass = _island(bxy, bh, frame)
-        if kerb is None:
+        concrete, island_grass = _island(bxy, bh, frame)
+        if concrete is None:
             raise ValueError(f"roundabout {r['id']}: no room for its island inside the kerb")
-        meshes += mesh.soup_meshes(f"1ROAD_RB{r['id']}_K", KERB_MATERIAL, [kerb], frame)
+        meshes += mesh.soup_meshes(f"1ROAD_RB{r['id']}_K", KERB_MATERIAL, concrete, frame)
         meshes += mesh.soup_meshes(f"1GRASS_RB{r['id']}_I", "grass", island_grass + grass, frame)
         patches.append(bxy)
     stats = {"rings": len(rings), "exits": len(exit_stubs(rings)), "meshes": len(meshes),
