@@ -56,6 +56,13 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     fine = c["fine"] if "fine" in c else np.full(len(c["s"]), getattr(dem, "resolution_m", 2.0) <= FINE_DEM_M)
     if not fine.all():
         e = e * sec.eased(c["s"], fine.astype(float))
+    # On the route's own bridges and tunnels, and the humps the profile stage bridged under a crossing road, the DEM
+    # beside the road is the ground under the deck, the hill over the tunnel or the embankment: crown only there.
+    off_ground = np.zeros(len(c["s"]), dtype=bool)
+    for key in ("bridge", "tunnel", "under"):
+        if key in c:  # a profile stage from before these were saved: as it was built then
+            off_ground |= c[key]
+    e = e * sec.off_ground_factor(c["s"], off_ground)
     # Less camber on a narrow road, and always a little crown (core/section.py).
     limit = sec.camber_limit(width)
     e = np.clip(e, -limit, limit)

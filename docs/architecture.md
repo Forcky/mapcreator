@@ -8,16 +8,18 @@ Every stage reads files and writes files, so each one can be tested and rerun on
 job.json (waypoints, width option, layouts, junctions)
    │
 route     01_route     snapped OSM centreline and its ways' tags (roads from the local OSM index); the side-road
-                       junctions and roundabouts along it (junctions.json)
-profile   02_profile   DEM sampling, smoothing with a grade-change limit and grade cap, bridge dips filled
+                       junctions and roundabouts along it (junctions.json); the roads crossing over or under it
+                       (crossings.json)
+profile   02_profile   DEM sampling, smoothing with a grade-change limit and grade cap, bridge dips filled, humps
+                       under a road crossing over bridged
 section   03_section   sealed or unsealed (OSM surface, short runs merged), width (OSM width → lanes × lane width →
                        narrow → class default, narrower on gravel; +15% / +30%), camber from the DEM (limited by
-                       width), crown; the roundabouts the route drives (roundabouts.json), then the side roads'
+                       width; crown only on bridges and tunnels), crown; the roundabouts the route drives (roundabouts.json), then the side roads'
                        stubs (stubs.json), planned
 mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, the side roads' 100 m stubs joined to the road by
                        their flares, each roundabout's ring, island and closed exits, adaptive terrain corridor (in
-                       ground classes from TASVEG in Tasmania, for Grass FX), guard rails and furniture (none in side
-                       roads' mouths or on a roundabout's island side), each stub's closure and police cars at some
+                       ground classes from TASVEG in Tasmania, for Grass FX), guard rails (both sides of a bridge over a gap) and furniture (none in
+                       side roads' mouths or on a roundabout's island side), each stub's closure and police cars at some
                        major ones (closures.json), AC dummies
 scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), typed by TASVEG in Tasmania, trunk colliders, buildings from footprints (none on a side road's first 100 m or its stub, or on a roundabout's ring or small island)
 track     05_track     numpy KN5 writer (timing gates clear of side roads' mouths), DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,

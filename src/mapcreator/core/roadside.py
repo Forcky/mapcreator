@@ -7,6 +7,10 @@ as well as looks. Placement comes from the DEM:
 - Where it falls away by more than DROP_M, put up a rail.
 - Smooth the readings, close short gaps, drop short runs, and extend each
   run a little, as a road authority would.
+- On the route's own bridges (`bridge_mask`), a rail on both sides wherever
+  the deck stands BRIDGE_GAP_M or more above the ground the DEM shows under
+  it, on any DEM: today a bridge is built as an embankment whose sides fall to
+  that ground, and a coarse DEM gets no other rails.
 
 Each run gets two meshes:
 - `RAIL_*`: the visible beam and posts, visual only.
@@ -41,6 +45,7 @@ COLLIDER = (-0.3, 1.0)
 END_WALL_INSET_M = 1.0  # from each end of the road
 END_WALL_HALF_M = 30.0  # either side of the centreline: the road, its verges and some terrain
 END_WALL = (-1.0, 3.0)  # below the lower and above the higher of road and ground
+BRIDGE_GAP_M = 1.5  # a tagged bridge whose deck stands this far above the DEM's ground somewhere gets rails
 
 
 def rail_mask(s: np.ndarray, drop: np.ndarray) -> np.ndarray:
@@ -68,6 +73,22 @@ def rail_masks(s, xy, z, heading, half_l, half_r, slope_l, slope_r, dem_sample,
         mask = rail_mask(s, edge_h - dem_sample(probe[:, 0], probe[:, 1]))
         out[side] = mask & allowed if allowed is not None else mask
     return out
+
+
+def bridge_mask(s: np.ndarray, bridge: np.ndarray, gap: np.ndarray, min_gap_m: float = BRIDGE_GAP_M) -> np.ndarray:
+    """Stations that get a rail on both sides for the route's own bridges: each run of `bridge` stations (a tagged
+    bridge) whose `gap` (the profile's height over the DEM's ground under it; NaN where the DEM has none, over the
+    sea) reaches `min_gap_m` anywhere, extended EXTEND_M past each end, as the approach rail runs into the barrier."""
+    bridge = np.asarray(bridge, dtype=bool)
+    out = np.zeros(len(bridge), dtype=bool)
+    gap = np.nan_to_num(np.asarray(gap, dtype=float), nan=np.inf)
+    for i0, i1 in _runs(bridge):
+        if gap[i0:i1 + 1].max() >= min_gap_m:
+            out[i0:i1 + 1] = True
+    if not out.any():
+        return out
+    step = s[1] - s[0] if len(s) > 1 else 1.0
+    return binary_dilation(out, structure=np.ones(2 * max(int(EXTEND_M / step), 1) + 1))
 
 
 def clear_mouths(masks: dict[str, np.ndarray], mouths: dict[str, np.ndarray], s: np.ndarray
