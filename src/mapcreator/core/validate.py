@@ -73,6 +73,16 @@ class JunctionCheck:
     stub: StubCheck | None = None  # its stub, if it has one
 
 
+@dataclass(frozen=True)
+class RoundaboutCheck:
+    """A roundabout the route drives (`core.roundabouts`), as the checks see it, in AC x/z: its two ends, each checked
+    as a stub on the road; its ring, drawn along its centreline; and its island, with no hole in it."""
+    label: str
+    parts: tuple  # ((part, StubCheck), ...): "leaving", "joining", "ring", "island"
+    road: shapely.Geometry | None = None  # its ring's paved outline and its exits' stubs: nothing stands on them
+    bare: shapely.Geometry | None = None  # its island, or a big island's edge: no tree or pole collider stands there
+
+
 SEAM_STEP_M = 0.05  # where a stub's road meets the mainline's or its own, no step bigger than this
 STUB_GROUND_CLEAR_M = 0.02  # no ground (verge, skirt or terrain) more than this above a stub's road
 STUB_GROUND_REACH_M = 3.0  # the ground round a stub, its verges and a metre more, must have no hole
@@ -698,6 +708,37 @@ def stub_checks(rep: Report, label: str, data: dict, junctions: list[JunctionChe
             rep.passed.append(f"{label}: {len(stubs)} side-road stubs {what}")
 
 
+def roundabout_checks(rep: Report, label: str, data: dict, rings: list[RoundaboutCheck]) -> None:
+    """Roundabouts drawn whole (`core.roundabouts`): each ring drawn as road along its centreline, both its ends joined
+    to the road with no gap or step, no hole in the ground round it or in its island, no ground above its road; as
+    `stub_failures` judges stubs. Warnings, not failures: the mesh stage has already left out every ring that fails
+    these on its own meshes, so a fault found here is one the two disagree on, and a roundabout never costs a track
+    its build."""
+    if not rings:
+        return
+    rep.warnings.append(f"{len(rings)} roundabout{'s' if len(rings) != 1 else ''} drawn whole, the ring and its island, "
+                        "with the exits the route doesn't take closed: " + "; ".join(r.label for r in rings))
+    found = stub_failures(data, [((r.label, part), chk) for r in rings for part, chk in r.parts])
+    for fault, what in STUB_FAULTS.items():
+        bad = sorted({f"{name} ({part})" for (name, part), faults in found.items() if fault in faults})
+        if bad:
+            rep.warnings.append(f"{label}: roundabouts not {what}: {'; '.join(bad[:5])}")
+        else:
+            rep.passed.append(f"{label}: roundabouts' rings, ends and islands {what} ({len(rings)})")
+    # Nothing stands on a ring, its exits or its island: no rail, post or sign; no tree or pole collider on a small
+    # island or a big one's edge.
+    zones = [(r.label, shapely.union(r.road, r.bare)) for r in rings if r.road is not None and r.bare is not None]
+    for what, prefixes in (("guard rails, guide posts or signs", ("RAIL_", "1WALL_RAIL_", "FURNITURE_")),
+                           ("tree or power colliders", (TRUNK_MESH, POWER_COLLIDER))):
+        found_meshes = [n for n in data["nodes"] if n["class"] == 2 and n["name"].startswith(prefixes)]
+        if not found_meshes or not zones:
+            continue
+        xz = np.concatenate([m["vertices"]["pos"][:, [0, 2]] for m in found_meshes]).astype(float)
+        standing = [name for name, zone in zones if shapely.contains_xy(zone, xz[:, 0], xz[:, 1]).any()]
+        rep.check(not standing, f"{label}: no {what} on a roundabout's ring, exits or island"
+                  + (f" ({'; '.join(standing[:5])})" if standing else ""))
+
+
 def junction_checks(rep: Report, label: str, data: dict, dummies: dict, junctions: list[JunctionCheck], *,
                     meshes: bool = True) -> None:
     """Side roads' junctions: a warning listing them, then (`meshes`) checks that no guard rail, guide post or sign
@@ -812,10 +853,12 @@ def _dressing(rep: Report, ok: bool, what: str) -> None:
 
 def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
                  road_radius: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
-                 junctions: list[JunctionCheck] | None = None) -> Report:
+                 junctions: list[JunctionCheck] | None = None,
+                 roundabouts: list[RoundaboutCheck] | None = None) -> Report:
     """`road_radius`: by layout label ("main", "forward", "reverse"), the centreline's radius every metre over the
     layout's AI line, as (AC x/z points, radii). The validate stage passes it from the profile, so a bend is judged
-    as main's 1 m centreline line judged it. `junctions`: the side roads' junctions, for `junction_checks`."""
+    as main's 1 m centreline line judged it. `junctions`: the side roads' junctions, for `junction_checks`, a
+    roundabout's exits among them; `roundabouts`: the rings drawn whole, for `roundabout_checks`."""
     rep = Report()
     tid = track_dir.name
     kn5_materials: set[str] = set()
@@ -869,6 +912,8 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
             # Every layout's KN5 holds the same meshes; only the gates differ.
             junction_checks(rep, label, merged, all_dummies, junctions or [], meshes=lay == layouts[0])
             closure_checks(rep, label, merged, all_dummies, junctions or [], meshes=lay == layouts[0])
+            if lay == layouts[0]:
+                roundabout_checks(rep, label, merged, roundabouts or [])
     for rel in ("ATTRIBUTION.txt", "centreline.geojson", "extension/ext_config.ini"):
         rep.check((track_dir / rel).exists(), f"{rel} present")
     if (track_dir / "extension" / "ext_config.ini").exists() and kn5_materials:

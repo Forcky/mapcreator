@@ -1,0 +1,9 @@
+{
+  "track_id": "roundabout_east_derwent_highway",
+  "waypoints": [
+    {"lon": 147.343918, "lat": -42.824099},
+    {"lon": 147.354795, "lat": -42.804489}
+  ],
+  "width": "as_mapped",
+  "layouts": "both"
+}

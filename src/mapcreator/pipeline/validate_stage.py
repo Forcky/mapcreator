@@ -12,7 +12,9 @@ import shapely
 from scipy.spatial import cKDTree
 
 from mapcreator.config import Settings
-from mapcreator.core import ai_line, junctions, stubs, validate
+from mapcreator.core import ai_line, junctions, scenery, stubs, validate
+from mapcreator.core import mesh as base_mesh
+from mapcreator.core import roundabouts as rb_core
 from mapcreator.core.layout import AI_END_SHORT_M, RoadModel, layouts_for
 from mapcreator.core.scene import Scene
 from mapcreator.job import Job, Junctions
@@ -76,12 +78,62 @@ def road_radius(job: Job, work: WorkDir) -> dict[str, tuple[np.ndarray, np.ndarr
 
 
 def _roundabouts(job: Job, work: WorkDir) -> list[str]:
-    """The roundabouts the route passes, by name, as the route stage recorded them."""
+    """The roundabouts the route passes that weren't drawn whole (`core.roundabouts`), by name, with the reason, as
+    the route stage recorded them."""
     path = work.root / route_stage.STAGE / route_stage.JUNCTIONS
     if job.junctions != Junctions.CLOSED or not path.exists():
         return []
     rings = work.read_json(route_stage.STAGE, route_stage.JUNCTIONS).get("roundabouts", [])
-    return [f"{r.get('name') or 'unnamed'}, {r['radius_m']:.0f} m radius" for r in rings if r.get("on_route")]
+    drawn = {r["id"] for r in mesh_stage.built_roundabouts(work, job)}
+    why: dict = {}
+    for stage in (section_stage.STAGE, mesh_stage.STAGE):
+        p = work.root / stage / section_stage.ROUNDABOUTS
+        if p.exists():
+            why |= {s["roundabout"]: s["reason"] for s in work.read_json(stage, section_stage.ROUNDABOUTS)["skipped"]
+                    if "junction" not in s}
+    return [f"{rb_core.label(r)}, {r['radius_m']:.0f} m radius ({why.get(r['id'], 'not drawn')})"
+            for r in rings if r.get("on_route") and r["id"] not in drawn]
+
+
+def roundabout_checks(job: Job, work: WorkDir) -> tuple[list[validate.RoundaboutCheck], list[validate.JunctionCheck]]:
+    """The roundabouts drawn whole (`core.roundabouts`) as the validator sees them, in AC x/z; and their exits'
+    stubs as side roads' junctions, for the stub and closure checks."""
+    rings = mesh_stage.built_roundabouts(work, job)
+    if not rings:
+        return [], []
+    frame = Scene.load(work.root / mesh_stage.STAGE).frame
+    c = np.load(work.root / profile_stage.STAGE / "centreline.npz")
+    sec = np.load(work.root / section_stage.STAGE / "section.npz")
+    parts: dict = {}
+    exits: dict = {}
+    for key, chk in rb_core.checks(rings, c, sec, frame):
+        if isinstance(key, tuple):
+            parts.setdefault(key[1], []).append((key[2], chk))
+        else:
+            exits[key] = chk
+
+    def to_ac(geom):
+        return shapely.transform(geom, lambda p: frame.to_ac(p[:, 0], p[:, 1], np.zeros(len(p)))[:, [0, 2]])
+
+    out, juncs = [], []
+    for r in rings:
+        name = r.get("label") or r.get("name") or "an unnamed roundabout"
+        road = shapely.unary_union([shapely.Polygon(r["outline"]).buffer(0)]
+                                   + [shapely.Polygon(st["outline"]).buffer(0) for st in r.get("exits") or []])
+        island = shapely.Polygon(r["island"]["outline"]).buffer(0)
+        clear = scenery.CLEAR_OF_VERGE_M + base_mesh.VERGE_M
+        bare = island.difference(island.buffer(-clear)) if r["island"]["trees"] else island
+        out.append(validate.RoundaboutCheck(f"{name} ({r['radius_m']:.0f} m radius)", tuple(parts.get(r["id"], [])),
+                                            to_ac(road), to_ac(bare)))
+        by_id = {j["id"]: j for j in r.get("exit_junctions") or []}
+        for st in r.get("exits") or []:
+            j = by_id.get(st["junction"], {})
+            line = shapely.LineString(np.asarray(j.get("line") or st["rows"]["xy"], float))
+            road = line.buffer(float(st["width_m"]) / 2, cap_style="flat")
+            label = (f"{st.get('name') or 'an unnamed road'} ({st['highway']}, {st['closure']}) off the roundabout "
+                     f"({name})")
+            juncs.append(validate.JunctionCheck(label, shapely.Polygon(), to_ac(road), exits.get(st["junction"])))
+    return out, juncs
 
 
 def _stub_check(st: dict, c, sec, frame) -> validate.StubCheck:
@@ -121,12 +173,14 @@ def junction_checks(job: Job, work: WorkDir) -> list[validate.JunctionCheck]:
 
 
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
+    ring_checks, ring_exits = roundabout_checks(job, work)
     rep = validate.track_folder(work.root / track_stage.STAGE / job.track_id, allow_tight_bends=job.allow_tight_bends,
-                                road_radius=road_radius(job, work), junctions=junction_checks(job, work))
+                                road_radius=road_radius(job, work), junctions=junction_checks(job, work) + ring_exits,
+                                roundabouts=ring_checks)
     rings = _roundabouts(job, work)
     if rings:
         rep.warnings.append(f"The route passes {len(rings)} roundabout{'s' if len(rings) != 1 else ''} "
-                            f"({', '.join(rings)}): recorded in junctions.json, and built as before.")
+                            f"not drawn whole ({', '.join(rings)}): the route's own arc is built, as before.")
     work.write_json(STAGE, "report.json", {"ok": rep.ok, "passed": rep.passed, "failed": rep.failed,
                                            "route_failed": rep.route_failed, "warnings": rep.warnings})
     if rep.failed:

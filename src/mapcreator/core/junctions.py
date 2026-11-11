@@ -16,8 +16,12 @@ Each side road is followed out to `LEG_M`, or to where it ends or meets the rout
 way's end, onto the straightest way that turns less than `CONTINUE_DEG`. It carries a closure level for the closures
 to come: limited by its access tags (`LIMITED_ACCESS`), else major or minor by its class (`closure_level`).
 
-Roundabouts (`junction=roundabout` or `circular`) the route drives or touches are recorded with their ring and their
-exits, and left as they are: their exits aren't junctions here, and nothing is cleared at them.
+Roundabouts (`junction=roundabout` or `circular`) the route drives or touches are recorded with their ring, in the
+order it's driven (its ways' direction), and their exits (`core.roundabouts` draws them). A way leaving the ring where
+the route is on it is a side road like any other, at the ring's node; one leaving the rest of the ring is one of the
+roundabout's exits, recorded with it. A side road that leads back onto a ring the route drives (the other carriageway
+of a road the route arrives or leaves by) isn't a junction (`roundabout`). Followed outwards, a side road stops at the
+first ring it meets that the route doesn't drive (`ends`: `roundabout`): that roundabout is beyond its closure.
 
 **Keeping the mouths clear** (`mouths`, `masks`, `zone`; the mesh, scenery and track stages). A junction's mouth is
 the stretch of the mainline where the side road's carriageway crosses the band from the road's edge to
@@ -146,21 +150,28 @@ class _Leg:
     entered_m: list[float]  # where along the line each way starts
     nodes: list[int]  # network nodes passed, the junction's first
     node_m: list[float]  # and how far along the line each is
-    ends: str  # "length", "dead_end", "branches", "joins" or "meets_route"
+    ends: str  # "length", "dead_end", "branches", "joins", "meets_route" or "roundabout"
 
 
 class _Network:
-    """The road network's adjacency: each node's neighbours, with the way each segment belongs to."""
+    """The road network's adjacency: each node's neighbours, with the way each segment belongs to; and which way a
+    one-way segment may be driven."""
 
     def __init__(self, net):
         self.xy = np.asarray(net.xy, dtype=float)
         self.osm_node = np.asarray(net.osm_node)
         self.ways = net.ways
         self.adj: dict[int, list[tuple[int, int]]] = defaultdict(list)
-        for a, b, w in zip(np.asarray(net.seg_a).tolist(), np.asarray(net.seg_b).tolist(),
-                           np.asarray(net.seg_way).tolist()):
+        self.one_way: dict[frozenset, tuple[int, int]] = {}  # a segment driven one way only: (from, to)
+        seg_a, seg_b = np.asarray(net.seg_a).tolist(), np.asarray(net.seg_b).tolist()
+        fwd = np.asarray(getattr(net, "seg_fwd", np.ones(len(seg_a), bool))).tolist()
+        rev = np.asarray(getattr(net, "seg_rev", np.ones(len(seg_a), bool))).tolist()
+        for a, b, w, f, r in zip(seg_a, seg_b, np.asarray(net.seg_way).tolist(), fwd, rev):
             self.adj[a].append((b, w))
             self.adj[b].append((a, w))
+            if f != r:
+                self.one_way[frozenset((a, b))] = (a, b) if f else (b, a)
+        self.ring_nodes = {n for n, nbrs in self.adj.items() if any(self.is_ring(w) for _, w in nbrs)}
 
     def tags(self, way: int) -> dict:
         return self.ways[way].get("tags") or {}
@@ -168,9 +179,10 @@ class _Network:
     def is_ring(self, way: int) -> bool:
         return self.tags(way).get("junction") in RING
 
-    def walk(self, start: int, first: int, way: int, stop: set[int], limit: float) -> _Leg:
+    def walk(self, start: int, first: int, way: int, stop: set[int], limit: float,
+             rings: set[int] | None = None) -> _Leg:
         """Follow a side road from node `start` through its neighbour `first` (on `way`) for `limit` metres, or to a
-        dead end, a branch, or a node in `stop` (the route's)."""
+        dead end, a branch, a node in `stop` (the route's), or a node in `rings` (a roundabout's)."""
         line = [self.xy[start]]
         ways, entered, nodes, node_m = [way], [0.0], [start], [0.0]
         seen = {way}
@@ -189,7 +201,10 @@ class _Network:
             if cur in stop:
                 ends = "meets_route"
                 break
-            same = [n for n, w in self.adj[cur] if w == way and n != prev]
+            if rings and cur in rings:
+                ends = "roundabout"
+                break
+            same =[n for n, w in self.adj[cur] if w == way and n != prev]
             if same:
                 prev, cur = cur, min(same, key=lambda n: self._turn(line, n))
                 continue
@@ -316,11 +331,12 @@ def find(net, route_xy: np.ndarray, *, leg_m: float = LEG_M, to_lonlat=None) -> 
     rt = _Route(route_xy, nw)
     rings = _rings(nw, rt)
     ring_node = {n for ring in rings for n in ring["nodes"]}
+    elsewhere = nw.ring_nodes - ring_node  # roundabouts the route doesn't drive: a side road stops at one
     found, skipped = [], []
     for i in range(1, len(rt.xy) - 1):  # a side road at the route's very end is closed by its end wall
         node = int(rt.node[i])
-        if node < 0 or node in ring_node:
-            continue  # a spliced waypoint; or a roundabout's node, recorded with the roundabout
+        if node < 0:
+            continue  # a spliced waypoint
         at = float(rt.s[i])
         here = rt.xy[i]
         u_in = here - rt.at(at - ANGLE_AT_M)
@@ -329,10 +345,10 @@ def find(net, route_xy: np.ndarray, *, leg_m: float = LEG_M, to_lonlat=None) -> 
         u_out /= max(float(np.hypot(*u_out)), 1e-9)
         tangent = u_in + u_out if float(np.hypot(*(u_in + u_out))) > 1e-6 else u_out
         for nb, way in nw.adj[node]:
-            if frozenset((node, nb)) in rt.pairs or rt.along_route(here, nw.xy[nb], at):
-                continue
+            if frozenset((node, nb)) in rt.pairs or rt.along_route(here, nw.xy[nb], at) or nw.is_ring(way):
+                continue  # the route itself; or a ring's own way, recorded with its roundabout
             tags = nw.tags(way)
-            leg = nw.walk(node, nb, way, rt.nodes - {node}, leg_m)
+            leg = nw.walk(node, nb, way, rt.nodes - {node}, leg_m, elsewhere)
             clip = rt.other_part_m(leg.line, here, at)
             if clip is not None and clip < cumulative(leg.line)[-1]:
                 leg.line, leg.ends = _cut(leg.line, clip), "meets_route"
@@ -347,7 +363,7 @@ def find(net, route_xy: np.ndarray, *, leg_m: float = LEG_M, to_lonlat=None) -> 
                 reason = "private"
             elif _grade_separated_near(nw, leg):
                 reason = "grade_separated"
-            elif any(n in ring_node and m < GRADE_FREE_M for n, m in zip(leg.nodes, leg.node_m)):
+            elif any(n in ring_node for n in leg.nodes[1:]):
                 reason = "roundabout"  # an entry or exit of a roundabout the route drives
             elif off < MIN_ANGLE_DEG:
                 reason = "angle"
@@ -375,7 +391,7 @@ def find(net, route_xy: np.ndarray, *, leg_m: float = LEG_M, to_lonlat=None) -> 
                      "grade_free_m": GRADE_FREE_M, "classes": sorted(DRIVABLE), "private": sorted(PRIVATE),
                      "limited_access": sorted(LIMITED_ACCESS)},
             "junctions": junctions,
-            "roundabouts": [_ring_record(nw, rt, ring, k, leg_m) for k, ring in enumerate(rings)],
+            "roundabouts": [_ring_record(nw, rt, ring, k, leg_m, elsewhere) for k, ring in enumerate(rings)],
             "skipped": skipped}
 
 
@@ -422,39 +438,76 @@ def _ring_order(ring: dict) -> tuple[list[int], bool]:
         order.append(cur)
 
 
-def _ring_record(nw: _Network, rt: _Route, ring: dict, k: int, leg_m: float) -> dict:
+def _driving_order(nw: _Network, order: list[int], closed: bool) -> tuple[list[int], bool]:
+    """The ring's nodes in the order it's driven (its one-way segments' direction), and whether it's one-way at
+    all. A ring with no one-way segment keeps the order it came in."""
+    with_, against = 0, 0
+    for a, b in zip(order, order[1:]):
+        way = nw.one_way.get(frozenset((a, b)))
+        if way is not None:
+            with_ += way == (a, b)
+            against += way == (b, a)
+    if against > with_:
+        order = order[::-1]
+    return order, with_ + against > 0
+
+
+def _ring_record(nw: _Network, rt: _Route, ring: dict, k: int, leg_m: float, elsewhere: set[int]) -> dict:
     order, closed = _ring_order(ring)
+    order, oneway = _driving_order(nw, order, closed)
     pts = nw.xy[order]
     loop = pts[:-1] if closed else pts
     centre = loop.mean(axis=0)
+    rel = loop - centre
+    area = 0.5 * float(np.sum(rel[:, 0] * np.roll(rel[:, 1], -1) - np.roll(rel[:, 0], -1) * rel[:, 1]))
+    nodes = order[:-1] if closed else order
+    index = {n: i for i, n in enumerate(nodes)}
+    way_index = {w: i for i, w in enumerate(ring["ways"])}
+    segment_way = []
+    for a, b in zip(order, order[1:]):
+        on_ring = [w for nb, w in nw.adj[a] if nb == b and nw.is_ring(w)]
+        segment_way.append(way_index.get(on_ring[0], 0) if on_ring else 0)
     on = [i for i, n in enumerate(rt.node) if n in ring["nodes"]]
     tags = nw.tags(ring["ways"][0])
     exits = []
-    for n in (order[:-1] if closed else order):
+    for n in nodes:
         for m, w in nw.adj[n]:
             if nw.is_ring(w) or frozenset((n, m)) in rt.pairs:
                 continue
             t = nw.tags(w)
             if t.get("highway") not in DRIVABLE or is_private(t):
                 continue
-            leg = nw.walk(n, m, w, (rt.nodes | ring["nodes"]) - {n}, leg_m)
+            leg = nw.walk(n, m, w, (rt.nodes | ring["nodes"]) - {n}, leg_m, elsewhere)
             if _grade_separated_near(nw, leg):
                 continue
+            far = leg.ways[-1]
+            far_tags = nw.tags(far)
+            surface = sec.surface_class(far_tags)
+            width, _ = sec.width_from_tags(far_tags, unsealed=surface == sec.UNSEALED)
             exits.append({"node": int(nw.osm_node[n]), "xy": np.round(nw.xy[n], 2).tolist(),
-                          "on_route": n in rt.nodes, **_leg_record(nw, leg, w)})
+                          "ring_index": index[n], "on_route": n in rt.nodes, **_leg_record(nw, leg, w),
+                          "far_way": {"way_id": nw.ways[far]["id"], "highway": far_tags.get("highway"),
+                                      "tags": {key: far_tags[key] for key in KEEP_TAGS if key in far_tags},
+                                      "surface_class": surface, "width_m": round(float(width), 2)}})
     return {
         "id": k,
         "way_ids": [nw.ways[w]["id"] for w in ring["ways"]],
         "highway": tags.get("highway"),
         "name": tags.get("name"),
         "tags": {key: tags[key] for key in KEEP_TAGS if key in tags},
+        "ways": [{"way_id": nw.ways[w]["id"], "tags": {key: nw.tags(w)[key] for key in KEEP_TAGS if key in nw.tags(w)}}
+                 for w in ring["ways"]],
+        "segment_way": segment_way,
         "ring": np.round(pts, 2).tolist(),
         "closed": closed,
+        "oneway": oneway,
+        "clockwise": bool(area < 0),
         "centre": np.round(centre, 2).tolist(),
         "radius_m": round(float(np.hypot(*(loop - centre).T).mean()), 1),
         "on_route": bool(on),
         "route_from_m": round(float(rt.s[on[0]]), 1) if on else None,
         "route_to_m": round(float(rt.s[on[-1]]), 1) if on else None,
+        "route_ring_index": [index[int(rt.node[on[0]])], index[int(rt.node[on[-1]])]] if on else None,
         "exits": exits,
     }
 

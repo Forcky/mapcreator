@@ -1,8 +1,10 @@
-"""Stage 3: surface, carriageway width and camber at every centreline station; and the side roads' stubs.
+"""Stage 3: surface, carriageway width and camber at every centreline station; the side roads' stubs; and the
+roundabouts the route drives.
 
-The stubs' plan (`core.stubs`, `stubs.json`) is worked out here, before the mesh and scenery stages, because those two
-run side by side and both need it: the mesh stage builds the stubs from it, and the scenery stage keeps trees,
-buildings and power-line supports off them.
+The stubs' plan (`core.stubs`, `stubs.json`) and the roundabouts' (`core.roundabouts`, `roundabouts.json`) are worked
+out here, before the mesh and scenery stages, because those two run side by side and both need them: the mesh stage
+builds the stubs and rings from them, and the scenery stage keeps trees, buildings and power-line supports off them.
+The roundabouts are planned first: a side road's stub keeps off a ring the route drives.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import numpy as np
 from mapcreator.config import Settings
 from mapcreator.core import centreline as cl
 from mapcreator.core import profile as pf
+from mapcreator.core import roundabouts as rb_core
 from mapcreator.core import section as sec
 from mapcreator.core import stubs as stubs_core
 from mapcreator.core.layout import layouts_for
@@ -23,6 +26,8 @@ from mapcreator.regions import FINE_DEM_M, job_region
 STAGE = "03_section"
 # The side roads' stubs (`core.stubs`; the format is in docs/ac-format.md).
 STUBS = "stubs.json"
+# The roundabouts the route drives: the rest of each ring, its island and its closed exits (`core.roundabouts`).
+ROUNDABOUTS = "roundabouts.json"
 
 
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
@@ -60,11 +65,28 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
                         slope_left=slope_l, slope_right=slope_r, superelevation=e, crown=crown, style=style,
                         unsealed=unsealed, camber_limit=limit)
     found = route_stage.junctions(work, job)
+    rings = route_stage.roundabouts(work, job)
+    section = {"half_left": half, "half_right": half, "slope_left": slope_l, "slope_right": slope_r, "style": style}
+    layouts = tuple(lay.reverse for lay in layouts_for(job.layouts.value))
+    ring_summary, avoid = None, None
+    if rings:
+        ring_plan = rb_core.plan(rings, c, section, dem.sample, width_factor=job.width.factor, layouts=layouts)
+        work.write_json(STAGE, ROUNDABOUTS, {"version": ring_plan.pop("version"), "crs": f"EPSG:{region.epsg}",
+                                             **ring_plan})
+        avoid = rb_core.avoid(ring_plan["roundabouts"])
+        ring_summary = {"drawn": len(ring_plan["roundabouts"]),
+                        "exits": len(rb_core.exit_stubs(ring_plan["roundabouts"])),
+                        "skipped": {s["reason"]: sum(k["reason"] == s["reason"] for k in ring_plan["skipped"])
+                                    for s in ring_plan["skipped"]}}
+    else:
+        (work.stage(STAGE) / ROUNDABOUTS).unlink(missing_ok=True)
     stub_summary = None
     if found:
-        section = {"half_left": half, "half_right": half, "slope_left": slope_l, "slope_right": slope_r, "style": style}
-        plan = stubs_core.plan(found, c, section, dem.sample, width_factor=job.width.factor,
-                               layouts=tuple(lay.reverse for lay in layouts_for(job.layouts.value)))
+        if avoid is None:
+            plan = stubs_core.plan(found, c, section, dem.sample, width_factor=job.width.factor, layouts=layouts)
+        else:
+            plan = stubs_core.plan(found, c, section, dem.sample, width_factor=job.width.factor, layouts=layouts,
+                                   avoid=avoid)
         work.write_json(STAGE, STUBS, {"version": plan.pop("version"), "crs": f"EPSG:{region.epsg}", **plan})
         stub_summary = {"stubs": len(plan["stubs"]), "skipped": {}}
         for sk in plan["skipped"]:
@@ -94,7 +116,16 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "surface_changes": int(np.count_nonzero(np.diff(unsealed.astype(np.int8)))),
         "styles_m": {name: round(float(ds[style[:-1] == k].sum()), 1) for k, name in enumerate(sec.STYLES)
                      if (style[:-1] == k).any()},
-    } | ({"junction_stubs": stub_summary} if stub_summary is not None else {})
+    } | ({"junction_stubs": stub_summary} if stub_summary is not None else {})       | ({"roundabouts": ring_summary} if ring_summary is not None else {})
+
+
+def roundabouts(work: WorkDir, job: Job) -> list[dict]:
+    """The roundabouts the section stage planned to draw (`core.roundabouts`), as roundabouts.json lists them: none for
+    a job built without junctions, or with no roundabout on its route."""
+    path = work.root / STAGE / ROUNDABOUTS
+    if not route_stage.roundabouts(work, job) or not path.exists():
+        return []
+    return work.read_json(STAGE, ROUNDABOUTS)["roundabouts"]
 
 
 def stubs(work: WorkDir, job: Job) -> list[dict]:

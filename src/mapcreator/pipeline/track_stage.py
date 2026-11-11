@@ -12,6 +12,7 @@ import numpy as np
 
 from mapcreator import __version__, buildinfo
 from mapcreator.config import Settings
+from mapcreator.core import roundabouts as rb_core
 from mapcreator.core import (ai_line, closures, furniture, grass, grassfx, junctions, kn5, package, stubs, textures,
                              treefx, validate)
 from mapcreator.core.layout import (AI_END_SHORT_M, GATE_FROM_END_M, Layout, RoadModel, finish_distance,
@@ -27,6 +28,8 @@ STAGE = "05_track"
 # Material values for the base surfaces follow a generator whose tracks pass an in-game load test.
 MATERIAL_PROPS = {
     "road": {"ksAmbient": 0.35, "ksDiffuse": 0.42, "ksSpecular": 0.06, "ksSpecularEXP": 28.0},
+    # A roundabout island's concrete kerb (`core.roundabouts`): the asphalt's values, a little less sheen.
+    "kerb": {"ksAmbient": 0.35, "ksDiffuse": 0.42, "ksSpecular": 0.04, "ksSpecularEXP": 20.0},
     # Loose stone and fines: about as matte as the grass, a little less than the asphalt's sheen. road_plain and
     # gravel_narrow take their base material's values (the name before the underscore).
     "gravel": {"ksAmbient": 0.36, "ksDiffuse": 0.44, "ksSpecular": 0.02, "ksSpecularEXP": 15.0},
@@ -198,11 +201,15 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     plan = mesh_stage.built_stubs(work, job)  # as built: less any the mesh stage left out
     mouths = junctions.mouths(route_stage.junctions(work, job), c["s"], c["xy"], c["heading"], sec["half_left"],
                               sec["half_right"], stubs=stubs.by_junction(plan))
+    # Nor in a roundabout the route drives, between its ring's two ends (`core.roundabouts`).
+    rings = mesh_stage.built_roundabouts(work, job)
     for lay in layouts:
         road = RoadModel.from_arrays(c["s"], c["xy"], c["z"], c["heading"], c["curvature"], c["grade"],
                                      sec["half_left"], sec["half_right"], sec["slope_left"], sec["slope_right"],
                                      lay.reverse)
         avoid = junctions.layout_intervals(mouths, c["s"], lay.reverse)
+        if rings:
+            avoid = sorted(avoid + rb_core.layout_intervals(rings, c["s"], lay.reverse))
         dummies = logic_dummies(road, scene.frame, avoid)
         gates = dict(zip(("start", "finish"), gate_distances(road, avoid)))
         moved = {k: round(d - usual, 1) for (k, d), usual in zip(gates.items(), (GATE_FROM_END_M,
@@ -292,7 +299,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     osm_note = osm_roads.selection_note(route_stage.osm_selection(work, settings), build=buildinfo.version(),
                                         source_url=settings.source_url)
     _write_attribution(track_dir, attributions, title, power_geojson=power_geo.exists(), osm_note=osm_note,
-                       side_roads=bool(plan))
+                       side_roads=bool(plan), rings=bool(rings))
     water_file = work.root / mesh_stage.STAGE / "water.json"
     water_type = json.loads(water_file.read_text(encoding="utf-8")).get("type") if water_file.exists() else None
     summary["tree_fx_trees"] = tree_list[1] if tree_list else 0
@@ -303,7 +310,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         summary["grass_fx_atlas_mb"] = _write_grass_atlas(work, ext)
     _write_text(ext / "ext_config.ini", package.ext_config_ini(
         grass_materials=[n for n in ["grass", *ground] if n in mat_index and grass.grows(n)],
-        road_materials=[n for n in ("road", "road_plain") if n in mat_index], version=__version__,
+        road_materials=[n for n in ("road", "road_plain", "kerb") if n in mat_index], version=__version__,
         gravel_materials=[n for n in ("gravel", "gravel_narrow") if n in mat_index],
         grassy_gravel=[n for n in ("gravel_narrow",) if n in mat_index],
         bare_ground=[n for n in ground if not grass.grows(n)],
@@ -314,7 +321,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         tree_surfaces=[*ground, "grass"] if "grass" in mat_index else ground,
         retro_materials=retro_materials(scenes, mats)),
         encoding="ascii")
-    _write_centreline(track_dir, job, c, sec, region, lonlat, attributions, plan)
+    _write_centreline(track_dir, job, c, sec, region, lonlat, attributions, plan, rings)
 
     zip_path = out_root / f"{job.track_id}.zip"
     # Level 3: the same size as the default 6 on a KN5 (83%), in a quarter of the time (1.9 s against 7.2 s
@@ -392,9 +399,12 @@ def _write_tree_fx(work: WorkDir, ext) -> tuple[str, int] | None:
 
 
 def _write_attribution(track_dir, attributions, title: str, *, power_geojson: bool = False,
-                       osm_note: str = "", side_roads: bool = False) -> None:
+                       osm_note: str = "", side_roads: bool = False, rings: bool = False) -> None:
     """`osm_note` says how the OpenStreetMap data was selected (`osm_roads.selection_note`, ODbL 4.6). `side_roads`:
-    the track has side roads' stubs, whose centrelines centreline.geojson holds too."""
+    the track has side roads' stubs, whose centrelines centreline.geojson holds too; `rings`: and roundabouts' rings
+    (`core.roundabouts`)."""
+    held = ("." if not (side_roads or rings) else ", and those of the side roads' first metres." if not rings
+            else ", and those of the roundabouts' rings and the side roads' first metres.")
     lines = [
         f"{title}: Assetto Corsa track generated by mapcreator.",
         "",
@@ -405,8 +415,7 @@ def _write_attribution(track_dir, attributions, title: str, *, power_geojson: bo
         "Changes: mapcreator modified all of the data above to build this track. It was resampled, filtered",
         "and smoothed, and turned into 3D geometry.",
         "",
-        "centreline.geojson holds the road centreline, heights and widths used to build this track"
-        + (", and those of the side roads' first metres." if side_roads else "."),
+        "centreline.geojson holds the road centreline, heights and widths used to build this track" + held,
         "It is a derivative of OpenStreetMap data and is available under the Open Database License (ODbL) 1.0",
         "(https://opendatacommons.org/licenses/odbl/1-0/).",
         *(["power.geojson holds the OpenStreetMap power lines used to place this track's towers, poles and wires,",
@@ -423,9 +432,10 @@ def _write_attribution(track_dir, attributions, title: str, *, power_geojson: bo
     _write_text(track_dir / "ATTRIBUTION.txt", "\r\n".join(lines), encoding="utf-8")
 
 
-def _write_centreline(track_dir, job: Job, c, sec, region, lonlat, attributions, side_roads=()) -> None:
-    """The route's centreline (ODbL), and each side road's stub (`core.stubs`) as a feature of its own: OSM-derived
-    geometry the track is built from, as `power.geojson` ships the power lines."""
+def _write_centreline(track_dir, job: Job, c, sec, region, lonlat, attributions, side_roads=(), rings=()) -> None:
+    """The route's centreline (ODbL), each side road's stub (`core.stubs`) and each roundabout's ring and exits
+    (`core.roundabouts`) as features of their own: OSM-derived geometry the track is built from, as `power.geojson`
+    ships the power lines."""
     step = 5
     idx = np.arange(0, len(c["s"]), step)
     lon, lat = lonlat.transform(c["xy"][idx, 0], c["xy"][idx, 1])
@@ -448,7 +458,20 @@ def _write_centreline(track_dir, job: Job, c, sec, region, lonlat, attributions,
         },
     }
     features = [feature]
-    for st in side_roads:
+    for ring in rings:
+        r = ring["rows"]
+        xy = np.asarray(r["xy"], float)
+        lon, lat = lonlat.transform(xy[:, 0], xy[:, 1])
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "LineString",
+                         "coordinates": [[round(float(a), 7), round(float(b), 7), round(float(h), 2)]
+                                         for a, b, h in zip(lon, lat, r["z"])]},
+            "properties": {"kind": "roundabout", "name": ring["name"], "highway": ring["highway"],
+                           "radius_m": ring["radius_m"], "width_m": ring["width_m"],
+                           "surface_class": ring["surface"], "length_m": ring["length_m"], "license": "ODbL-1.0"},
+        })
+    for st in list(side_roads) + rb_core.exit_stubs(rings):
         r = st["rows"]
         xy = np.asarray(r["xy"], float)
         lon, lat = lonlat.transform(xy[:, 0], xy[:, 1])
@@ -459,7 +482,8 @@ def _write_centreline(track_dir, job: Job, c, sec, region, lonlat, attributions,
                                          for a, b, h in zip(lon, lat, r["z"])]},
             "properties": {"kind": "side_road", "name": st["name"], "highway": st["highway"],
                            "station_m": st["station_m"], "side": st["side"], "width_m": round(st["width_m"], 2),
-                           "surface_class": st["surface"], "length_m": st["length_m"], "license": "ODbL-1.0"},
+                           "surface_class": st["surface"], "length_m": st["length_m"], "license": "ODbL-1.0",
+                           **({"leaves": st["parent"]} if st.get("parent") else {})},
         })
     _write_text(track_dir / "centreline.geojson",
                 json.dumps({"type": "FeatureCollection", "features": features}), encoding="utf-8")

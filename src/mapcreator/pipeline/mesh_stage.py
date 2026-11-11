@@ -7,6 +7,11 @@ takes its colour. The map is read out to the terrain's edge. Without one, the te
 Side roads' stubs (`core.stubs`) come from the section stage's plan: each its own ribbon, joined to the road by its
 flares, with the road's verge and skirt cut across its mouth and the terrain leaving room for it. Each is closed off
 the stage, with police cars at some of the major closures (`core.stub_closures`).
+
+Roundabouts the route drives (`core.roundabouts`) come from the section stage's plan too: the rest of each ring, its
+throats where it meets the road, its island, and its exits' stubs and closures. The road's verge and skirt come out on
+the island's side between the ring's two ends. A ring that fails the checks on the built meshes is left out whole, and
+the road through it is built as before; an exit that fails is left out on its own, as a side road's stub is.
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ import numpy as np
 
 from mapcreator.config import Settings
 from mapcreator.core import furniture, grass, junctions, mesh, police_car, reach, roadside, stub_closures, stubs
+from mapcreator.core import roundabouts as rb_core
 from mapcreator.core import water as water_core
 from mapcreator.core.layout import layouts_for
 from mapcreator.core.scene import LocalFrame, Material, Scene
@@ -38,6 +44,8 @@ CLOSURES = "closures.json"
 STUBS = "stubs.json"
 # A stub left out this way means building the road and ground again without it; after this many tries, all are.
 STUB_REBUILDS = 3
+# The roundabouts as built: the section stage's plan less any ring or exit left out here (`rb_core.settle`).
+ROUNDABOUTS = "roundabouts.json"
 
 log = logging.getLogger(__name__)
 
@@ -103,21 +111,50 @@ def built_stubs(work: WorkDir, job: Job) -> list[dict]:
     return work.read_json(STAGE, STUBS)["stubs"]
 
 
-def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region):
-    """The road's ribbon, the stubs (`stubs.build`), water, and the road, verge, stub and terrain meshes for `plan`."""
-    caps = stubs.mainline_caps(plan, c["xy"], c["heading"]) if plan else (None, None)
+def built_roundabouts(work: WorkDir, job: Job) -> list[dict]:
+    """The roundabouts as the mesh stage built them (`ROUNDABOUTS`): the section stage's plan, less any ring or exit it
+    left out. The section stage's plan where the mesh stage hasn't run."""
+    plan = section_stage.roundabouts(work, job)
+    path = work.root / STAGE / ROUNDABOUTS
+    if not plan or not path.exists():
+        return plan
+    return work.read_json(STAGE, ROUNDABOUTS)["roundabouts"]
+
+
+def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=()):
+    """The road's ribbon, the stubs (`stubs.build`) and roundabouts (`rb_core.build`), water, and the road, verge, stub,
+    ring and terrain meshes for `plan` and `rings`."""
+    ring_pts = rb_core.centres(rings) if rings else None
+    if rings:
+        caps = stubs.mainline_caps(plan, c["xy"], c["heading"], extra=ring_pts)
+    else:
+        caps = stubs.mainline_caps(plan, c["xy"], c["heading"]) if plan else (None, None)
     rb = mesh.build_ribbon(c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
                            sec["slope_left"], sec["slope_right"], dem.sample, skirt_cap_l=caps[0], skirt_cap_r=caps[1])
-    built = (stubs.build(plan, rb, c["s"], frame, dem.sample, skirt=gmap is None, main_xy=c["xy"])
+    main_xy = np.vstack([c["xy"], ring_pts]) if rings else c["xy"]
+    built = (stubs.build(plan, rb, c["s"], frame, dem.sample, skirt=gmap is None, main_xy=main_xy)
              if plan else None)
     extra = built.footprint if built is not None else None
+    ring_built = None
+    if rings:
+        stub_pts = [stubs._centre(st) for st in plan]
+        ring_built = rb_core.build(rings, rb, c["s"], frame, dem.sample, skirt=gmap is None,
+                                   others=np.vstack([c["xy"]] + stub_pts))
+        cut = {k: ring_built.cut[k] | (built.cut[k] if built is not None else False) for k in "LR"}
+        edge_break = {k: ring_built.edge_break[k] | (built.edge_break[k] if built is not None else False)
+                      for k in "LR"}
+        extra = rb_core.footprint(built, ring_built, cut)
     water = _water(c, rb, dem, settings, region, extra)
     # Inside water the terrain sits just under the surface, so the land never shows through it.
     ground = water_core.lowered(dem.sample, water) if water else dem.sample
     # A section stage from before surfaces has no styles: all sealed and marked, as it was built then.
     style = sec["style"] if "style" in sec else np.zeros(len(c["s"]), dtype=np.int8)
     # With ground classes the skirt goes with the terrain beside it, so only the 2 m verge is mown grass.
-    if built is None:
+    if ring_built is not None:
+        meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None, cut=cut,
+                                    edge_break=edge_break)
+        meshes += (built.meshes if built is not None else []) + ring_built.meshes
+    elif built is None:
         meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None)
     else:
         meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None, cut=built.cut,
@@ -129,6 +166,8 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region):
         meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, ground, frame, ground=gmap.materials,
                                       classes=grass.MESHES, fold_skirt=True, extra=extra)
     meshes += water_core.meshes(water, frame)
+    if rings:
+        return rb, (built, ring_built), water, meshes
     return rb, built, water, meshes
 
 
@@ -173,17 +212,54 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         return stubs.faults(stubs_now, result[3], result[4].meshes if result[4] is not None else [], c, sec, frame)
 
     planned = bool(plan)
-    plan, (rb, built, water, meshes, closed), dropped = stubs.settle(plan, build, check, STUB_REBUILDS, log)
+    rings = section_stage.roundabouts(work, job)
+    ring_built, dropped_rings = None, []
+    if rings:
+        # Roundabouts (`core.roundabouts`): their rings, islands and exits are built and checked with the stubs, and
+        # their exits closed with the side roads; a ring that fails is left out whole (`rb_core.settle`).
+        def build_rings(state):
+            stubs_now, rings_now = state
+            rb, pair, water, ground_meshes = _road_and_ground(stubs_now, c, sec, frame, dem, gmap, settings, region,
+                                                              rings=rings_now)
+            closed = None
+            every = stubs_now + rb_core.exit_stubs(rings_now)
+            if every:
+                top = stub_closures.TopSurface(ground_meshes, frame, stub_closures.areas(every))
+                closed = stub_closures.place(every, found + rb_core.exit_junctions(rings_now), c, sec, frame, top,
+                                             jurisdiction=jurisdiction, reverses=reverses,
+                                             parents=rb_core.parents(rings_now), extra_road=rb_core.paved(rings_now))
+            return rb, pair if isinstance(pair, tuple) else (pair, None), water, ground_meshes, closed
+
+        def check_rings(state, result):
+            stubs_now, rings_now = state
+            return stubs.faults(stubs_now, result[3], result[4].meshes if result[4] is not None else [], c, sec,
+                                frame, extra=rb_core.checks(rings_now, c, sec, frame))
+
+        plan, rings, (rb, (built, ring_built), water, meshes, closed), dropped, dropped_rings = rb_core.settle(
+            (plan, rings), build_rings, check_rings, STUB_REBUILDS, log)
+    else:
+        plan, (rb, built, water, meshes, closed), dropped = stubs.settle(plan, build, check, STUB_REBUILDS, log)
     (out / STUBS).unlink(missing_ok=True)
     if planned:
         doc = work.read_json(section_stage.STAGE, section_stage.STUBS)
         work.write_json(STAGE, STUBS, {**doc, "stubs": plan,
                                        "skipped": sorted(doc["skipped"] + dropped, key=lambda d: d["junction"])})
-    # Side roads' mouths (`core.junctions`): no guard rail, guide post, curve marker or sign stands in one.
+    (out / ROUNDABOUTS).unlink(missing_ok=True)
+    if section_stage.roundabouts(work, job):
+        doc = work.read_json(section_stage.STAGE, section_stage.ROUNDABOUTS)
+        work.write_json(STAGE, ROUNDABOUTS, {**doc, "roundabouts": rings, "skipped": doc["skipped"] + dropped_rings})
+    # Side roads' mouths (`core.junctions`): no guard rail, guide post, curve marker or sign stands in one; nor on a
+    # roundabout's island side, between its ends (`rb_core.masks`).
     mouths = junctions.masks(junctions.mouths(found, c["s"], c["xy"], c["heading"], sec["half_left"],
                                               sec["half_right"], stubs=stubs.by_junction(plan)),
                              c["s"]) if found else None
+    if rings:
+        ring_masks = rb_core.masks(rings, c["s"])
+        mouths = ring_masks if mouths is None else {k: mouths[k] | ring_masks[k] for k in "LR"}
     junction_stats = {"found": len(found)} if found else None
+    if rings:
+        junction_stats = junction_stats or {}
+        junction_stats["roundabouts"] = ring_built.stats if ring_built is not None else {"rings": 0}
     if built is not None:
         junction_stats["stubs"] = built.stats
     if dropped:
@@ -206,7 +282,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         c["s"], c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
         sec["slope_left"], sec["slope_right"], sec["superelevation"], limits, frame, masks["L"], masks["R"],
         unsealed=sec["unsealed"] if "unsealed" in sec else None,
-        mouth_l=mouths["L"] if mouths is not None else None, mouth_r=mouths["R"] if mouths is not None else None)
+        mouth_l=mouths["L"] if mouths is not None else None, mouth_r=mouths["R"] if mouths is not None else None,
+        **({"no_cams": rb_core.cam_mask(rings, c["s"])} if rings else {}))
     meshes += furn
     textures = {}
     if furn:
@@ -232,6 +309,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             **{name: Material(name, texture=mesh.ROAD_TEXTURE[name])
                for name in sorted({m.material for m in meshes if m.material in mesh.ROAD_TEXTURE})},
             "grass": Material("grass", texture="grass"),
+            # A roundabout island's kerb (`core.roundabouts`).
+            **({rb_core.KERB_MATERIAL: Material(rb_core.KERB_MATERIAL, texture=rb_core.KERB_TEXTURE)}
+               if rb_core.KERB_MATERIAL in used else {}),
             # The terrain's materials: `terrain` alone, or with a vegetation map those of its ground classes.
             **{c.material: Material(c.material, texture=c.texture) for c in grass.CLASSES if c.material in used},
             "rail": Material("rail", texture="steel"),

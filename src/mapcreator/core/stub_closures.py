@@ -345,20 +345,37 @@ def _xy(meshes: list[Mesh], frame: LocalFrame) -> np.ndarray:
 
 
 def place(stubs: list[dict], junctions: list[dict], c, section, frame: LocalFrame, top: TopSurface, *,
-          jurisdiction: str = police_car.DEFAULT_JURISDICTION, reverses=(False,)) -> Placement:
+          jurisdiction: str = police_car.DEFAULT_JURISDICTION, reverses=(False,),
+          parents: dict[str, tuple[dict, dict]] | None = None, extra_road: shapely.Geometry | None = None) -> Placement:
     """Close every stub (stubs.json's `stubs`; a junction stubs.json skipped has none, so gets nothing) and park the
     police cars. `junctions` are junctions.json's, `c` and `section` the centreline's and cross-section's arrays,
     `top` the built ground, `jurisdiction` the track's police (`police_car.jurisdiction_for`), `reverses` whether each
-    layout runs backwards (for the overshoot rule)."""
+    layout runs backwards (for the overshoot rule).
+
+    Roundabouts (`core.roundabouts`): a stub whose `parent` names a ring in `parents` (that ring's arrays, as `c` and
+    `section` are the road's) leaves the ring, so its clearances are measured from the ring's carriageway as well as
+    the road's; `extra_road` (the rings' paved outlines) counts as road for every stub's clearances."""
     by_id = {j["id"]: j for j in junctions}
     s, heading = np.asarray(c["s"], float), np.asarray(c["heading"], float)
     tree = cKDTree(np.asarray(c["xy"], float))
+    parent_trees = {key: cKDTree(np.asarray(pc["xy"], float)) for key, (pc, _) in (parents or {}).items()}
+
+    def road_for(rec, centre):
+        road = _road_near(c, section, centre, tree)
+        parent = rec.get("parent")
+        if parents and parent in parents:
+            pc, ps = parents[parent]
+            road = shapely.union(road, _road_near(pc, ps, centre, parent_trees[parent]))
+        if extra_road is not None and not extra_road.is_empty:
+            road = shapely.union(road, extra_road)
+        return road
+
     kits, records, closure_meshes, candidates = [], [], [], []
     clear = SOLID_CLEAR_M + SOLID_SLACK_M
     for k, rec in enumerate(sorted(stubs, key=lambda r: (r["station_m"], r["junction"]))):
         j = by_id.get(rec["junction"], {"id": rec["junction"]})
         outline = shapely.Polygon(rec["outline"]).buffer(0)
-        st = _Stub(rec, outline, _road_near(c, section, np.asarray(outline.centroid.coords[0]), tree),
+        st = _Stub(rec, outline, road_for(rec, np.asarray(outline.centroid.coords[0])),
                    stubs_core.pose(rec), float(rec["rows"]["half_m"][0]))
         level = rec.get("closure") if rec.get("closure") in closures.LEVELS else "minor"
         overshoot = is_overshoot(j, rec, s, heading, reverses) if "angle_deg" in j else False
