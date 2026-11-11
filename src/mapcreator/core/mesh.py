@@ -248,7 +248,7 @@ def _skirts(rb: Ribbon) -> tuple[slice, slice]:
 def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, style: np.ndarray | None = None,
                   road_uv_m: float = ROAD_TILE_M, gravel_uv_m: float = GRAVEL_TILE_M,
                   grass_uv_m: float = 6.0, skirt: bool = True, cut: dict[str, np.ndarray] | None = None,
-                  edge_break: dict[str, np.ndarray] | None = None) -> list[Mesh]:
+                  edge_break: dict[str, np.ndarray] | None = None, name_prefix: str = "") -> list[Mesh]:
     """Road chunks named 1ROAD_### (sealed) or 1GRAVEL_### (unsealed), verge/skirt chunks named 1GRASS_V###.
 
     `style` is the section's style code per station (`section.STYLES`); without it the road is all sealed and
@@ -258,6 +258,8 @@ def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, style: np.nda
     Side roads' mouths (`core.stubs`): `cut`, per side ("L", "R"), is True for each quad between rows i and i+1 whose
     verge and skirt are taken out, where a stub's flares join the road; `edge_break`, per side, is True for each row
     whose outer road vertex takes a u inside the painted edge line, so a sealed road's line breaks across the mouth.
+    `name_prefix` goes after the KEY in every name (a roundabout's ring, `core.roundabouts`: `1ROAD_RB0_000`); a side
+    with no verge (a ring's island side) gets no verge mesh.
     """
     rows = len(s)
     step = s[1] - s[0] if rows > 1 else 1.0
@@ -282,9 +284,11 @@ def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, style: np.nda
                     grid[edge_break["L"][sl], 0] = inside
                     grid[edge_break["R"][sl], nc - 1] = 1.0 - inside
                 v = np.repeat(s[sl] / (gravel_uv_m if gravel else road_uv_m), nc)
-                name = f"{'1GRAVEL' if gravel else '1ROAD'}_{k:03d}"
+                name = f"{'1GRAVEL' if gravel else '1ROAD'}_{name_prefix}{k:03d}"
                 out.append(_mesh(name, material, pos, tri, np.column_stack([u, v])))
             else:
+                if nc < 2:
+                    continue
                 side = kind[-1].upper()
                 uv = np.column_stack([pos[:, 0], pos[:, 2]]) / grass_uv_m
                 if cut is not None and cut[side][r0:last].any():
@@ -292,7 +296,7 @@ def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, style: np.nda
                     pos, uv, tri = compact(pos, uv, tri[np.concatenate([keep, keep])])
                     if not len(tri):
                         continue
-                out.append(_mesh(f"1GRASS_V{k:03d}{side}", "grass", pos, tri, uv))
+                out.append(_mesh(f"1GRASS_{name_prefix}V{k:03d}{side}", "grass", pos, tri, uv))
     return out
 
 
@@ -410,6 +414,12 @@ class Footprint:
     ribbons: list[Ribbon]
     patches: list[np.ndarray]
     edges: list[tuple[np.ndarray, np.ndarray]]
+    # A roundabout's ring (`core.roundabouts`), by ribbon: its own verge and skirt quads cut for its exits (as `cut` is
+    # for the road), and whether its last row's road meets a throat too, as its first does.
+    ribbon_cuts: list[dict[str, np.ndarray] | None] | None = None
+    open_last: list[bool] | None = None
+    # Outline points that face no terrain (a ring's road edge against its island): never in the triangulation.
+    interior: set[tuple[float, float]] | None = None
 
 
 def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
@@ -452,9 +462,11 @@ def _footprint(rb: Ribbon, fp: Footprint) -> tuple[dict, np.ndarray, np.ndarray,
     xy: list[tuple[float, float]] = []
     hs: list[float] = []
 
+    interior = fp.interior or set()
+
     def add(x, y, h):
         key = (float(x), float(y))
-        if key not in index:
+        if key not in index and key not in interior:
             index[key] = len(xy)
             xy.append(key)
             hs.append(float(h))
@@ -465,12 +477,39 @@ def _footprint(rb: Ribbon, fp: Footprint) -> tuple[dict, np.ndarray, np.ndarray,
     for r, c in cells:
         add(rb.e[r, c], rb.n[r, c], rb.h[r, c])
     polygons = []
-    for other in fp.ribbons:
+    for k, other in enumerate(fp.ribbons):
         oi, oc = _outline_index(other)
-        first_road = (oi == 0) & (oc >= other.road_cols.start) & (oc < other.road_cols.stop)
+        road_col = (oc >= other.road_cols.start) & (oc < other.road_cols.stop)
+        first_road = (oi == 0) & road_col
+        if fp.open_last is not None and fp.open_last[k]:
+            first_road |= (oi == other.e.shape[0] - 1) & road_col
+        own_cut = fp.ribbon_cuts[k] if fp.ribbon_cuts is not None else None
+        if own_cut is None:
+            for r, c in zip(oi[~first_road].tolist(), oc[~first_road].tolist()):
+                add(other.e[r, c], other.n[r, c], other.h[r, c])
+            polygons.append(shapely.Polygon(np.column_stack([other.e[oi, oc], other.n[oi, oc]])).buffer(0))
+            continue
+        # As the road's own cut above: the cut verge's outline vertices go, its end rows' come in.
+        o_rows, o_cols = other.e.shape
+        o_gone = np.zeros((o_rows, o_cols), bool)
+        o_cells, o_rings = [], []
+        for side, mask in own_cut.items():
+            edge = other.road_cols.start if side == "L" else other.road_cols.stop - 1
+            if (side == "L" and other.road_cols.start == 0) or (side == "R" and other.road_cols.stop == o_cols):
+                continue
+            for a, b in _runs(mask):
+                ring = _cut_cells(other, side, a, b)
+                o_rings.append(shapely.Polygon([(other.e[r, c], other.n[r, c]) for r, c in ring]).buffer(0))
+                o_gone[a + 1:b, 0 if side == "L" else o_cols - 1] = True
+                o_cells += [(r, c) for r, c in ring if r in (a, b) and c != edge]
         for r, c in zip(oi[~first_road].tolist(), oc[~first_road].tolist()):
-            add(other.e[r, c], other.n[r, c], other.h[r, c])
-        polygons.append(shapely.Polygon(np.column_stack([other.e[oi, oc], other.n[oi, oc]])).buffer(0))
+            if not o_gone[r, c]:
+                add(other.e[r, c], other.n[r, c], other.h[r, c])
+        for r, c in o_cells:
+            if not o_gone[r, c]:
+                add(other.e[r, c], other.n[r, c], other.h[r, c])
+        poly = shapely.Polygon(np.column_stack([other.e[oi, oc], other.n[oi, oc]])).buffer(0)
+        polygons.append(poly.difference(shapely.unary_union(o_rings)) if o_rings else poly)
     for points, heights in fp.edges:
         for (x, y), h in zip(np.asarray(points, float).tolist(), np.asarray(heights, float).tolist()):
             add(x, y, h)
@@ -521,10 +560,13 @@ def _fold_skirts(rb: Ribbon, fp: Footprint, index: dict, first: int) -> tuple[np
     new_xy: list[tuple[float, float]] = []
     new_h: list[float] = []
     tris = []
-    for ribbon, cut in [(rb, fp.cut)] + [(other, None) for other in fp.ribbons]:
+    cuts = fp.ribbon_cuts if fp.ribbon_cuts is not None else [None] * len(fp.ribbons)
+    for ribbon, cut in [(rb, fp.cut)] + list(zip(fp.ribbons, cuts)):
         rows = ribbon.e.shape[0]
         for side, cs in zip("LR", _skirts(ribbon)):
             e, n, h = ribbon.e[:, cs], ribbon.n[:, cs], ribbon.h[:, cs]
+            if e.shape[1] < 2:
+                continue  # no skirt on this side (a ring's island side)
             ids = np.empty(e.size, np.int64)
             for k, (x, y, z) in enumerate(zip(e.ravel().tolist(), n.ravel().tolist(), h.ravel().tolist())):
                 i = index.get((x, y))

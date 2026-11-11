@@ -505,18 +505,26 @@ def _fit(cand: _Candidate, m: _Mainline, kept: list[_Candidate]) -> tuple[_Candi
 
 
 def plan(junctions: list[dict], c, section, dem_sample, *, width_factor: float = 1.0,
-         layouts: tuple[bool, ...] = (False,)) -> dict:
+         layouts: tuple[bool, ...] = (False,), flare_scale: float = 1.0, avoid: shapely.Geometry | None = None) -> dict:
     """The stubs for the junctions junctions.json lists: the content of stubs.json (without `crs`). `c` and
     `section` are the centreline's and cross-section's arrays (`centreline.npz`, `section.npz`), `dem_sample` the
-    region's elevation, `layouts` whether each layout is reversed (for the timing gates)."""
+    region's elevation, `layouts` whether each layout is reversed (for the timing gates). `flare_scale` draws every
+    flare at that share of its radius first (a roundabout's exits, `core.roundabouts`); `avoid` is ground a stub must
+    keep off (a roundabout the route drives): one whose throat or flares' verges reach it is left out (`roundabout`),
+    and one whose ribbon reaches it is cut short before it."""
     m = _Mainline(c, section)
     cands, skipped = [], []
     for j in junctions:
-        cand, why = _candidate(j, m, dem_sample, width_factor)
+        if flare_scale == 1.0:
+            cand, why = _candidate(j, m, dem_sample, width_factor)
+        else:
+            cand, why = _candidate(j, m, dem_sample, width_factor, {"upstream": flare_scale, "downstream": flare_scale})
         if cand is None:
             skipped.append({"junction": j["id"], "name": j.get("name"), "reason": why})
         else:
             cands.append((cand, j))
+    if avoid is not None:
+        cands, skipped = _keep_off(cands, avoid, skipped)
     kept: list[_Candidate] = []
     for cand, j in sorted(cands, key=lambda cj: cj[0].priority):
         fitted, reason = _fit(cand, m, kept)
@@ -547,6 +555,25 @@ def plan(junctions: list[dict], c, section, dem_sample, *, width_factor: float =
                      "width_factor": width_factor},
             "stubs": [k.record for k in kept],
             "skipped": sorted(skipped, key=lambda s: s["junction"])}
+
+
+def _keep_off(cands: list, avoid: shapely.Geometry, skipped: list) -> tuple[list, list]:
+    """The candidates less any whose throat comes within a verge of `avoid`, each cut short where its ribbon (road and
+    verges) would reach it."""
+    shapely.prepare(avoid)
+    out = []
+    for cand, j in cands:
+        if cand.throat.buffer(mesh.VERGE_M).intersects(avoid):
+            skipped.append({"junction": j["id"], "name": j.get("name"), "reason": "roundabout"})
+            continue
+        hit = np.flatnonzero(shapely.intersects(_body(cand), avoid))
+        if len(hit):
+            cand = _clip(cand, int(hit[0]))
+            if cand is None:
+                skipped.append({"junction": j["id"], "name": j.get("name"), "reason": "roundabout"})
+                continue
+        out.append((cand, j))
+    return out, skipped
 
 
 def _clear_gates(kept: list[_Candidate], junctions: list[dict], c, section, layouts, skipped) -> list[_Candidate]:
@@ -676,9 +703,13 @@ def _centre(stub: dict, rows: np.ndarray | None = None) -> np.ndarray:
 REACH_M = 2 * (mesh.VERGE_M + mesh.SKIRT_STEPS_M[-1] + 4.0)  # skirts further apart than this never meet
 
 
-def mainline_caps(stubs: list[dict], xy: np.ndarray, heading: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """The mainline's skirt caps (`mesh.build_ribbon(skirt_cap_l=, skirt_cap_r=)`): held short of every stub's ribbon."""
+def mainline_caps(stubs: list[dict], xy: np.ndarray, heading: np.ndarray,
+                  extra: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """The mainline's skirt caps (`mesh.build_ribbon(skirt_cap_l=, skirt_cap_r=)`): held short of every stub's ribbon,
+    and of `extra` centreline points (a roundabout's ring and its exits, `core.roundabouts.centres`)."""
     pts = np.vstack([_centre(s) for s in stubs]) if stubs else np.zeros((0, 2))
+    if extra is not None and len(extra):
+        pts = np.vstack([pts, np.asarray(extra, float).reshape(-1, 2)])
     return side_caps(np.asarray(xy, float), cl.normals(np.asarray(heading, float)), pts, REACH_M)
 
 
@@ -739,12 +770,13 @@ def _tri_wave(x: np.ndarray) -> np.ndarray:
 
 
 def build(stubs: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, dem_sample, *, skirt: bool,
-          main_xy: np.ndarray) -> Built:
+          main_xy: np.ndarray, name_tag: str = "") -> Built:
     """The stubs' meshes, the mainline's cut and edge break, and the terrain's footprint, from the plan's stubs.
 
     `rb` is the mainline's ribbon (built with `mainline_caps`), `s` its stations, `main_xy` its centreline points.
     With `skirt` False (ground classes) the stubs' verge meshes are the 2 m verge alone, and their skirts go with the
-    terrain, as the mainline's do."""
+    terrain, as the mainline's do. `name_tag` goes after the `_J` in their meshes' names (a roundabout's exits, whose
+    road is its ring: `1ROAD_JR0_000`); `main_xy` is every other road's centreline their skirts stop short of."""
     rows = len(s)
     cut = {"L": np.zeros(rows - 1, bool), "R": np.zeros(rows - 1, bool)}
     edge_break = {"L": np.zeros(rows, bool), "R": np.zeros(rows, bool)}
@@ -876,11 +908,11 @@ def build(stubs: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
     letter = {"road": "", "road_plain": "N", "gravel": "", "gravel_narrow": "N"}
     for (material, window), pieces in sorted(roads.items(), key=lambda kv: (kv[0][1], kv[0][0])):
         key = "1GRAVEL" if sec.is_unsealed(sec.STYLES.index(material)) else "1ROAD"
-        meshes += mesh.soup_meshes(f"{key}_J{window:03d}{letter[material]}", material, pieces, frame)
+        meshes += mesh.soup_meshes(f"{key}_J{name_tag}{window:03d}{letter[material]}", material, pieces, frame)
     for window, pieces in sorted(grass.items()):
         # As the mainline's verges: AC x and z over 6 m, so they meet without a seam.
         pieces = [(p, frame.to_ac(p[:, 0], p[:, 1], p[:, 2])[:, [0, 2]] / 6.0, t) for p, _, t in pieces]
-        meshes += mesh.soup_meshes(f"1GRASS_J{window:03d}", "grass", pieces, frame)
+        meshes += mesh.soup_meshes(f"1GRASS_J{name_tag}{window:03d}", "grass", pieces, frame)
     for msh in meshes:
         vertices += len(msh.positions)
     stats = {"stubs": len(stubs), "meshes": len(meshes), "vertices": vertices,
@@ -895,17 +927,19 @@ CLOSURE_PREFIXES = ("CLOSURE_", "POLICE_", "1WALL_CLOSURE_", "1WALL_POLICE")
 
 
 def faults(stubs: list[dict], ground: list[Mesh], closure_meshes: list[Mesh], c, section,
-           frame: LocalFrame) -> dict[int, list[str]]:
+           frame: LocalFrame, extra: list | None = None) -> dict[int, list[str]]:
     """What's wrong with each stub as built, by its junction's id, for those with anything: the validator's own checks
     (`validate.stub_failures`: drawn as road along its centreline, joined to the road with no gap or step, no hole in
     the ground round it, no ground over its road) on the road, verge, stub and terrain meshes just built (`ground`);
     and `closure_off`, where a closure's or police car's vertex stands more than `validate.CLOSURE_ON_STUB_M` off every
     stub's paved outline, put down to the nearest. The mesh stage leaves out every stub listed, so the validator, which
-    runs the same checks on the KN5, finds nothing to warn of."""
+    runs the same checks on the KN5, finds nothing to warn of. `extra`: more (key, `validate.StubCheck`) pairs checked
+    alongside (a roundabout's ends, ring and exits, `core.roundabouts.checks`), whose closures count as on a stub too."""
     from mapcreator.core import validate
 
     checks = [(st["junction"], validate.stub_check(st, c["s"], c["xy"], c["heading"], section["half_left"],
                                                    section["half_right"], frame)) for st in stubs]
+    checks += list(extra or [])
     out = {k: list(v) for k, v in validate.stub_failures(validate.mesh_nodes(ground), checks).items() if v}
     pts = [np.asarray(m.positions, float)[:, [0, 2]] for m in closure_meshes if m.name.startswith(CLOSURE_PREFIXES)]
     if pts and checks:

@@ -448,6 +448,11 @@
           "The build checks the route again against the latest road data.";
         state.routeUsable = true;
       }
+      if (!preview.turns_back && preview.roundabouts && preview.roundabouts.length) {
+        // A small roundabout: the route's path round it may bend tighter than a build accepts. Say so before the
+        // person builds; the build still decides, and offers to generate it anyway.
+        el.routeInfo.textContent += " " + preview.roundabouts.map((r) => r.message).join(" ");
+      }
       clearError();
     } catch (err) {
       if (err.name === "AbortError" || seq !== state.previewSeq) return;

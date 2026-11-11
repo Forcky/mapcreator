@@ -1,0 +1,10 @@
+{
+  "track_id": "slip_lane_channel_highway",
+  "waypoints": [
+    {"lon": 147.277819, "lat": -42.997806},
+    {"lon": 147.287953, "lat": -42.987373},
+    {"lon": 147.290274, "lat": -42.982577}
+  ],
+  "width": "as_mapped",
+  "layouts": "both"
+}

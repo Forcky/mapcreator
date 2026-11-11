@@ -148,7 +148,7 @@ def _spacing(radius: float, outside: bool) -> float:
 
 def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, superelevation, limits,
               frame: LocalFrame, rail_l=None, rail_r=None, unsealed=None, mouth_l=None,
-              mouth_r=None) -> tuple[list[Mesh], dict, Atlas]:
+              mouth_r=None, no_cams=None) -> tuple[list[Mesh], dict, Atlas]:
     """Guide posts, CAMs and speed signs along the road: meshes (in AC axes), a summary, and the texture atlas
     their material uses.
 
@@ -157,6 +157,8 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
     signs as mapped). `mouth_l`/`mouth_r` are side roads' mouths on that side (`core.junctions.masks`): nothing
     stands in one. A guide post due in a mouth goes up just past it, a CAM there is left out, and a speed sign moves
     to the nearest station clear of it. Left is left of the direction the stations run (the forward layout).
+    `no_cams`: stations where no CAM stands on either side, the route's arc of a roundabout (`core.roundabouts`):
+    nothing on a ring points the way to go. Guide posts there stand as anywhere.
     """
     n = len(s)
     step = float(s[1] - s[0]) if n > 1 else 1.0
@@ -164,6 +166,7 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
         "L": np.zeros(n, bool) if mouth_l is None else np.asarray(mouth_l, bool),
         "R": np.zeros(n, bool) if mouth_r is None else np.asarray(mouth_r, bool)}
     in_mouth = {"posts_moved": 0, "cams_left_out": 0, "signs_moved": 0}
+    on_rings = 0
     k = uniform_filter1d(np.asarray(curvature, dtype=float), max(int(CURVATURE_SMOOTH_M / step), 1), mode="nearest")
     radius = 1.0 / np.maximum(np.abs(k), 1e-6)
     tangent = np.column_stack([np.cos(heading), np.sin(heading)])
@@ -212,6 +215,9 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
         for i in np.unique(idx[~gravel[idx]]):
             if mouths is not None and mouths[side][i]:
                 in_mouth["cams_left_out"] += 1
+                continue
+            if no_cams is not None and no_cams[i]:
+                on_rings += 1
                 continue
             e, nn, h = point(i, side, CAM_OFFSET_M)
             builder.sign(e, nn, h, tangent[i], CAM_BOARD, CAM_BOTTOM_M,
@@ -267,6 +273,8 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
     stats = {"guide_posts": posts, "cam_curves": curves, "cams": cams, "speed_signs": signs, "speed_limits": known}
     if mouths is not None:
         stats["side_road_mouths"] = in_mouth
+    if no_cams is not None:
+        stats["cams_left_off_roundabouts"] = on_rings
     return meshes, stats, tex
 
 

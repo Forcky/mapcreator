@@ -171,6 +171,16 @@ def junctions(work: WorkDir, job: Job) -> list[dict]:
     return work.read_json(STAGE, JUNCTIONS)["junctions"]
 
 
+def roundabouts(work: WorkDir, job: Job) -> list[dict]:
+    """The roundabouts the route drives, as junctions.json lists them (`core.junctions`): none for a job built without
+    junctions, or a route stage run before they were recorded in the order they're driven."""
+    path = work.root / STAGE / JUNCTIONS
+    if job.junctions != Junctions.CLOSED or not path.exists():
+        return []
+    return [r for r in work.read_json(STAGE, JUNCTIONS).get("roundabouts", [])
+            if r.get("on_route") and "route_ring_index" in r]
+
+
 def osm_selection(work: WorkDir, settings: Settings) -> dict[str, str]:
     """How this route's roads were selected from OpenStreetMap, as `run` recorded it. A work folder routed before
     that was recorded gets the answer for the current settings."""

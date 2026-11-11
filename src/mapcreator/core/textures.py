@@ -364,6 +364,14 @@ def water(size: int = 512, seed: int = 31) -> Image.Image:
     return Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), "RGB")
 
 
+def kerb(size: int = 256, seed: int = 61) -> Image.Image:
+    """Weathered concrete for a roundabout island's kerb (`core.roundabouts`): a mid grey, a little warm, with fine
+    grain and darker stains. Not near white, which would clip in the headlights at night."""
+    grain = 0.55 * tileable_noise(size, 0.4, seed) + 0.45 * tileable_noise(size, 1.6, seed + 1)
+    return Image.fromarray(_mix(np.array([150.0, 148.0, 142.0]), grain, np.array([0.18, 0.18, 0.18])))
+
+
 LIBRARY = {"asphalt": asphalt, "road_marked": road_marked, "road_plain": road_plain, "gravel_road": gravel_road,
            "gravel_road_narrow": gravel_road_narrow, "grass": grass, "ground": ground, "steel": steel, "water": water,
+           "kerb": kerb,
            **{name: partial(ground_cover, name) for name in GROUND_COVERS}}

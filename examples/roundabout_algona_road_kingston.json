@@ -1,0 +1,9 @@
+{
+  "track_id": "roundabout_algona_road_kingston",
+  "waypoints": [
+    {"lon": 147.295673, "lat": -42.995141},
+    {"lon": 147.277819, "lat": -42.997806}
+  ],
+  "width": "as_mapped",
+  "layouts": "both"
+}

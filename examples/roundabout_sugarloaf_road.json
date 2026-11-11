@@ -1,0 +1,9 @@
+{
+  "track_id": "roundabout_sugarloaf_road",
+  "waypoints": [
+    {"lon": 147.346179, "lat": -42.826496},
+    {"lon": 147.351328, "lat": -42.815066}
+  ],
+  "width": "as_mapped",
+  "layouts": "both"
+}

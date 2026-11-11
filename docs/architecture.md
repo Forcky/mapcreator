@@ -14,13 +14,14 @@ profile   02_profile   DEM sampling, smoothing with a grade-change limit and gra
                        under a road crossing over bridged
 section   03_section   sealed or unsealed (OSM surface, short runs merged), width (OSM width → lanes × lane width →
                        narrow → class default, narrower on gravel; +15% / +30%), camber from the DEM (limited by
-                       width; crown only on bridges and tunnels), crown; the side roads' stubs, planned (stubs.json)
+                       width; crown only on bridges and tunnels), crown; the roundabouts the route drives (roundabouts.json), then the side roads'
+                       stubs (stubs.json), planned
 mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, the side roads' 100 m stubs joined to the road by
-                       their flares, adaptive terrain corridor (in ground classes from TASVEG in Tasmania, for Grass
-                       FX), guard rails (both sides of a bridge over a gap) and furniture (none in side roads' mouths),
-                       each stub's closure and police cars
-                       at some major ones (closures.json), AC dummies
-scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), typed by TASVEG in Tasmania, trunk colliders, buildings from footprints (none on a side road's first 100 m or its stub)
+                       their flares, each roundabout's ring, island and closed exits, adaptive terrain corridor (in
+                       ground classes from TASVEG in Tasmania, for Grass FX), guard rails (both sides of a bridge over a gap) and furniture (none in
+                       side roads' mouths or on a roundabout's island side), each stub's closure and police cars at some
+                       major ones (closures.json), AC dummies
+scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), typed by TASVEG in Tasmania, trunk colliders, buildings from footprints (none on a side road's first 100 m or its stub, or on a roundabout's ring or small island)
 track     05_track     numpy KN5 writer (timing gates clear of side roads' mouths), DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,
                        centreline.geojson (ODbL), the zip
 validate  06_validate  static checks (report.json); the in-game harness is for development only
@@ -28,7 +29,7 @@ validate  06_validate  static checks (report.json); the in-game harness is for d
 
 The stage names are `mapcreator.pipeline.STAGE_NAMES`; `mapcreator <stage> job.json` reruns one, `mapcreator build job.json` runs them all. No stage needs a GPU, Blender, the AC SDK or the game. `data-flows.md` lists each stage's inputs and outputs.
 
-The mesh and scenery stages run side by side (`pipeline/runner.py`), so anything both need comes from an earlier stage. The side roads' stubs are one such thing: the section stage plans them (`core/stubs.py`, `03_section/stubs.json`), the mesh stage builds them from the plan, and the scenery, track and validate stages read the same plan to keep trees off them, keep timing gates out of their mouths and check them.
+The mesh and scenery stages run side by side (`pipeline/runner.py`), so anything both need comes from an earlier stage. The side roads' stubs are one such thing: the section stage plans them (`core/stubs.py`, `03_section/stubs.json`), the mesh stage builds them from the plan, and the scenery, track and validate stages read the same plan to keep trees off them, keep timing gates out of their mouths and check them. Roundabouts the route drives are another (`core/roundabouts.py`, `03_section/roundabouts.json`): planned first, so the stubs keep off them, and built, cleared and checked from the same plan. The mesh stage writes what it actually built (`04_mesh/stubs.json`, `04_mesh/roundabouts.json`), less any stub, exit or ring that failed its checks on the built meshes, and the track and validate stages read those.
 
 ## OSM data
 
@@ -49,7 +50,8 @@ Geofabrik extract (.osm.pbf) ──build once (pyosmium)──▶ index (SQLite)
 ```
 src/mapcreator/
   core/        centreline, profile, section, mesh, scene, scenery, sprites, textures, roadside, kn5, ai_line,
-               layout, package, validate, grass, grassfx, junctions, stubs, closures, police_car and stub_closures
+               layout, package, validate, grass, grassfx, junctions, stubs, roundabouts, closures, police_car and
+               stub_closures
                (data-agnostic: arrays and geometry in, meshes and files out)
   providers/   one package per source; each declares its licence and attribution
                base, raster (windowed reads and tile cache)
@@ -79,7 +81,7 @@ build worker ── runs the pipeline against local data mirrors (OSM index, DEM
 
 - **`mapcreator-web`** (`api.py`) serves the map page, the public job API and the worker API from one FastAPI app. The public submits a `Job` and nothing else. In order: a Turnstile check (when configured), a region check, de-duplication (the same road with the same options returns the existing job), then a global queue cap and a per-IP daily limit. Client addresses are stored only as a keyed hash.
 - **The queue** (`db.py`) is one SQLite table in WAL mode. A claim is atomic and hands out a fresh `worker_id` that heartbeat, complete and fail must present. A job whose worker stops heartbeating is requeued, then failed after two attempts.
-- **Route previews** (`routing.py`) come from a self-hosted GraphHopper, or for local development from the build's own OSM graph, over the local OSM index when `osm_index` is set and Overpass otherwise. The worker routes again during the build. To keep it on the same road, the page sends points sampled about every kilometre along the current preview as extra waypoints.
+- **Route previews** (`routing.py`) come from a self-hosted GraphHopper, or for local development from the build's own OSM graph, over the local OSM index when `osm_index` is set and Overpass otherwise. The worker routes again during the build. To keep it on the same road, the page sends points sampled about every kilometre along the current preview as extra waypoints. A preview that drives road twice says where; one through a small roundabout says that its path may bend tighter than a build accepts (`core/roundabouts.py`, `preview_notes`; GraphHopper marks the stretches on a roundabout with its `roundabout` path detail).
 - **Track ids** are `mc_<slug>_<first 8 of the route hash>`. Two people's tracks with the same name can't overwrite each other in a player's AC install, and rebuilding the same road keeps its id, so Content Manager treats the new zip as an update.
 - **Retention:** every hour, piggy-backed on traffic, the web app deletes finished jobs and their downloads after `MAPCREATOR_KEEP_DAYS` (30) and blanks client-IP hashes after `MAPCREATOR_IP_HASH_DAYS` (2).
 - **`mapcreator-worker`** (`worker.py`) polls the API, validates the job again, runs every stage from `cli.main.STAGES` in a fresh temporary folder, uploads the zip through `storage.py` and reports back. Only errors about the road reach the public; anything else is a generic line.

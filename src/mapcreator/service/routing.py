@@ -13,8 +13,12 @@ runs later on the worker and is the one that counts. Two implementations:
 Region checks happen before either router is asked anything, so a point in
 an unsupported state costs nothing. A preview that drives road twice says
 where it turns back (`turns_back`), in the words the build would refuse it
-with, so the page can stop it before anyone submits. Every exception here carries a message
-that is safe to show the person using the map.
+with, so the page can stop it before anyone submits. A preview through a small
+roundabout says so (`roundabouts`, `core.roundabouts.preview_notes`): the
+route's path round a ring of 10.3 m radius or less may bend tighter than the
+5 m a build accepts. GraphHopper names the stretches on a roundabout as a path
+detail; the ring's radius is fitted to the route's points round it. Every
+exception here carries a message that is safe to show the person using the map.
 """
 
 from __future__ import annotations
@@ -26,6 +30,8 @@ import httpx
 import numpy as np
 
 from mapcreator import config
+from mapcreator.core import junctions as junctions_core
+from mapcreator.core import roundabouts
 from mapcreator.core.centreline import cumulative
 from mapcreator.job import Waypoint
 from mapcreator.pipeline import route_stage
@@ -58,10 +64,20 @@ class TurnBack(TypedDict):
     message: str  # the build's own words (`route_stage.RouteTurnsBack`)
 
 
+class RoundaboutNote(TypedDict):
+    lon: float  # the roundabout, midway round the route's arc of it
+    lat: float
+    along_m: float
+    radius_m: float | None  # the ring's radius, where known
+    tightest_m: float | None  # the route's tightest bend round it, as validation would judge it
+    message: str
+
+
 class RoutePreview(TypedDict):
     coordinates: list[list[float]]  # [[lon, lat], ...]
     length_m: float
     turns_back: NotRequired[TurnBack]  # only when the route drives road twice, which no build accepts
+    roundabouts: NotRequired[list[RoundaboutNote]]  # only for a small roundabout, or one the build may find too tight
 
 
 class Router(Protocol):
@@ -88,10 +104,21 @@ def check_region(waypoints: Sequence[Waypoint]) -> Region:
         raise OutOfArea("All points must be in the same region.") from None
 
 
-def _preview(lon: Sequence[float], lat: Sequence[float], length_m: float, xy: np.ndarray) -> RoutePreview:
-    """The preview for the page; `xy` is the same line in the region's metres, to measure any road driven twice."""
+def _preview(lon: Sequence[float], lat: Sequence[float], length_m: float, xy: np.ndarray,
+             rings: Sequence[dict] = ()) -> RoutePreview:
+    """The preview for the page; `xy` is the same line in the region's metres, to measure any road driven twice.
+    `rings`: the roundabouts it drives, as `roundabouts.preview_notes` takes them (`from_m`, `to_m` along `xy`,
+    `radius_m`)."""
     out: RoutePreview = {"coordinates": [[round(float(a), 6), round(float(b), 6)] for a, b in zip(lon, lat)],
                          "length_m": round(float(length_m), 1)}
+    if rings:
+        s = cumulative(xy)
+        notes = []
+        for note in roundabouts.preview_notes(xy, list(rings)):
+            notes.append({"lon": round(float(np.interp(note["along_m"], s, lon)), 6),
+                          "lat": round(float(np.interp(note["along_m"], s, lat)), 6), **note})
+        if notes:
+            out["roundabouts"] = notes
     found = route_stage.turn_back(xy)
     if found is not None:
         back, retraced_m = found
@@ -132,11 +159,15 @@ class DevRouter:
         to_xy = region.to_xy()
         wx, wy = to_xy.transform(lons, lats)
         try:
-            route = osm_graph.route(osm_graph.build(data, to_xy), np.column_stack([wx, wy]))
+            graph = osm_graph.build(data, to_xy)
+            route = osm_graph.route(graph, np.column_stack([wx, wy]))
         except osm_graph.RouteError as e:
             raise NoRoute(_sentence(str(e))) from e
         lon, lat = region.to_lonlat().transform(route.xy[:, 0], route.xy[:, 1])
-        return _preview(lon, lat, cumulative(route.xy)[-1], route.xy)
+        # The roundabouts it drives, as the build's route stage records them (`core.junctions`).
+        rings = [{"from_m": r["route_from_m"], "to_m": r["route_to_m"], "radius_m": r["radius_m"]}
+                 for r in junctions_core.find(graph, route.xy)["roundabouts"] if r["on_route"]]
+        return _preview(lon, lat, cumulative(route.xy)[-1], route.xy, rings)
 
 
 # GraphHopper names the reason for a 400 in hints[].details (Java exception class names).
@@ -150,11 +181,17 @@ _GH_REASONS = {
 class GraphHopperRouter:
     """A self-hosted GraphHopper (https://github.com/graphhopper/graphhopper) with a `car` profile."""
 
+    # The path detail naming the stretches on a roundabout. GraphHopper 11 built from deploy/graphhopper/config.yml
+    # answers with it (checked over a Tasmania extract). A router that says it has no such detail is asked again
+    # without it, and then not again: its previews have no roundabout notes.
+    ROUNDABOUT_DETAIL = "roundabout"
+
     def __init__(self, base_url: str, *, client: httpx.Client | None = None, timeout_s: float = 10.0,
                  profile: str = "car"):
         self._url = base_url.rstrip("/") + "/route"
         self._client = client or httpx.Client(timeout=timeout_s, follow_redirects=False)
         self._profile = profile
+        self._details = True
 
     def preview(self, waypoints: Sequence[Waypoint]) -> RoutePreview:
         region = check_region(waypoints)
@@ -166,7 +203,11 @@ class GraphHopperRouter:
             "calc_points": True,
         }
         try:
-            r = self._client.post(self._url, json=body)
+            r = self._client.post(self._url, json={**body, "details": [self.ROUNDABOUT_DETAIL]} if self._details
+                                  else body)
+            if self._details and r.status_code == 400 and self._lacks_detail(r):
+                self._details = False
+                r = self._client.post(self._url, json=body)
         except httpx.HTTPError as e:
             raise RouterUnavailable("The route preview service didn't answer. Try again in a minute.") from e
         if r.status_code == 200:
@@ -174,6 +215,14 @@ class GraphHopperRouter:
         if 400 <= r.status_code < 500:
             raise self._error(r)
         raise RouterUnavailable("The route preview service is having trouble. Try again in a minute.")
+
+    @staticmethod
+    def _lacks_detail(r: httpx.Response) -> bool:
+        """Whether a 400 says the graph has no such path detail (GraphHopper: "Cannot find the path details")."""
+        try:
+            return "path details" in str(r.json().get("message", "")).lower()
+        except ValueError:
+            return False
 
     @staticmethod
     def _parse(r: httpx.Response, region: Region) -> RoutePreview:
@@ -188,7 +237,26 @@ class GraphHopperRouter:
         if len(lon) < 2:
             raise NoRoute("No drivable route connects these points.")
         x, y = region.to_xy().transform(lon, lat)
-        return _preview(lon, lat, length, np.column_stack([x, y]))
+        xy = np.column_stack([x, y])
+        return _preview(lon, lat, length, xy, GraphHopperRouter._rings(path, xy))
+
+    @staticmethod
+    def _rings(path: dict, xy: np.ndarray) -> list[dict]:
+        """The roundabouts the path drives, from its `roundabout` detail ([from point, to point, on a roundabout]):
+        where along it, and the ring's radius fitted to the path's points round it (None with too few points)."""
+        try:
+            spans = [(int(a), int(b)) for a, b, on in path.get("details", {}).get(GraphHopperRouter.ROUNDABOUT_DETAIL, [])
+                     if on is True]
+        except (TypeError, ValueError):
+            return []
+        s = cumulative(xy)
+        out = []
+        for a, b in spans:
+            if not 0 <= a < b < len(xy):
+                continue
+            out.append({"from_m": float(s[a]), "to_m": float(s[b]),
+                        "radius_m": roundabouts.fit_radius(xy[a:b + 1])})
+        return out
 
     @staticmethod
     def _error(r: httpx.Response) -> RoutingError:
