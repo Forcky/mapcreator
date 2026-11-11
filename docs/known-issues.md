@@ -5,6 +5,7 @@ Found in a code review in November 2026 and not fixed yet, or only answerable in
 ## Service
 
 - **The worker API isn't versioned.** A newer worker copes with an older web app (it drops build stages from its heartbeats when refused), but deploy both from the same commit.
+- **A single build's memory is now the limit.** Each job is built in a process of its own, so the worker no longer carries memory from one job to the next. On a laptop under Linux (11 Nov 2026), five builds in one process left it holding 2.3 GiB after the first and 4.2 GiB after the fifth, peaking at 4.9 GiB. Now the worker process stays at 40 MiB. What's left is each build's own peak, which has grown with each feature: Lyell Highway (63 km, the longest allowed) peaked at 2.5-2.7 GiB, Esperance Coast Road and Brinktop Road at 0.9-1.2 GiB. The worker logs every build's peak (`build process peak … GiB`). The container's memory limit has to cover the largest, plus the worker process.
 
 ## Only the game can answer
 
