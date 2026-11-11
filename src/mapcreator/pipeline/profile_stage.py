@@ -9,6 +9,7 @@ import numpy as np
 
 from mapcreator.config import Settings
 from mapcreator.core import centreline as cl
+from mapcreator.core import crossings as crossings_core
 from mapcreator.core import profile as pf
 from mapcreator.core import reach
 from mapcreator.core import section as sec
@@ -23,6 +24,8 @@ STAGE = "02_profile"
 # DEM tiles are fetched this far either side of the road: the terrain corridor and a margin (`core.reach`).
 CORRIDOR_M = reach.DEM_M
 FILL_TAGS = {"bridge", "tunnel"}
+# A crossing (route distance) is matched to the nearest smoothed-centreline station within this of where it falls.
+CROSSING_MATCH_M = 50.0
 
 
 def _fill_mask(run_idx: np.ndarray, runs: list[dict]) -> np.ndarray:
@@ -30,6 +33,27 @@ def _fill_mask(run_idx: np.ndarray, runs: list[dict]) -> np.ndarray:
         [any(r["tags"].get(t, "no") not in ("no", "") for t in FILL_TAGS) for r in runs], dtype=bool
     )
     return flagged[run_idx]
+
+
+def _tagged(run_idx: np.ndarray, runs: list[dict], test) -> np.ndarray:
+    """Per station: is its run's way a bridge (`crossings.is_bridge`) or a tunnel (`crossings.is_tunnel`)?"""
+    return np.array([test(r["tags"]) for r in runs], dtype=bool)[run_idx]
+
+
+def crossing_stations(line: cl.Centreline, route_xy: np.ndarray, found: list[dict]) -> np.ndarray:
+    """Each crossing's station along the smoothed centreline: the nearest to its point among those within
+    CROSSING_MATCH_M of its distance along the route, scaled to the centreline's length."""
+    if not found:
+        return np.zeros(0)
+    scale = float(line.s[-1]) / max(float(cl.cumulative(route_xy)[-1]), 1e-9)
+    out = []
+    for c in found:
+        near = np.flatnonzero(np.abs(line.s - c["at_m"] * scale) <= CROSSING_MATCH_M)
+        if not len(near):
+            continue
+        d = np.hypot(*(line.xy[near] - np.asarray(c["xy"], dtype=float)).T)
+        out.append(float(line.s[near[int(np.argmin(d))]]))
+    return np.array(out)
 
 
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
@@ -70,10 +94,14 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     width = sec.mapped_width([r["tags"] for r in runs], line.s, run_idx)
     strip = pf.road_strip_heights(line.s, line.xy, line.heading, dem.sample, z_raw, fine,
                                   width=width) if not coarse else None
+    # Where a road crosses over the route, a hump the DEM shows there is bridged like the route's own bridges.
+    over_at = crossing_stations(line, route["xy"], crossings_core.over(route_stage.crossings(work)))
+    under = pf.humps_under(line.s, z_raw if coarse else strip.z, over_at)
+    fill = _fill_mask(run_idx, runs) | under
     if coarse:
-        prof = pf.smooth_profile(line.s, z_raw, _fill_mask(run_idx, runs), cutoff_m=cutoff)
+        prof = pf.smooth_profile(line.s, z_raw, fill, cutoff_m=cutoff)
     else:
-        prof = pf.mixed_profile(line.s, strip.z, _fill_mask(run_idx, runs), fine & ~strip.coarse)
+        prof = pf.mixed_profile(line.s, strip.z, fill, fine & ~strip.coarse)
         prof.z_raw = z_raw
     if coarse:
         first = prof
@@ -88,6 +116,12 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         z_raw=z_raw, z=prof.z, grade=prof.grade, vc=prof.vertical_curvature, filled=prof.filled,
         # Off-road stretches with no road strip are profiled as coarse, so camber and rails treat them so too.
         fine=fine & ~strip.coarse if strip is not None else fine,
+        # Where the profile isn't the ground's: the route's own bridges and tunnels (by their tags), and the humps
+        # bridged under a road crossing over (`under`). The section stage gives them crown only, and the mesh stage
+        # puts rails along the bridges.
+        bridge=_tagged(run_idx, runs, crossings_core.is_bridge),
+        tunnel=_tagged(run_idx, runs, crossings_core.is_tunnel),
+        under=under,
     )
     summary = st.as_dict() | {
         "dem_tiles": tiles,
@@ -103,6 +137,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "off_road_strip_m": round(float(np.isfinite(strip.strip_offset).sum() * (line.s[1] - line.s[0])), 1)
         if strip is not None else 0.0,
         "off_road_coarse_m": round(float(strip.coarse.sum() * (line.s[1] - line.s[0])), 1) if strip is not None else 0.0,
+        "humps_under_crossings_m": round(float(under.sum() * (line.s[1] - line.s[0])), 1),
     }
     work.write_json(STAGE, "stats.json", summary)
     _plot(work, line, prof, summary)

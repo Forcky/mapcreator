@@ -10,6 +10,7 @@ import numpy as np
 
 from mapcreator.config import Settings
 from mapcreator.core import centreline
+from mapcreator.core import crossings as crossings_core
 from mapcreator.core import junctions as junctions_core
 from mapcreator.core.centreline import cumulative
 from mapcreator.job import Job, Junctions
@@ -23,6 +24,8 @@ STAGE = "01_route"
 OSM_SELECTION = "osm_selection.json"
 # The side-road junctions and roundabouts along the route (`core.junctions`; the format is in docs/ac-format.md).
 JUNCTIONS = "junctions.json"
+# The roads crossing over or under the route without meeting it (`core.crossings`; the format is in docs/ac-format.md).
+CROSSINGS = "crossings.json"
 
 
 class RouteTooLong(osm_graph.RouteError):
@@ -133,6 +136,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     work.write_json(STAGE, OSM_SELECTION, osm_roads.selection(settings))
     summary = {"length_m": round(length, 1), "retraced_m": round(route.retraced_m, 1), "ways": len(route_runs),
                "region": region.key, "sharp_turns": sharp}
+    summary |= _write_crossings(g, route, region, work)
     if job.junctions == Junctions.CLOSED:
         found = junctions_core.find(g, route.xy, to_lonlat=region.to_lonlat())
         work.write_json(STAGE, JUNCTIONS, {"version": found.pop("version"), "crs": f"EPSG:{region.epsg}", **found})
@@ -140,6 +144,22 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     else:
         (work.stage(STAGE) / JUNCTIONS).unlink(missing_ok=True)  # built without them, as before they were found
     return summary
+
+
+def _write_crossings(g: osm_graph.RoadGraph, route: osm_graph.Route, region, work: WorkDir) -> dict:
+    """Write crossings.json (`core.crossings`) whatever the job's junctions option: the profile is built on it."""
+    found = crossings_core.find(g, route.xy, route.seg_way, to_lonlat=region.to_lonlat())
+    work.write_json(STAGE, CROSSINGS, {"version": found.pop("version"), "crs": f"EPSG:{region.epsg}", **found})
+    return {"crossings": {"over": sum(c["relation"] == "over" for c in found["crossings"]),
+                          "under": sum(c["relation"] == "under" for c in found["crossings"]),
+                          "unresolved": len(found["unresolved"])}}
+
+
+def crossings(work: WorkDir) -> list[dict]:
+    """The roads crossing over or under the route, as crossings.json lists them: none for a route stage run before
+    crossings were found."""
+    path = work.root / STAGE / CROSSINGS
+    return work.read_json(STAGE, CROSSINGS)["crossings"] if path.exists() else []
 
 
 def junctions(work: WorkDir, job: Job) -> list[dict]:

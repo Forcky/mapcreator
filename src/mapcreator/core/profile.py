@@ -9,6 +9,12 @@ Bridges and tunnels: the DEM is bare earth, so under a bridge it shows the
 gully floor. Those stretches are bridged with a straight grade between their
 ends before smoothing.
 
+Under another road's bridge the opposite can happen: the ground classification
+keeps the embankment beside a narrow underpass, or the DEM predates the cutting,
+and the route reads a hump (9 m on the Kingston Bypass under Summerleas Road,
+from LiDAR flown while the cutting was dug). `humps_under` finds humps near
+where a road crosses over the route, and those are bridged the same way.
+
 Coarse stretches of a fine grid. Tasmania's statewide 2 m DEM is about 65%
 LiDAR; the rest is a coarser model resampled onto the same 2 m grid. There a
 road that contours round a steep hillside reads the hillside: 51% over 10 m on
@@ -83,6 +89,22 @@ def fill_runs(s: np.ndarray, z: np.ndarray, mask: np.ndarray, pad_m: float = 3.0
     return out, bad
 
 
+def _dip_depth(s: np.ndarray, z: np.ndarray, width_m: float) -> np.ndarray:
+    """How deep each station sits in a dip narrower than `width_m`: a grey-scale closing over that window, less
+    the profile. The ends are padded by linear extrapolation (see `narrow_dips`)."""
+    step = s[1] - s[0] if len(s) > 1 else 1.0
+    size = max(int(round(width_m / step)) | 1, 3)
+    zz = np.where(np.isfinite(z), z, np.nanmedian(z))
+    if len(zz) < 2 * size:
+        return np.zeros(len(zz))
+    k = np.arange(1, size + 1)
+    left = zz[0] - (zz[size] - zz[0]) / size * k[::-1]
+    right = zz[-1] + (zz[-1] - zz[-1 - size]) / size * k
+    padded = np.concatenate([left, zz, right])
+    closed = grey_closing(padded, size=size, mode="nearest")[size:-size]
+    return closed - zz
+
+
 def narrow_dips(s: np.ndarray, z: np.ndarray, *, max_width_m: float = 20.0, min_depth_m: float = 0.4) -> np.ndarray:
     """Stations in dips narrower than `max_width_m` and deeper than `min_depth_m`.
 
@@ -96,17 +118,59 @@ def narrow_dips(s: np.ndarray, z: np.ndarray, *, max_width_m: float = 20.0, min_
     The ends are padded by linear extrapolation. Otherwise a slope running off
     the end of the route looks like a dip to the closing.
     """
-    step = s[1] - s[0] if len(s) > 1 else 1.0
-    size = max(int(round(max_width_m / step)) | 1, 3)
-    zz = np.where(np.isfinite(z), z, np.nanmedian(z))
-    if len(zz) < 2 * size:
-        return np.zeros(len(zz), dtype=bool)
-    k = np.arange(1, size + 1)
-    left = zz[0] - (zz[size] - zz[0]) / size * k[::-1]
-    right = zz[-1] + (zz[-1] - zz[-1 - size]) / size * k
-    padded = np.concatenate([left, zz, right])
-    closed = grey_closing(padded, size=size, mode="nearest")[size:-size]
-    return (closed - zz) > min_depth_m
+    return _dip_depth(s, z, max_width_m) > min_depth_m
+
+
+# Humps under a crossing road (`humps_under`). A hump is what a grey-scale opening over HUMP_WINDOW_M removes (the
+# mirror of `narrow_dips`' closing): the Kingston Bypass's is about 50 m across at its foot. On a slope a flat opening
+# misses the flank facing uphill, so the profile is first tilted by each grade in HUMP_GRADES and the largest rise
+# counts: tilted by the ground's own grade, the rise is the hump's own height, and no tilt makes it more (an opening
+# never falls below a straight line under the profile). A smooth crest of vertical radius R rises at most
+# (window / 2)^2 / (2 R) at any tilt: under HUMP_MIN_M for any R over about 470 m, flatter than the tightest crest a
+# sealed road's design speed allows (a guess from typical sight-distance rules; 50 km/h roads run to about 800 m). A
+# hump counts if it rises more than HUMP_MIN_M, and it is bridged out to where it rises less than HUMP_EDGE_M, so its
+# flanks go with it. Only humps that come within HUMP_REACH_M of where a road crosses over count, and each crossing is
+# looked at over HUMP_ZONE_M either side.
+HUMP_WINDOW_M = 61.0
+HUMP_GRADES = np.round(np.arange(-0.15, 0.1501, 0.005), 3)
+HUMP_MIN_M = 1.0
+HUMP_EDGE_M = 0.2
+HUMP_REACH_M = 40.0
+HUMP_ZONE_M = 200.0
+
+
+def hump_rise(s: np.ndarray, z: np.ndarray, window_m: float = HUMP_WINDOW_M, grades=HUMP_GRADES) -> np.ndarray:
+    """How far each station stands above the profile opened across `window_m`, the largest over the profile tilted
+    by each of `grades` (see HUMP_GRADES)."""
+    z = np.asarray(z, dtype=float)
+    rise = np.zeros(len(z))
+    for k in grades:
+        rise = np.maximum(rise, _dip_depth(s, k * s - z, window_m))  # a dip in -z is a hump in z
+    return rise
+
+
+def humps_under(s: np.ndarray, z: np.ndarray, at_m, *, window_m: float = HUMP_WINDOW_M, min_m: float = HUMP_MIN_M,
+                edge_m: float = HUMP_EDGE_M, reach_m: float = HUMP_REACH_M, zone_m: float = HUMP_ZONE_M) -> np.ndarray:
+    """Stations of a hump in the profile `z` near where a road crosses over the route (`at_m`, stations along `s`).
+
+    On a bare-earth DEM a road passing under another can read the embankment beside the underpass, or ground from
+    before its cutting was dug. Elsewhere the profile keeps the real ground: a hump must rise more than `min_m`
+    (`hump_rise`) and come within `reach_m` of a crossing. It reaches out to where the rise falls under `edge_m`.
+    """
+    out = np.zeros(len(s), dtype=bool)
+    if len(s) < 3:
+        return out
+    z = np.asarray(z, dtype=float)
+    for at in np.asarray(list(at_m), dtype=float):
+        zone = np.flatnonzero(np.abs(s - at) <= zone_m)
+        if len(zone) < 3:
+            continue
+        lo = zone[0]
+        rise = hump_rise(s[zone], z[zone], window_m)
+        for a, b in _runs(rise > edge_m):
+            if rise[a:b].max() > min_m and s[lo + a] - reach_m <= at <= s[lo + b - 1] + reach_m:
+                out[lo + a:lo + b] = True
+    return out
 
 
 DEFAULT_CUTOFF_M = 40.0
