@@ -138,6 +138,18 @@ def test_a_hairpin_on_one_road_is_left_to_validation():
     assert route_stage.u_turn(xy, names=[None] * (len(xy) - 1)) is None  # an unnamed road is one road too
 
 
+def test_a_turn_into_a_tight_loop_on_another_road_is_left_to_validation():
+    # Off a named road into a court's turning circle, or from an unnamed link onto a road at a sharp angle (the survey
+    # of Tasmania's roundabouts, Nov 2026): the name changes, but the route doesn't come back onto the road it left.
+    arc = [[3.0 * np.sin(a), 3.0 * np.cos(a)] for a in np.radians(np.arange(0, 181, 30))]
+    xy = np.array([[-50.0, 3.0], *arc, [-50.0, -3.0]])
+    n = len(xy) - 1
+    assert route_stage.u_turn(xy, names=["Main Road"] + ["Smith Court"] * (n - 1)) is None
+    assert route_stage.u_turn(xy, names=[None] * (n - 1) + ["Main Road"]) is None
+    # Into the court and straight back out onto the road it left: a U-turn.
+    assert route_stage.u_turn(xy, names=["Main Road"] + ["Smith Court"] * (n - 2) + ["Main Road"]) == 1
+
+
 @pytest.mark.parametrize("xy", [
     [[0.0, 0.0], [100.0, 0.0], [200.0, 0.0]],
     [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0]],  # a right-angle junction
