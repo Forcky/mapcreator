@@ -105,10 +105,10 @@ def check_region(waypoints: Sequence[Waypoint]) -> Region:
 
 
 def _preview(lon: Sequence[float], lat: Sequence[float], length_m: float, xy: np.ndarray,
-             rings: Sequence[dict] = ()) -> RoutePreview:
+             rings: Sequence[dict] = (), names: Sequence[str | None] | None = None) -> RoutePreview:
     """The preview for the page; `xy` is the same line in the region's metres, to measure any road driven twice.
     `rings`: the roundabouts it drives, as `roundabouts.preview_notes` takes them (`from_m`, `to_m` along `xy`,
-    `radius_m`)."""
+    `radius_m`). `names`: the road each segment of `xy` is on, where the router says (`route_stage.u_turn`)."""
     out: RoutePreview = {"coordinates": [[round(float(a), 6), round(float(b), 6)] for a, b in zip(lon, lat)],
                          "length_m": round(float(length_m), 1)}
     if rings:
@@ -126,6 +126,14 @@ def _preview(lon: Sequence[float], lat: Sequence[float], length_m: float, xy: np
         out["turns_back"] = {"lon": round(float(lon[back]), 6), "lat": round(float(lat[back]), 6),
                              "along_m": round(along_m, 1), "retraced_m": round(retraced_m, 1),
                              "message": route_stage.turns_back_message(retraced_m, along_m)}
+        return out
+    # A U-turn through a divided road's median: refused the same way, though no road is driven twice.
+    u = route_stage.u_turn(xy, [(r["from_m"], r["to_m"]) for r in rings], names)
+    if u is not None:
+        along_m = float(cumulative(xy)[u])
+        out["turns_back"] = {"lon": round(float(lon[u]), 6), "lat": round(float(lat[u]), 6),
+                             "along_m": round(along_m, 1), "retraced_m": 0.0,
+                             "message": route_stage.u_turn_message(along_m)}
     return out
 
 
@@ -167,7 +175,7 @@ class DevRouter:
         # The roundabouts it drives, as the build's route stage records them (`core.junctions`).
         rings = [{"from_m": r["route_from_m"], "to_m": r["route_to_m"], "radius_m": r["radius_m"]}
                  for r in junctions_core.find(graph, route.xy)["roundabouts"] if r["on_route"]]
-        return _preview(lon, lat, cumulative(route.xy)[-1], route.xy, rings)
+        return _preview(lon, lat, cumulative(route.xy)[-1], route.xy, rings, route_stage.segment_names(route))
 
 
 # GraphHopper names the reason for a 400 in hints[].details (Java exception class names).
@@ -185,6 +193,9 @@ class GraphHopperRouter:
     # answers with it (checked over a Tasmania extract). A router that says it has no such detail is asked again
     # without it, and then not again: its previews have no roundabout notes.
     ROUNDABOUT_DETAIL = "roundabout"
+    # The road each stretch is on, for a U-turn's check that the route left the road and came back onto it (checked
+    # on the same GraphHopper 11; GraphHopper keeps street names in every graph).
+    STREET_DETAIL = "street_name"
 
     def __init__(self, base_url: str, *, client: httpx.Client | None = None, timeout_s: float = 10.0,
                  profile: str = "car"):
@@ -203,8 +214,8 @@ class GraphHopperRouter:
             "calc_points": True,
         }
         try:
-            r = self._client.post(self._url, json={**body, "details": [self.ROUNDABOUT_DETAIL]} if self._details
-                                  else body)
+            r = self._client.post(self._url, json={**body, "details": [self.ROUNDABOUT_DETAIL, self.STREET_DETAIL]}
+                                  if self._details else body)
             if self._details and r.status_code == 400 and self._lacks_detail(r):
                 self._details = False
                 r = self._client.post(self._url, json=body)
@@ -238,7 +249,25 @@ class GraphHopperRouter:
             raise NoRoute("No drivable route connects these points.")
         x, y = region.to_xy().transform(lon, lat)
         xy = np.column_stack([x, y])
-        return _preview(lon, lat, length, xy, GraphHopperRouter._rings(path, xy))
+        return _preview(lon, lat, length, xy, GraphHopperRouter._rings(path, xy),
+                        GraphHopperRouter._names(path, len(xy) - 1))
+
+    @staticmethod
+    def _names(path: dict, segments: int) -> list[str | None] | None:
+        """The road each segment of the path is on, from its `street_name` detail ([from point, to point, name]), or
+        None without the detail (a U-turn is then judged on its shape alone)."""
+        details = path.get("details")
+        spans = details.get(GraphHopperRouter.STREET_DETAIL) if isinstance(details, dict) else None
+        if not isinstance(spans, list):
+            return None
+        names: list[str | None] = [None] * segments
+        try:
+            for a, b, name in spans:
+                for k in range(max(int(a), 0), min(int(b), segments)):
+                    names[k] = str(name) if name is not None else None
+        except (TypeError, ValueError):
+            return None
+        return names
 
     @staticmethod
     def _rings(path: dict, xy: np.ndarray) -> list[dict]:

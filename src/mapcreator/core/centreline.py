@@ -33,6 +33,10 @@ from scipy.interpolate import splev, splprep
 CORNER_RADIUS_M = 8.0
 CORNER_MIN_DEG = 45.0  # a single node turning this much is a corner, not a node along a curve
 REVERSAL_DEG = 150.0
+# Corners closer together than this that add up to a reversal are one U-turn (route_stage.u_turn). They share the
+# road between them, so `fillet` can't round them, and turning 150 degrees in 12 m is a bend of 4.6 m radius on
+# average, tighter than any real hairpin (validate.MIN_RADIUS_M).
+REVERSAL_SPAN_M = 12.0
 ARC_STEP_M = 1.0
 
 
