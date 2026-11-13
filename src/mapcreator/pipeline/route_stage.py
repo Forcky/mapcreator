@@ -6,6 +6,8 @@ Roads come from the local OSM index when `osm_index` is set (production), else f
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 from mapcreator.config import Settings
@@ -55,6 +57,73 @@ def turn_back(xy: np.ndarray) -> tuple[int, float] | None:
         turn = np.degrees(np.abs(np.angle(np.exp(1j * np.diff(h)))))
         found += [int(i) for i in keep[1:][turn > centreline.REVERSAL_DEG]]  # the node the turn is at
     return (min(found), retraced_m) if found else None
+
+
+def u_turn(xy: np.ndarray, rings: Sequence[tuple[float, float]] = (),
+           names: Sequence[str | None] | None = None) -> int | None:
+    """Where the route first makes a U-turn out of corners close together: more than `centreline.REVERSAL_DEG`
+    within `centreline.REVERSAL_SPAN_M`. A point on the far side of a divided road does it, sending the route through
+    a gap in the median and back down the other carriageway. Each corner is an ordinary turn, and no road is driven
+    twice, so `turn_back` doesn't see it (12 Nov 2026: a 10 m gap, rounded to a 2.3 m bend that folded the road over
+    itself). The index is the node where the U-turn starts.
+
+    `rings`: the stretches on a roundabout (from, to, in metres along `xy`), which are left to validation. The path
+    round a small ring can turn as hard, and a build can still go round it on request.
+
+    `names`: the name of the road each segment of `xy` is on, where known. A U-turn then has to leave the road and
+    come back onto it, as through the median onto the other carriageway, or into a side street and straight back out;
+    a hairpin on one road is left to validation. (Tasmania, Nov 2026: 38 roads have a hairpin drawn this tight, and
+    26 of them pass validation or can be built on request; no path through any of 391 roundabouts was refused.)"""
+    xy = np.asarray(xy, dtype=float)
+    seg = np.diff(xy, axis=0)
+    keep = np.flatnonzero(np.hypot(*seg.T) > 1e-6)
+    if len(keep) < 2:
+        return None
+    h = np.arctan2(seg[keep, 1], seg[keep, 0])
+    turn = np.degrees(np.angle(np.exp(1j * np.diff(h))))  # signed, at the nodes keep[1:]
+    node = keep[1:]
+    at = cumulative(xy)[node]
+    on_ring = np.zeros(len(node), dtype=bool)
+    for a, b in rings:
+        on_ring |= (at >= a - 1.0) & (at <= b + 1.0)
+    for i in range(len(turn)):
+        end = int(np.searchsorted(at, at[i] + centreline.REVERSAL_SPAN_M, side="right"))
+        if on_ring[i:end].any():
+            continue
+        if names is not None and len({names[k] or "" for k in range(keep[i], keep[end] + 1)}) < 2:
+            continue  # on one road from the segment before the first corner to the one after the last
+        if np.abs(np.cumsum(turn[i:end])).max() > centreline.REVERSAL_DEG:
+            return int(node[i])
+    return None
+
+
+def ring_spans(route: osm_graph.Route) -> list[tuple[float, float]]:
+    """The stretches of a routed line on a roundabout's ways, in metres along it, for `u_turn`."""
+    s = cumulative(route.xy)
+    ring = np.array([route.ways[w]["tags"].get("junction") in junctions_core.RING for w in route.seg_way], dtype=bool)
+    out, k = [], 0
+    while k < len(ring):
+        if ring[k]:
+            e = k
+            while e + 1 < len(ring) and ring[e + 1]:
+                e += 1
+            out.append((float(s[k]), float(s[e + 1])))
+            k = e + 1
+        else:
+            k += 1
+    return out
+
+
+def segment_names(route: osm_graph.Route) -> list[str | None]:
+    """The name of the road each segment of a routed line is on, for `u_turn`."""
+    return [route.ways[w]["tags"].get("name") for w in route.seg_way]
+
+
+def u_turn_message(along_m: float) -> str:
+    """What to tell the person about a `u_turn`, in the build's words and the preview's."""
+    return (f"The route makes a U-turn {_distance(along_m)} along, usually because a point is on the far side of a "
+            "divided road. A track can't go back the way it came: move the point near there onto the same side of "
+            "the road as the route, or finish the track before it turns.")
 
 
 def turns_back_message(retraced_m: float, along_m: float) -> str:
@@ -112,6 +181,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     back = turn_back(route.xy)
     if back is not None:
         raise RouteTurnsBack(turns_back_message(back[1], float(cumulative(route.xy)[back[0]])))
+    u = u_turn(route.xy, ring_spans(route), segment_names(route))
+    if u is not None:
+        raise RouteTurnsBack(u_turn_message(float(cumulative(route.xy)[u])))
 
     sharp = sharp_turns(route.xy)
     lon, lat = region.to_lonlat().transform(route.xy[:, 0], route.xy[:, 1])

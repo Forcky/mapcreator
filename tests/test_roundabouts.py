@@ -393,7 +393,7 @@ def test_graphhopper_previews_ask_for_the_roundabout_detail_and_warn_of_a_small_
 
     router = GraphHopperRouter("http://router.example.org:8989", client=httpx.Client(transport=httpx.MockTransport(handler)))
     preview = router.preview([Waypoint(lon=147.296, lat=-42.80), Waypoint(lon=147.304, lat=-42.80)])
-    assert seen[0]["details"] == ["roundabout"]
+    assert seen[0]["details"] == ["roundabout", "street_name"]
     (note,) = preview["roundabouts"]
     assert note["radius_m"] == pytest.approx(10.0, abs=0.5) and "small roundabout" in note["message"]
 
