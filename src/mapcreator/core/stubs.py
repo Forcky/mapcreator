@@ -368,9 +368,11 @@ def _candidate(j: dict, m: _Mainline, dem_sample, width_factor: float, scale: di
             + across[1:-1] + list(flares["upstream"]["points"][::-1][:-1]))
     throat = shapely.Polygon(ring)
     lo, hi = max(a - 20, 0), min(b + 20, len(m.s) - 1)
-    road = shapely.Polygon([m.edge(r, "L") for r in range(lo, hi + 1)] + [m.edge(r, "R") for r in range(hi, lo - 1, -1)])
+    # Made valid: a bend tighter than the road is wide folds its inside edge over itself, and GEOS can't overlay that.
+    road = shapely.Polygon([m.edge(r, "L") for r in range(lo, hi + 1)]
+                           + [m.edge(r, "R") for r in range(hi, lo - 1, -1)]).buffer(0)
     inside = [rows_xy[k] + t * w * rows_n[k] for k in range(1, first) for t in (0.0, 0.5, -0.5)] if first > 1 else []
-    if (not throat.is_valid or throat.area < 1.0 or throat.intersection(road.buffer(0)).area > 0.05
+    if (not throat.is_valid or throat.area < 1.0 or throat.intersection(road).area > 0.05
             or not all(f["shape_ok"] for f in flares.values())
             or not shapely.union(throat, road).buffer(0.01).contains(shapely.MultiPoint(inside or [rows_xy[0]]))):
         # A side road bending hard inside a long flare can leave the flare's straight run across its carriageway:
@@ -446,6 +448,15 @@ def _candidate(j: dict, m: _Mainline, dem_sample, width_factor: float, scale: di
     return _Candidate(record, priority, throat.buffer(0), rows_xy[first:], rows_n[first:], w, first), None
 
 
+def _drawn(j: dict, m: _Mainline, dem_sample, width_factor: float, scale: dict[str, float] | None = None,
+           ) -> tuple[_Candidate | None, str | None]:
+    """`_candidate`, with geometry GEOS can't work with left out as `geometry`: one bad stub, never the build."""
+    try:
+        return _candidate(j, m, dem_sample, width_factor, scale)
+    except shapely.errors.GEOSException:
+        return None, "geometry"
+
+
 def _body(cand: _Candidate) -> np.ndarray:
     """A stub's ribbon from its first row, its road and verges, as quads from row to row."""
     off = cand.half + mesh.VERGE_M
@@ -516,9 +527,9 @@ def plan(junctions: list[dict], c, section, dem_sample, *, width_factor: float =
     cands, skipped = [], []
     for j in junctions:
         if flare_scale == 1.0:
-            cand, why = _candidate(j, m, dem_sample, width_factor)
+            cand, why = _drawn(j, m, dem_sample, width_factor)
         else:
-            cand, why = _candidate(j, m, dem_sample, width_factor, {"upstream": flare_scale, "downstream": flare_scale})
+            cand, why = _drawn(j, m, dem_sample, width_factor, {"upstream": flare_scale, "downstream": flare_scale})
         if cand is None:
             skipped.append({"junction": j["id"], "name": j.get("name"), "reason": why})
         else:
@@ -529,7 +540,7 @@ def plan(junctions: list[dict], c, section, dem_sample, *, width_factor: float =
     for cand, j in sorted(cands, key=lambda cj: cj[0].priority):
         fitted, reason = _fit(cand, m, kept)
         if reason == "overlaps":  # with smaller flares, it may fit beside the other
-            again, _ = _candidate(j, m, dem_sample, width_factor, {"upstream": SHRINK, "downstream": SHRINK})
+            again, _ = _drawn(j, m, dem_sample, width_factor, {"upstream": SHRINK, "downstream": SHRINK})
             if again is not None:
                 fitted, reason = _fit(again, m, kept)
         if fitted is None:

@@ -12,6 +12,7 @@ import shapely
 
 from mapcreator import config
 from mapcreator.core import ai_line, junctions, mesh, section, stubs, textures, validate
+from mapcreator.core import centreline as cl
 from mapcreator.core.layout import RoadModel
 from mapcreator.core.scene import LocalFrame
 from mapcreator.job import Job
@@ -435,6 +436,32 @@ def test_a_stub_cut_short_by_another_keeps_its_whole_paved_area_and_centreline()
         assert outline.buffer(0.05).contains(shapely.MultiPoint(st["rows"]["xy"]))
         assert outline.buffer(0.05).contains(shapely.MultiPoint([q[:2] for f in st["flares"].values()
                                                                  for q in f["points"]]))
+
+
+def test_a_bend_tighter_than_the_road_is_wide_doesnt_stop_the_plan():
+    # A route crossing a divided road's median through a 9.6 m gap to come back down the other carriageway (Nov 2026):
+    # smoothed, it turns at 2.5 m radius, the road's inside edge folds over itself, and the road's outline GEOS was
+    # asked to overlay with the throat of the side road opposite raised a TopologyException that failed the build.
+    line = cl.smooth(np.array([[0.0, 0.0], [300.0, 0.0], [300.0, -9.6], [270.0, -9.6]]))
+    n = len(line.s)
+    c = {"s": line.s, "xy": line.xy, "heading": line.heading, "curvature": line.curvature, "z": np.full(n, GROUND),
+         "grade": np.zeros(n)}
+    sec = {"half_left": np.full(n, 3.0), "half_right": np.full(n, 3.0), "slope_left": np.full(n, CROWN),
+           "slope_right": np.full(n, CROWN), "style": np.zeros(n, np.int8)}
+    assert 1 / np.abs(line.curvature).max() < 3.0
+    at = float(line.s[np.argmin(np.hypot(*(line.xy - [300.0, 0.0]).T))])
+    p = stubs.plan([{**junction(at, 90.0), "xy": [300.0, 0.0], "line": [[300.0, d] for d in np.linspace(0, 100, 21)]}],
+                   c, sec, flat())
+    assert len(p["stubs"]) + len(p["skipped"]) == 1
+
+
+def test_geometry_geos_cant_work_with_leaves_the_stub_out_not_the_build(monkeypatch):
+    def broken(*args, **kwargs):
+        raise shapely.errors.GEOSException("TopologyException: side location conflict")
+
+    monkeypatch.setattr(stubs, "_candidate", broken)
+    p, st = plan_one(junction(300.0, 90.0))
+    assert st is None and p["skipped"] == [{"junction": 0, "name": "Side Road 0", "reason": "geometry"}]
 
 
 def test_faults_find_a_stub_whose_outline_misses_its_throat_and_a_closure_off_its_stub():
