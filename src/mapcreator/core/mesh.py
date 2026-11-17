@@ -483,24 +483,6 @@ def _span_ring(rb: Ribbon, a: int, b: int) -> list[tuple[int, int]]:
             + [(r, cols - 1) for r in range(b - 1, a - 1, -1)] + [(a, c) for c in range(cols - 2, 0, -1)])
 
 
-def _clear_of_spans(points: np.ndarray, rb: Ribbon, spans) -> np.ndarray:
-    """`points` less those inside the circle on each edge of an open span's end rows (`Footprint.spans`), 0.3 m
-    wider. The skirt's columns stand 3-5 m apart across those rows, and a lattice point in that circle can keep the
-    edge out of the triangulation: a triangle then reaches across it into the ground's end, and is dropped, leaving
-    a hole. With the circle empty, the edge is always one of the triangulation's."""
-    ends = [np.column_stack([rb.e[r], rb.n[r]]) for a, b, *_ in spans for r in (a, b)]
-    if not ends or not len(points):
-        return points
-    p = np.vstack([row[:-1] for row in ends])
-    q = np.vstack([row[1:] for row in ends])
-    centre, radius = (p + q) / 2, np.hypot(*(q - p).T) / 2 + 0.3
-    near = cKDTree(points).query_ball_point(centre, radius)
-    drop = np.zeros(len(points), bool)
-    for idx in near:
-        drop[idx] = True
-    return points[~drop]
-
-
 def _footprint(rb: Ribbon, fp: Footprint) -> tuple[dict, np.ndarray, np.ndarray, shapely.Geometry]:
     """The terrain's inner boundary with stubs: every outline vertex of the road's ribbon (less those cut away) and
     of each other piece, each once, as (index by (easting, northing), points, heights), and the ground they all
@@ -807,8 +789,6 @@ def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame,
     region = corridor.difference(footprint)
 
     lattice = _lattice(region, ring, centre_xy, corridor_m)
-    if extra is not None and extra.spans:
-        lattice = _clear_of_spans(lattice, rb, extra.spans)
     lattice_h = dem_sample(lattice[:, 0], lattice[:, 1])
     fill = np.nanmin(ring_h) if np.isfinite(ring_h).any() else 0.0
     lattice_h = np.where(np.isfinite(lattice_h), lattice_h, fill)

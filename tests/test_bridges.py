@@ -168,7 +168,8 @@ def test_the_terrain_runs_on_under_the_open_deck_with_no_hole_and_nothing_over_i
                                     [(0, chk) for chk in bridges.checks(decks.records(rb), FRAME)]) == {0: []}
 
 
-# Lines across the terrain's lattice that left a hole beside an abutment before `mesh._clear_of_spans`.
+# Lines across the terrain's lattice that left a hole beside an abutment while the terrain wasn't constrained to the
+# footprint's outline (`mesh._constrain`).
 @pytest.mark.parametrize("angle, shift", [(0.21, 1.3), (1.19, 0.0), (1.68, 0.0), (2.17, 1.3)])
 @pytest.mark.parametrize("skirt", [True, False])
 def test_no_hole_round_a_bridge_whatever_its_line_across_the_terrain_s_lattice(angle, shift, skirt):
@@ -179,17 +180,6 @@ def test_no_hole_round_a_bridge_whatever_its_line_across_the_terrain_s_lattice(a
     pts = np.column_stack([a * np.cos(angle) - n * np.sin(angle), a * np.sin(angle) + n * np.cos(angle)])
     covers = validate._Cover(triangles(meshes + deck_meshes))
     assert np.isfinite(covers.top(ac(pts)[:, [0, 2]])).all()
-
-
-def test_lattice_points_are_kept_out_of_the_circle_on_each_edge_of_an_open_span_s_end_rows():
-    c, sec, plan, decks, rb, meshes, deck_meshes, stats = built()
-    a, bb = plan[0]["open_rows"]
-    k = rb.road_cols.start - 3  # the skirt's outer two columns on the left, at the abutment row
-    p, q = np.array([rb.e[a, k - 1], rb.n[a, k - 1]]), np.array([rb.e[a, k], rb.n[a, k]])
-    mid = (p + q) / 2
-    pts = np.array([mid + [0.6, 0.0], mid + [6.0, 0.0], mid - [0.6, 0.0]])
-    kept = mesh._clear_of_spans(pts, rb, [(a, bb, 0, 0)])
-    assert kept.tolist() == [pts[1].tolist()]
 
 
 def test_each_abutment_s_face_shares_the_road_s_row_and_the_terrain_s_foot():
