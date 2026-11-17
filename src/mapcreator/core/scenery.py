@@ -26,6 +26,7 @@ import numpy as np
 import shapely
 from scipy.spatial import cKDTree
 
+from mapcreator import cpus
 from mapcreator.core import reach
 from mapcreator.core.scene import MAX_VERTICES, LocalFrame, Mesh
 from mapcreator.core.sprites import ROOF_COLOURS
@@ -122,7 +123,7 @@ def keep_trees(trees: Trees, centre_xy: np.ndarray, length_m: float, rng: np.ran
     """
     if real_crowns:
         return trees
-    d, _ = cKDTree(centre_xy).query(trees.xy, workers=-1)
+    d, _ = cKDTree(centre_xy).query(trees.xy, workers=cpus.count())
     draw = rng.random(len(trees))
     keep = draw < band_share(d)
     near = keep & (d <= NEAR_M)
@@ -152,7 +153,7 @@ def edge_distance(xy: np.ndarray, centre_xy: np.ndarray, heading: np.ndarray, ha
     """Each point's distance beyond the nearer road edge (negative on the road), and its nearest station."""
     if not len(xy):
         return np.zeros(0), np.zeros(0, dtype=np.int64)
-    d, i = cKDTree(centre_xy).query(xy, workers=-1)
+    d, i = cKDTree(centre_xy).query(xy, workers=cpus.count())
     nrm = np.column_stack([-np.sin(heading[i]), np.cos(heading[i])])
     left = ((xy - centre_xy[i]) * nrm).sum(axis=1) > 0
     return d - np.where(left, half_left[i], half_right[i]), i

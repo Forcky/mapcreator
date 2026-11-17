@@ -28,6 +28,7 @@ import shapely
 from scipy.ndimage import minimum_filter1d, uniform_filter1d
 from scipy.spatial import Delaunay, cKDTree
 
+from mapcreator import cpus
 from mapcreator.core import textures
 from mapcreator.core.scene import MAX_VERTICES, LocalFrame, Mesh
 from mapcreator.core.section import STYLES, is_unsealed
@@ -364,7 +365,7 @@ def _lattice(region, ring_xy: np.ndarray, centre_xy: np.ndarray, reach_m: float 
                     continue  # no point in this block is within reach of the road
                 gx, gy = np.meshgrid(bx, by)
                 cand = np.column_stack([gx.ravel(), gy.ravel()])
-                d, _ = centre_tree.query(cand, distance_upper_bound=reach + 1.0, workers=-1)
+                d, _ = centre_tree.query(cand, distance_upper_bound=reach + 1.0, workers=cpus.count())
                 level.append(cand[(d <= reach) & (d > lower)])
         level = np.vstack(level) if level else np.zeros((0, 2))
         pts.append(level[np.lexsort((level[:, 0], level[:, 1]))])  # row by row, as one grid would give
@@ -373,7 +374,7 @@ def _lattice(region, ring_xy: np.ndarray, centre_xy: np.ndarray, reach_m: float 
     shapely.prepare(region)
     pts = pts[shapely.contains_xy(region, pts[:, 0], pts[:, 1])]
     # Keep lattice points a little away from the skirt edge, or Delaunay makes slivers.
-    d_edge, _ = cKDTree(ring_xy).query(pts, distance_upper_bound=3.0, workers=-1)
+    d_edge, _ = cKDTree(ring_xy).query(pts, distance_upper_bound=3.0, workers=cpus.count())
     return pts[d_edge > 2.5]
 
 
@@ -631,7 +632,7 @@ def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame,
     cxy = centre_xy
     s = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(cxy, axis=0).T))])
     cen = pts[tri].mean(axis=1)
-    dist, station = cKDTree(cxy).query(cen, workers=-1)
+    dist, station = cKDTree(cxy).query(cen, workers=cpus.count())
     chunk = (s[station] // (CHUNK_M * 2)).astype(int)
     material = np.asarray(ground(cen, dist), dtype=object) if ground is not None else None
 

@@ -29,6 +29,7 @@ from scipy.interpolate import CubicSpline
 from scipy.ndimage import minimum_filter1d, uniform_filter1d
 from scipy.spatial import cKDTree
 
+from mapcreator import cpus
 from mapcreator.core import ai_line, kn5, racing_line
 from mapcreator.core.package import ROAD_KEYS, SURFACE_KEYS, surface_keys
 from mapcreator.core.power import POWER_COLLIDER
@@ -423,7 +424,7 @@ class RoadSurface:
         k = min(16, len(self.tri))
         for start in range(0, len(xz), batch):
             pts = xz[start:start + batch]
-            _, idx = self.tree.query(pts, k=k, workers=-1)
+            _, idx = self.tree.query(pts, k=k, workers=cpus.count())
             t = self.tri[np.asarray(idx).reshape(len(pts), k)][..., [0, 2]]
             a = t[..., 0, :]
             v0, v1, v2 = t[..., 2, :] - a, t[..., 1, :] - a, pts[:, None, :] - a
@@ -510,7 +511,7 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
         rep.check(on_road == 0, f"{label}: {what} colliders clear of the road ({on_road} corners over it)")
         spawns = np.array([d["matrix"][3, [0, 2]] for n, d in dummies.items() if SPAWN.match(n)])
         if len(spawns):
-            gap = float(cKDTree(xz).query(spawns, workers=-1)[0].min())
+            gap = float(cKDTree(xz).query(spawns, workers=cpus.count())[0].min())
             rep.check(gap >= TRUNK_SPAWN_CLEARANCE_M,
                       f"{label}: {what} colliders at least {TRUNK_SPAWN_CLEARANCE_M:.0f} m from every spawn ({gap:.1f} m)")
     for gate in ("AC_AB_START", "AC_AB_FINISH"):
@@ -803,7 +804,7 @@ def closure_checks(rep: Report, label: str, data: dict, dummies: dict, junctions
     if len(hard):
         spawns = np.array([d["matrix"][3, [0, 2]] for n, d in dummies.items() if SPAWN.match(n)])
         if len(spawns):
-            gap = float(cKDTree(hard).query(spawns, workers=-1)[0].min())
+            gap = float(cKDTree(hard).query(spawns, workers=cpus.count())[0].min())
             rep.check(gap >= SOLID_SPAWN_CLEARANCE_M, f"{label}: closures' and police cars' colliders at least "
                       f"{SOLID_SPAWN_CLEARANCE_M:.0f} m from every spawn ({gap:.1f} m)")
     if not meshes:
