@@ -12,7 +12,8 @@ are no gaps for a car to fall through:
 - **Terrain:** a Delaunay surface over nested 4 / 8 / 16 m lattices, and 32 m
   beyond 300 m, out to the corridor width. One triangulation spans every ring,
   so they join without seams. Its inner boundary is the skirt's outer edge,
-  vertex for vertex.
+  vertex for vertex: every edge of that outline is one of the terrain's
+  (`_constrain`), so no triangle reaches across it.
 
 Side roads' stubs (`core.stubs`) add more ground the road takes (`Footprint`): the mainline's verge and skirt are
 cut across each mouth, and the terrain leaves room for the stubs, their flares and verges, sharing their outline
@@ -45,6 +46,10 @@ LATTICE_BLOCK_M = 512.0  # the lattice is made in blocks this size, skipping tho
 FOLD_FRACTION = 0.8  # skirt may reach at most this share of the local radius on the inside of a bend
 # Road distance over straight distance above which a nearby centreline point is another part of the route.
 OTHER_PART_RATIO = 1.4
+# A corner of the terrain's re-triangulated patches (`_constrain`) this close to one of its points is that point.
+SAME_POINT_M = 1e-6
+# Where two pieces' outlines cross, each piece's edge is followed on to its next point within this (`_outline_heights`).
+CROSSING_REACH_M = 12.0
 # Terrain in ground classes (`terrain_meshes(ground=...)`): a class's mesh gathers its triangles from consecutive
 # 400 m chunks until it holds about CLASS_MESH_TRIANGLES, or spans CLASS_MESH_CHUNKS chunks (3.2 km) with at least a
 # quarter of that. So the track has about as many terrain meshes as without classes, not a mesh per class per chunk
@@ -584,6 +589,127 @@ def _fold_skirts(rb: Ribbon, fp: Footprint, index: dict, first: int) -> tuple[np
     return np.array(new_xy).reshape(-1, 2), np.array(new_h), np.vstack(tris)
 
 
+def _outline_segments(footprint: shapely.Geometry) -> np.ndarray:
+    """Every edge of the footprint's outline, (n, 2, 2): each ring of each part, holes included."""
+    out = [np.zeros((0, 2, 2))]
+    for part in shapely.get_parts(footprint):
+        for ring in [part.exterior, *part.interiors]:
+            c = np.asarray(ring.coords)[:, :2]
+            out.append(np.stack([c[:-1], c[1:]], axis=1))
+    return np.concatenate(out)
+
+
+def _outline_heights(footprint: shapely.Geometry, pts: np.ndarray, hts: np.ndarray) -> dict:
+    """Heights for the footprint's outline vertices that aren't among `pts`, by (easting, northing): where two pieces'
+    outlines cross, which neither has as a vertex. Each takes the mean of the two pieces' edges' heights there: the
+    outline reaches it along one piece's edge and leaves along the other's, and each edge runs on to a point of `pts`
+    beyond it (inside the other piece). Where that can't be found, it's interpolated along the outline between the
+    nearest points of `pts`."""
+    tree = cKDTree(pts)
+    out = {}
+    for part in shapely.get_parts(footprint):
+        for ring in [part.exterior, *part.interiors]:
+            c = np.asarray(ring.coords)[:-1, :2]
+            gap, idx = tree.query(c)
+            known = gap <= SAME_POINT_M
+            if known.all() or not known.any():
+                continue
+            s = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(c, axis=0).T))])
+            loop = s[-1] + float(np.hypot(*(c[0] - c[-1])))
+            at, h = s[known], hts[idx[known]]
+            at, h = np.concatenate([at - loop, at, at + loop]), np.tile(h, 3)  # round the ring either way
+            for k in np.flatnonzero(~known):
+                x = c[k]
+                edges = []
+                for nb in ((k - 1) % len(c), (k + 1) % len(c)):
+                    if not known[nb]:
+                        continue
+                    d = x - c[nb]
+                    length = float(np.hypot(*d))
+                    near = np.asarray(tree.query_ball_point(x, CROSSING_REACH_M), dtype=np.int64)
+                    v = pts[near] - x
+                    along = (v @ d) / max(length, 1e-12)
+                    off = np.abs(v[:, 0] * d[1] - v[:, 1] * d[0]) / max(length, 1e-12)
+                    on = (along > 1e-9) & (off < SAME_POINT_M)  # the same edge, on beyond the crossing
+                    if on.any():
+                        j = int(np.argmin(np.where(on, along, np.inf)))
+                        h0, h1 = hts[idx[nb]], hts[near[j]]
+                        edges.append(h0 + (h1 - h0) * length / (length + along[j]))
+                key = (float(x[0]), float(x[1]))
+                out[key] = float(np.mean(edges)) if edges else float(np.interp(s[k], at, h))
+    return out
+
+
+def _may_enter(corners: np.ndarray, seg: np.ndarray) -> np.ndarray:
+    """For triangles (n, 3, 2) and segments (n, 2, 2) that meet, False where the segment can't pass through the
+    triangle's inside: both its ends lie on the far side of one of the triangle's edges, or on that edge's line
+    (exactly, as where they share the edge or a corner). The rest are left to the exact test."""
+    a = corners[:, :, None, :]
+    b = np.roll(corners, -1, axis=1)[:, :, None, :]
+    p = seg[:, None, :, :]
+    side = (b[..., 0] - a[..., 0]) * (p[..., 1] - a[..., 1]) - (b[..., 1] - a[..., 1]) * (p[..., 0] - a[..., 0])
+    area = ((corners[:, 1, 0] - corners[:, 0, 0]) * (corners[:, 2, 1] - corners[:, 0, 1])
+            - (corners[:, 1, 1] - corners[:, 0, 1]) * (corners[:, 2, 0] - corners[:, 0, 0]))
+    side = side * np.sign(area)[:, None, None]  # positive towards the triangle's inside
+    outside = (side == 0.0) | (side < -1e-9)
+    return ~outside.all(axis=2).any(axis=1)
+
+
+def _constrain(pts: np.ndarray, hts: np.ndarray, tri: np.ndarray, keep: np.ndarray, corridor: shapely.Geometry,
+               footprint: shapely.Geometry) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The terrain's triangles: those of its Delaunay triangulation it keeps (`keep`), with every edge of the
+    footprint's outline one of their edges.
+
+    Delaunay alone doesn't promise that. Where a point stands near a long outline edge (a skirt's last 5 m step, across
+    a ribbon's end row) or two pieces' outlines meet at a sharp angle, triangles reach across the outline, and testing
+    their centres keeps the ones over the road (a stub's skirt) and drops the ones over the ground beside it: a hole.
+    Where two pieces' outlines cross, the crossing is neither's vertex, and the sliver to it was never covered.
+
+    So every triangle the outline passes through is taken out, and the ground they covered, less the footprint, is
+    triangulated again over its own outline (shapely's constrained Delaunay triangulation): no new points, except
+    where two pieces' outlines cross, at heights interpolated along the outline (`_outline_heights`). Returns the points
+    and heights, any new ones after the others, and the triangles."""
+    seg = _outline_segments(footprint)
+    if not len(seg) or not len(tri):
+        return pts, hts, tri[keep]
+    corners = pts[tri]
+    cen = corners.mean(axis=1)
+    reach = np.hypot(*(corners - cen[:, None, :]).transpose(2, 0, 1)).max(axis=1)
+    half = float(np.hypot(*(seg[:, 1] - seg[:, 0]).T).max()) / 2
+    gap, _ = cKDTree(seg.mean(axis=1)).query(cen, workers=cpus.count())
+    near = np.flatnonzero(gap <= reach + half)  # only these can meet an outline edge
+    polys = shapely.polygons(corners[near])
+    lines = shapely.linestrings(seg)
+    i, j = shapely.STRtree(lines).query(polys, predicate="intersects")
+    maybe = _may_enter(corners[near[i]], seg[j])
+    i, j = i[maybe], j[maybe]
+    through = shapely.relate_pattern(lines[j], polys[i], "T********")  # through the triangle's inside, not along it
+    cross = np.zeros(len(tri), bool)
+    cross[near[i[through]]] = True
+    if not cross.any():
+        return pts, hts, tri[keep]
+    cavity = shapely.union_all(shapely.polygons(corners[cross])).difference(footprint)
+    patches = shapely.get_parts(shapely.constrained_delaunay_triangles(cavity))
+    if not len(patches):
+        return pts, hts, tri[keep & ~cross]
+    xy = shapely.get_coordinates(patches).reshape(-1, 4, 2)[:, :3]
+    gap, made = cKDTree(pts).query(xy.reshape(-1, 2))
+    new = np.flatnonzero(gap > SAME_POINT_M)
+    if len(new):  # where two pieces' outlines cross
+        heights = _outline_heights(footprint, pts, hts)
+        keys = [(float(x), float(y)) for x, y in xy.reshape(-1, 2)[new].tolist()]
+        nearest = dict(zip(keys, made[new].tolist()))  # the nearest point's height, should the outline give none
+        order = list(dict.fromkeys(keys))  # each once
+        number = {k: len(pts) + n for n, k in enumerate(order)}
+        made[new] = [number[k] for k in keys]
+        pts = np.vstack([pts, order])
+        hts = np.concatenate([hts, [heights.get(k, hts[nearest[k]]) for k in order]])
+    made = made.reshape(-1, 3)
+    c = pts[made].mean(axis=1)
+    made = made[shapely.contains_xy(corridor, c[:, 0], c[:, 1])]
+    return pts, hts, np.vstack([tri[keep & ~cross], made])
+
+
 def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame, *,
                    uv_m: float = 8.0, ground=None, classes: dict[str, tuple[str, float, bool]] | None = None,
                    fold_skirt: bool = False, extra: Footprint | None = None) -> list[Mesh]:
@@ -622,7 +748,7 @@ def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame,
     shapely.prepare(corridor)
     shapely.prepare(footprint)
     keep = shapely.contains_xy(corridor, cen[:, 0], cen[:, 1]) & ~shapely.contains_xy(footprint, cen[:, 0], cen[:, 1])
-    tri = tri[keep]
+    pts, hts, tri = _constrain(pts, hts, tri, keep, corridor, footprint)  # every outline edge a triangle's edge
     if fold_skirt:
         skirt_xy, skirt_h, skirt_tri = (_skirt_triangles(rb, len(pts)) if extra is None
                                         else _fold_skirts(rb, extra, index, len(pts)))

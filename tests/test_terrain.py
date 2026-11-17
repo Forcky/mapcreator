@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 import shapely
-from scipy.spatial import cKDTree
+from scipy.spatial import Delaunay, cKDTree
 
 from mapcreator.core import centreline as cl
 from mapcreator.core import mesh
@@ -94,3 +94,59 @@ def test_a_narrower_corridor_needs_no_outer_ring():
     assert d.max() <= 250.0 + 1.0
     tris = _triangles(meshes, frame)
     assert _uncovered(tris, region, mesh.LATTICE[-1][1]) == 0 and _plan_area(tris) <= region.area * 1.001
+
+
+def _triangulate(ring, others, footprint, corridor):
+    """The terrain's two steps over `ring` (the footprint's outline points) and `others` (lattice points): a Delaunay
+    triangulation less what lies inside the footprint, then `mesh._constrain`. Returns both."""
+    pts = np.vstack([ring, others])
+    hts = np.arange(len(pts), dtype=float)
+    tri = Delaunay(pts).simplices
+    cen = pts[tri].mean(axis=1)
+    keep = shapely.contains_xy(corridor, cen[:, 0], cen[:, 1]) & ~shapely.contains_xy(footprint, cen[:, 0], cen[:, 1])
+    return pts, tri[keep], mesh._constrain(pts, hts, tri, keep, corridor, footprint)
+
+
+def test_a_point_near_a_long_outline_edge_no_longer_leaves_a_hole_beside_it():
+    # A 10 m outline edge with a lattice point 1 m off its middle: no circle through the edge's ends is empty, so it
+    # isn't a Delaunay edge, and the triangles reaching across it to the footprint's far side were dropped.
+    ring = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 4.0], [0.0, 4.0]])
+    footprint = shapely.Polygon(ring)
+    others = np.array([[5.0, -1.0], [-20.0, -20.0], [30.0, -20.0], [30.0, 24.0], [-20.0, 24.0]])
+    corridor = shapely.box(-20.0, -20.0, 30.0, 24.0)
+    region = corridor.difference(footprint)
+    pts, plain, (pts2, hts2, tri) = _triangulate(ring, others, footprint, corridor)
+    assert _plan_area(pts[plain]) < region.area - 1.0  # the hole beside the edge
+    assert _plan_area(pts2[tri]) == pytest.approx(region.area)  # covered exactly: no hole, nothing over the footprint
+    assert len(pts2) == len(pts) and np.array_equal(hts2, np.arange(len(pts), dtype=float))  # no new points
+    edges = {frozenset(e) for t in tri.tolist() for e in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0]))}
+    assert all(frozenset((k, (k + 1) % 4)) in edges for k in range(4))  # every outline edge kept
+
+
+def test_where_two_pieces_outlines_cross_the_terrain_meets_both_at_the_crossing():
+    # Two overlapping squares: the corner of the footprint's outline where their edges cross is neither's vertex. The
+    # terrain takes it as one, at the height of both edges there (the mean), and covers the ground right up to it.
+    a = np.array([[0.0, 0.0], [6.0, 0.0], [6.0, 6.0], [0.0, 6.0]])
+    b = a + [4.0, 3.0]
+    ring = np.vstack([a, b])
+    footprint = shapely.union(shapely.Polygon(a), shapely.Polygon(b))
+    corridor = shapely.box(-20.0, -20.0, 30.0, 30.0)
+    others = np.array([[-20.0, -20.0], [30.0, -20.0], [30.0, 30.0], [-20.0, 30.0]])
+    pts, plain, (pts2, hts2, tri) = _triangulate(ring, others, footprint, corridor)
+    region = corridor.difference(footprint)
+    assert _plan_area(pts2[tri]) == pytest.approx(region.area)
+    new = pts2[len(pts):]
+    assert sorted(map(tuple, new.tolist())) == [(4.0, 6.0), (6.0, 3.0)]
+    # (6, 3) is half way along a's edge from point 1 (height 1) to point 2 (height 2), and a third of the way along b's
+    # from point 4 (height 4) to point 5 (height 5).
+    at = {tuple(p): h for p, h in zip(new.tolist(), hts2[len(pts):])}
+    assert at[(6.0, 3.0)] == pytest.approx((1.5 + 4 + 1 / 3) / 2)
+
+
+def test_terrain_no_outline_edge_crosses_is_left_as_delaunay_made_it():
+    ring = np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]])
+    footprint = shapely.Polygon(ring)
+    corridor = shapely.box(-20.0, -20.0, 24.0, 24.0)
+    others = np.array([[-20.0, -20.0], [24.0, -20.0], [24.0, 24.0], [-20.0, 24.0]])
+    pts, plain, (pts2, _, tri) = _triangulate(ring, others, footprint, corridor)
+    assert len(pts2) == len(pts) and np.array_equal(tri, plain)

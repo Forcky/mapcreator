@@ -639,6 +639,74 @@ def _grid_in(area: shapely.Geometry, step: float) -> np.ndarray:
     return pts[shapely.contains_xy(area, pts[:, 0], pts[:, 1])]
 
 
+# The ground's holes (`ground_holes`): an open edge is looked at beyond it, this far out, at a quarter, half and three
+# quarters of its length; and only within GROUND_NEAR_M of a road, which keeps the world's edge, hundreds of metres out
+# (`core.reach.TERRAIN_M`), out of it.
+GROUND_PROBE_M = 0.02
+GROUND_NEAR_M = 100.0
+
+
+def is_ground_mesh(name: str) -> bool:
+    """A physics mesh a car stands on: road, gravel or grass (not a WALL collider)."""
+    return name[:1].isdigit() and "WALL" not in name and any(k in name for k in SURFACE_KEYS)
+
+
+def ground_holes(data: dict, near_m: float = GROUND_NEAR_M) -> tuple[np.ndarray, int]:
+    """Holes in the ground a car could fall through, in plan: points just beyond an open edge of the road, gravel and
+    grass meshes that no triangle of theirs covers, within `near_m` of a road (any road mesh's vertex).
+
+    Pieces of ground meet along shared vertices, so an edge only one triangle has (an open edge, its corners matched
+    to the millimetre) is the world's edge, an edge of a piece lying over another (covered beyond it), or a hole's.
+    Returns the uncovered points (AC x/z) and how many open edges were looked at."""
+    tris = [nd["vertices"]["pos"].astype(float)[nd["indices"].reshape(-1, 3)] for nd in data["nodes"]
+            if nd["class"] == 2 and is_ground_mesh(nd["name"])]
+    roads = [nd["vertices"]["pos"][:, [0, 2]].astype(float) for nd in data["nodes"]
+             if nd["class"] == 2 and is_road_mesh(nd["name"])]
+    if not tris or not roads:
+        return np.zeros((0, 2)), 0
+    tri = np.concatenate(tris)
+    xz = tri[:, :, [0, 2]]
+    area = ((xz[:, 1, 0] - xz[:, 0, 0]) * (xz[:, 2, 1] - xz[:, 0, 1])
+            - (xz[:, 2, 0] - xz[:, 0, 0]) * (xz[:, 1, 1] - xz[:, 0, 1]))
+    flat = tri[np.abs(area) > 1e-9]  # a wall standing in the ground covers nothing in plan
+    _, vid = np.unique(np.round(flat.reshape(-1, 3) * 1000).astype(np.int64), axis=0, return_inverse=True)
+    vid = vid.reshape(-1, 3)
+    a, b = vid, np.roll(vid, -1, axis=1)  # each triangle's edges k -> k + 1
+    lo, hi = np.minimum(a, b).ravel(), np.maximum(a, b).ravel()
+    key = lo * (int(vid.max()) + 1) + hi
+    _, inv, count = np.unique(key, return_inverse=True, return_counts=True)
+    edge = np.flatnonzero(count[inv] == 1)  # as (triangle * 3 + k)
+    t, k = edge // 3, edge % 3
+    fxz = flat[:, :, [0, 2]]
+    p, q, r = fxz[t, k], fxz[t, (k + 1) % 3], fxz[t, (k + 2) % 3]
+    near = cKDTree(np.concatenate(roads)).query((p + q) / 2, distance_upper_bound=near_m, workers=cpus.count())[0]
+    p, q, r = p[near <= near_m], q[near <= near_m], r[near <= near_m]
+    if not len(p):
+        return np.zeros((0, 2)), 0
+    d = q - p
+    out = np.column_stack([-d[:, 1], d[:, 0]]) / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-12)[:, None]
+    out *= np.where(((r - p) * out).sum(axis=1) > 0, -1.0, 1.0)[:, None]  # away from the triangle
+    probes = np.concatenate([p + d * f + out * GROUND_PROBE_M for f in (0.25, 0.5, 0.75)])
+    # Only the triangles that could cover a probe.
+    cen = xz.mean(axis=1)
+    reach = np.hypot(*(xz - cen[:, None, :]).transpose(2, 0, 1)).max(axis=1)
+    gap = cKDTree(probes).query(cen, workers=cpus.count())[0]
+    cover = _Cover(tri[gap <= reach + 0.01])
+    return probes[np.isnan(cover.top(probes))], len(p)
+
+
+def ground_checks(rep: Report, label: str, data: dict) -> None:
+    """No hole in the ground near the road (`ground_holes`): a failure, since a car leaving the road there would fall
+    through the world."""
+    holes, looked = ground_holes(data)
+    where = ""
+    if len(holes):
+        spots = holes[np.unique(np.floor(holes / 5.0).astype(np.int64), axis=0, return_index=True)[1]]
+        where = f": {len(holes)} points uncovered, at x/z " + "; ".join(f"{x:.0f} {z:.0f}" for x, z in spots[:5])
+    rep.check(not len(holes), f"{label}: no hole in the ground within {GROUND_NEAR_M:.0f} m of a road ({looked} open "
+              f"edges looked beyond){where}")
+
+
 SEAM_OFFSET_M = 0.05  # the seam checks sample this far either side of where a stub's road meets another's
 # What `stub_failures` finds wrong with a stub, and how the report says it.
 STUB_FAULTS = {"not_drawn": "drawn as road along their centrelines", "seam": "joined to the road with no gap or step "
@@ -995,6 +1063,7 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
             if lay == layouts[0]:
                 roundabout_checks(rep, label, merged, roundabouts or [])
                 crossing_checks(rep, label, merged, crossing)
+                ground_checks(rep, label, merged)
     for rel in ("ATTRIBUTION.txt", "centreline.geojson", "extension/ext_config.ini"):
         rep.check((track_dir / rel).exists(), f"{rel} present")
     if (track_dir / "extension" / "ext_config.ini").exists() and kn5_materials:
