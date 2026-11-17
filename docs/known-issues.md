@@ -291,11 +291,11 @@ A ramp that leaves or joins the route under 15° is drawn as a widened taper, a 
 
 | Track | Ramps drawn | The ramps' own meshes, vertices | Mesh-stage meshes | Vertices | KN5, each layout |
 |---|---|---|---|---|---|
-| `kingston_bypass_southbound` | 2 of 2 | 10, 2,362 | 79 → 95 | 80,085 → 83,488 (+4.2%) | 10.8 → 12.0 MB |
-| `huon_highway_eastbound` | 1 of 1 | 4, 2,905 | 37 → 46 | 45,311 → 48,181 (+6.3%) | 5.4 → 6.6 MB |
-| `footbridge_brooker_highway` | 1 of 1 | 5, 3,143 | 41 → 52 | 43,077 → 46,291 (+7.5%) | 10.1 → 11.4 MB |
-| `rail_under_bass_highway` | 3 of 3 | 15, 4,393 | 78 → 99 | 75,020 → 79,381 (+5.8%) | 8.3 → 9.7 MB |
-| `rail_under_brooker_highway` | 2 of 2 | 10, 2,272 | 46 → 62 | 43,003 → 46,390 (+7.9%) | 9.1 → 10.5 MB |
+| `kingston_bypass_southbound` | 2 of 2 | 10, 2,362 | 74 → 90 | 76,691 → 80,103 (+4.4%) | 10.7 → 11.9 MB |
+| `huon_highway_eastbound` | 1 of 1 | 4, 2,905 | 45 → 54 | 48,183 → 51,053 (+6.0%) | 5.6 → 6.8 MB |
+| `footbridge_brooker_highway` | 1 of 1 | 5, 3,143 | 49 → 60 | 47,887 → 51,101 (+6.7%) | 10.3 → 11.7 MB |
+| `rail_under_bass_highway` | 3 of 3 | 15, 4,393 | 121 → 137 | 94,947 → 98,847 (+4.1%) | 9.3 → 10.7 MB |
+| `rail_under_brooker_highway` | 2 of 2 | 10, 2,272 | 64 → 80 | 48,129 → 51,510 (+7.0%) | 9.4 → 10.8 MB |
 
   - The mesh stage's growth includes each ramp's closure (about 550 vertices) and, on each track, one police car (about 560): none of these tracks had a closure before. So does the KN5's, most of it the closures' atlas (0.35 MB) and the car's texture (0.7 MB).
   - A ramp's own meshes are about 1,100-3,100 vertices: its 60 m ribbon, its throat with the paint cut in (a long gore has more pieces), and its grass.
