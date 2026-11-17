@@ -379,6 +379,40 @@ def test_the_terrain_fits_round_the_stub_with_no_gap_and_nothing_over_it(skirt):
     assert tuple(far.tolist()) in tv
 
 
+# Skewed stubs whose first row meets the road's skirt at a sharp corner. The row's skirt ends in a 5 m step, and here a
+# terrain lattice point stands close enough to that edge to keep it out of a plain Delaunay triangulation: the
+# triangles reaching across it were dropped, leaving holes of about 3 m2 (`mesh._constrain`).
+SHARP_CORNERS = [(301.6, 45.0), (301.6, -25.0), (302.4, 155.0)]
+
+
+def ground_round(junction_list, skirt=True, corridor_m=150.0):
+    c, sec, plan, rb, b = built(junction_list, dem_h=GROUND - 0.4, skirt=skirt)
+    meshes = (mesh.ribbon_meshes(rb, c["s"], FRAME, skirt=skirt, cut=b.cut, edge_break=b.edge_break) + b.meshes
+              + mesh.terrain_meshes(rb, corridor_m, flat(GROUND - 0.4), FRAME, fold_skirt=not skirt, extra=b.footprint))
+    return c, sec, plan, rb, b, meshes
+
+
+@pytest.mark.parametrize("skirt", [True, False])
+@pytest.mark.parametrize("x, deg", SHARP_CORNERS)
+def test_a_skewed_stub_at_a_sharp_corner_leaves_no_hole_in_the_terrain(x, deg, skirt):
+    c, sec, plan, rb, b, meshes = ground_round([junction(x, deg)], skirt)
+    (st,) = plan
+    paved = shapely.Polygon(st["outline"]).buffer(0)
+    # All the ground within 12 m of the stub, off the lattice's rows and columns, is covered.
+    around = validate._grid_in(paved.buffer(12.0), 0.37) + [0.0131, 0.0173]
+    assert not np.isnan(validate._Cover(triangles(meshes)).top(ac_xz(around))).any()
+    # And no terrain reaches over the stub's road.
+    on_stub = validate._grid_in(paved.buffer(-0.1), 0.61) + [0.0131, 0.0173]
+    assert np.isnan(validate._Cover(triangles(meshes, "1GRASS_T")).top(ac_xz(on_stub))).all()
+    # Every edge of the ground the road and its stub take is an edge of a terrain triangle: none reaches across it.
+    footprint = mesh._footprint(rb, b.footprint)[3]
+    terrain = np.round(triangles(meshes, "1GRASS_T")[:, :, [0, 2]].astype(np.float32), 3)
+    have = {frozenset((tuple(p), tuple(q))) for t in terrain.tolist() for p, q in zip(t, t[1:] + t[:1])}
+    seg = mesh._outline_segments(footprint)
+    ends = np.round(ac_xz(seg.reshape(-1, 2)).astype(np.float32), 3).reshape(-1, 2, 2)
+    assert all(frozenset((tuple(p), tuple(q))) in have for p, q in ends.tolist())
+
+
 def test_stub_meshes_are_named_by_surface_and_packed_by_material():
     c, sec, plan, rb, b = built([junction(300.0, 90.0, jid=0),
                                  junction(600.0, 90.0, jid=1, tags={"surface": "gravel"}),
@@ -547,6 +581,34 @@ def test_the_validator_passes_joined_stubs_and_warns_of_a_gap_or_ground_over_one
     rep = validate.Report()
     validate.stub_checks(rep, "main", kn5_nodes(lifted + extra_ground), [check])
     assert rep.failed == [] and any("no ground above" in w for w in rep.warnings)
+
+
+def test_the_validator_fails_a_hole_in_the_ground_beside_a_stub_and_passes_the_ground_whole(monkeypatch):
+    # The corridor reaches far enough that the world's edge is more than validate.GROUND_NEAR_M from any road.
+    c, sec, plan, rb, b, meshes = ground_round([junction(*SHARP_CORNERS[0])], corridor_m=260.0)
+    rep = validate.Report()
+    validate.ground_checks(rep, "main", kn5_nodes(meshes))
+    assert rep.failed == [] and any("no hole in the ground" in p for p in rep.passed)
+    # One terrain triangle taken out 4 m beside the stub: a failure, since a car leaving the road there would fall
+    # through the world.
+    (st,) = plan
+    spot = ac_xz(np.asarray(shapely.Polygon(st["outline"]).buffer(4.0).exterior.coords[0]))[0]
+    holed = []
+    for m in meshes:
+        if m.name.startswith("1GRASS_T"):
+            under = np.array([coverage(t[None], spot[None])[0] > 0 for t in m.positions.astype(float)[m.triangles]])
+            m = type(m)(m.name, m.material, m.positions, m.normals, m.uvs, m.triangles[~under])
+        holed.append(m)
+    assert sum(len(m.triangles) for m in holed) == sum(len(m.triangles) for m in meshes) - 1
+    rep = validate.Report()
+    validate.ground_checks(rep, "main", kn5_nodes(holed))
+    assert len(rep.failed) == 1 and "no hole in the ground" in rep.failed[0] and "points uncovered" in rep.failed[0]
+    # It would have caught the holes a plain Delaunay triangulation left at this sharp corner.
+    monkeypatch.setattr(mesh, "_constrain", lambda pts, hts, tri, keep, corridor, footprint: (pts, hts, tri[keep]))
+    *_, plain = ground_round([junction(*SHARP_CORNERS[0])], corridor_m=260.0)
+    rep = validate.Report()
+    validate.ground_checks(rep, "main", kn5_nodes(plain))
+    assert len(rep.failed) == 1 and "no hole in the ground" in rep.failed[0]
 
 
 @pytest.mark.parametrize("name", CLUSTERS)
