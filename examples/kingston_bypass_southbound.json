@@ -1,0 +1,10 @@
+{
+  "track_id": "kingston_bypass_southbound",
+  "waypoints": [
+    {"lon": 147.3069592, "lat": -42.972461},
+    {"lon": 147.2991553, "lat": -42.9771792},
+    {"lon": 147.2890633, "lat": -42.9862138}
+  ],
+  "width": "as_mapped",
+  "layouts": "forward"
+}

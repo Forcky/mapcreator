@@ -529,6 +529,37 @@ Coordinates are in the region's metric CRS (`crs`), as `route.npz`'s are, rounde
 - `unresolved`: crossings where the two ways' levels are the same (a missing junction node or a missing `layer`), with the same fields but no `relation`. Nothing is built on them.
 - The route's own ways are left out, so a route crossing itself on a loop isn't listed.
 
+## Bridges the elevation data doesn't hold (`core/dem_age.py`)
+
+A bare-earth DEM made before a bridge was built shows the ground from before it. Summerleas Road under the Huon Highway is the case in point: the LiDAR there is from 2011, and the interchange from 2016-2018, so the DEM shows the old crossroads and the build runs both roads at one level. Newer surveys exist but can't be used yet (`docs/data-sources.md`, "Newer LiDAR surveys"). So the profile stage finds such bridges and the build warns. Nothing is drawn differently.
+
+- **Which bridges:** every crossing in `crossings.json` whose upper road is a tagged bridge: another road's bridge over the route, or the route's own bridge over another road. Ways crossing at several points (a highway's carriageways, a loop under two decks) are one bridge, judged at the worst point.
+- **The test:**
+  - The upper road's level at the crossing is the bridge's own. For another road's bridge, that's the DEM at its two ends (the abutments, where the bare earth keeps the approach fill), interpolated to the crossing. For the route's own bridge, it's the profile there, drawn as a straight grade between the same ends.
+  - The lower road's level is the lowest DEM along it within 40 m of the crossing, so an embankment the DEM kept over a narrow underpass doesn't count.
+  - A real road over a road needs at least 4.6 m of clearance (Australian practice's lowest, on local roads) plus the deck. Where the DEM puts the two less than 4.6 m apart, it doesn't hold the bridge.
+  - The reason is "the elevation data predates this bridge" on fine ground (LiDAR in Tasmania), else "the elevation data here is too coarse to show this bridge".
+  - Not judged: a bridge whose ends lie outside the crossing's 150 m clip (over 300 m long), and one with no DEM at its ends.
+- **The warning**, one line a bridge (the same road's decks share one), up to 5 then a count, in the profile stage's summary (`dem_warnings`) and the validate report's `warnings`:
+  - "Huon Highway (trunk, A6) over the route at 0.41 km (2 decks): the elevation data predates this bridge (it puts the two roads 2.7 m apart, where a bridge needs 4.6 m; its newest LiDAR there is Mount Wellington 2011, finished January 2011; Kingborough 2022 is newer, but builds can't use it yet)."
+  - The survey names come from theLIST's LiDAR index, in Tasmania only.
+  - **One wording for every stage:** `dem_age.warning(label, coarse=, then=, detail=)`, with `dem_age.label(crossing)`. A stage that leaves something out for the same reason passes `then` ("its deck is left out").
+- **The summary** adds `bridges_checked` (bridges judged), `bridges_dem_predates`, `bridges_dem_coarse` and `dem_warnings`.
+
+### `02_profile/dem_age.json`
+
+A new field may be added at any time; a change to an existing field's meaning raises `version`.
+
+- `version`: 1. `rule`: `min_clearance_m` (4.6), `near_m` (40) and how the upper and lower levels are read.
+- `bridges`, in order along the route, each:
+  - `crossings`: the crossing ids it covers; `relation`: `over` or `under`, as in `crossings.json`; `way_id` and `route_way_id`;
+  - `along_m`: the worst point's distance along the smoothed centreline; `label`: as warnings name it;
+  - `verdict`: `holds`, `predates`, `coarse` or `unjudged` (with `why`);
+  - `upper_m`, `lower_m` and `separation_m` (metres AHD, and their difference);
+  - `surveys`: the LiDAR projects the DEM holds there, oldest first, and `newer_surveys`: those over it finished after the DEM, each `name`, `completed` (an ISO date) and `in_dem`; `surveys_known`: whether the DEM said (true in Tasmania, where theLIST's LiDAR index answers; outside it both lists are empty).
+- `not_bridges`: crossings whose upper way isn't a tagged bridge; `unmatched`: crossings not found on the centreline.
+- `warnings`: the lines above.
+
 ## Closure props (`core/closures.py`)
 
 The objects that close a side road off the stage, after Motorsport Australia's stage-rally rules (2026 Special Stage Rally standing regulations, art. 11.10 "Road Closure Standards"). The mesh stage places them on every side road's stub ("Closures on the stubs" below).

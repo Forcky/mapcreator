@@ -12,7 +12,7 @@ import shapely
 from scipy.spatial import cKDTree
 
 from mapcreator.config import Settings
-from mapcreator.core import ai_line, junctions, scenery, stubs, validate
+from mapcreator.core import ai_line, dem_age, junctions, scenery, stubs, validate
 from mapcreator.core import mesh as base_mesh
 from mapcreator.core import roundabouts as rb_core
 from mapcreator.core.layout import AI_END_SHORT_M, RoadModel, layouts_for
@@ -172,6 +172,13 @@ def junction_checks(job: Job, work: WorkDir) -> list[validate.JunctionCheck]:
     return out
 
 
+def _dem_age_warnings(work: WorkDir) -> list[str]:
+    """The profile stage's warnings for bridges the DEM doesn't hold (`core.dem_age`); none from a profile stage
+    run before it judged them."""
+    path = work.root / profile_stage.STAGE / dem_age.FILE
+    return list(work.read_json(profile_stage.STAGE, dem_age.FILE).get("warnings") or []) if path.exists() else []
+
+
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     ring_checks, ring_exits = roundabout_checks(job, work)
     rep = validate.track_folder(work.root / track_stage.STAGE / job.track_id, allow_tight_bends=job.allow_tight_bends,
@@ -181,6 +188,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     if rings:
         rep.warnings.append(f"The route passes {len(rings)} roundabout{'s' if len(rings) != 1 else ''} "
                             f"not drawn whole ({', '.join(rings)}): the route's own arc is built, as before.")
+    rep.warnings.extend(_dem_age_warnings(work))
     work.write_json(STAGE, "report.json", {"ok": rep.ok, "passed": rep.passed, "failed": rep.failed,
                                            "route_failed": rep.route_failed, "warnings": rep.warnings})
     if rep.failed:

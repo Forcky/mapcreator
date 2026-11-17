@@ -32,6 +32,26 @@ Attribution format: `"<dataset name>" from theLIST © State of Tasmania`, with t
 | Imagery (open) | AerialPhoto2020–2024 basemaps | CC BY 3.0 AU | Coverage varies by year and area |
 | Imagery (reference only) | Orthophoto, AerialPhoto2025/2026, Raster 2015–19 | CC BY-NC-ND 3.0 AU | Never textures; don't extract from them |
 | Map display | Topographic, Hillshade basemaps | CC BY 3.0 AU | Tasmap25K is NC-ND |
+| Elevation, newer surveys (checked, not used) | Land Tasmania's LiDAR projects finished after the statewide DEM | Not stated | Below |
+
+### Newer LiDAR surveys (checked 17 Nov 2026, not used)
+
+The statewide DEM holds only LiDAR finished before its release (14 Aug 2021). theLIST's LiDAR index lists 50 projects finished since, about 14,300 km² in all. Among them are Kingborough 2022 (24 Feb 2022, over Kingston), Hobart City 2023/24, the three Launceston 2024 projects, Westbury and Deloraine 2026, and King and Flinders Islands. Of Tasmania's 164 road-over-road sites, 53 lie inside one of them.
+
+They would fix the ground at a structure built after the DEM's survey, such as Summerleas Road under the Huon Highway (LiDAR from 2011, the interchange from 2016-2018). At 24 of those 53 sites the DEM puts the two roads less than 4.6 m apart. But none can be used yet:
+
+- **Where they are.** Every project's download link in the index (its `DOWNLOAD` field) is the ICSM ELVIS portal. Land Tasmania's Elevation Data page says the same: "To access the free data go to ICSM Elvis elevation.fsdf.org.au". theLIST has no elevation raster service: its REST folders hold imagery, basemaps and vector layers only. Its open data list has the 25 m DEM, contours, the LiDAR indexes and the canopy model, but no project DEMs.
+- **How ELVIS delivers them.** Geoscience Australia says you "order data for your area of interest" and ELVIS "then prepares the selected data for direct download". In practice that's an order with an email address, and a link emailed back to a zip of whole tiles, which expires. There's no documented API, and the machine index the older portal answered from is gone. A build can't place an order and wait for an email, and a worker behind a fixed list of hosts couldn't follow the link.
+- **The licence isn't stated for these DEMs anywhere primary.**
+  - theLIST's metadata record (`d9328a04-…`) gives CC BY 3.0 AU for the index, not the surveys.
+  - The project reports (for example RPS's Kingborough 2022 report, and Fugro's Hobart City 2024 report) give only the contractor's conditions of supply to the department.
+  - Land Tasmania's page says the data is free, "at no cost", but names no licence.
+  - Geoscience Australia says "most" ELVIS data is CC BY.
+  - data.gov.au's harvested records for Tasmanian LiDAR say "not specified".
+  - ELVIS shows a licence for each dataset only inside the portal.
+- **GA's 5 m LiDAR DEM** (in use on the mainland, CC BY 4.0) is no newer: it's built from surveys up to 2015. At the Huon Highway interchange it matches the statewide DEM to 0.12 m on average: the same 2011 crossroads.
+
+What would change this: Land Tasmania stating the licence of the project DEMs (CC BY 3.0 AU, like the index, would do), together with a stable public address for their tiles; or a licence plus a one-off copy, ordered by hand and mirrored, read like `tas_chm_source`. Either would be a provider ahead of the statewide DEM wherever a newer survey covers the road. Until then, builds warn wherever a bridge over or under the route doesn't fit the DEM (`core/dem_age.py`; `docs/ac-format.md`, "Bridges the elevation data doesn't hold").
 
 ## Australia-wide
 

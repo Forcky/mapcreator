@@ -20,6 +20,7 @@ from pathlib import Path
 
 import httpx
 import shapely
+from shapely.errors import GEOSException
 
 from mapcreator.providers import cache as cache_io
 
@@ -73,21 +74,43 @@ def projects(bbox: tuple[float, float, float, float], cache_dir: Path, user_agen
     return features
 
 
+def _ring(r) -> shapely.Geometry:
+    # Generalised by the server (`maxAllowableOffset`), a ring can cross itself: repair it before any union.
+    p = shapely.Polygon(r)
+    return p if p.is_valid else shapely.make_valid(p)
+
+
+def _shape(feature: dict) -> shapely.Geometry | None:
+    """A project's footprint from its Esri rings (outer rings clockwise, holes counter-clockwise), or None."""
+    rings = (feature.get("geometry") or {}).get("rings") or []
+    outer = [_ring(r) for r in rings if len(r) >= 4 and not shapely.LinearRing(r).is_ccw]
+    holes = [_ring(r) for r in rings if len(r) >= 4 and shapely.LinearRing(r).is_ccw]
+    if not outer:
+        return None
+    try:
+        shape = shapely.union_all(outer).buffer(0)  # buffer(0) keeps the areas of a repaired ring
+        return shape.difference(shapely.union_all(holes).buffer(0)) if holes else shape
+    except GEOSException:  # still beyond repair: leave this project out rather than fail the build
+        return None
+
+
+def completed(feature: dict) -> dt.date | None:
+    """When a project was finished (the index's COMPLETED, UTC), or None if it doesn't say."""
+    done = (feature.get("attributes") or {}).get("COMPLETED")
+    return None if done is None else dt.datetime.fromtimestamp(done / 1000, dt.UTC).date()
+
+
+def footprints(features: list[dict]) -> list[tuple[str, dt.date, shapely.Geometry]]:
+    """Each completed project's name, completion date and footprint, oldest first."""
+    out = []
+    for f in features:
+        done, shape = completed(f), _shape(f)
+        if done is not None and shape is not None and not shape.is_empty:
+            out.append((str((f.get("attributes") or {}).get("PROJ_NAME") or "").strip(), done, shape))
+    return sorted(out, key=lambda p: (p[1], p[0]))
+
+
 def coverage(features: list[dict], before: dt.date) -> shapely.Geometry:
     """The area of the projects completed before `before`: the LiDAR a DEM made then can hold."""
-    cutoff = dt.datetime.combine(before, dt.time(), dt.UTC).timestamp() * 1000
-    polys = []
-    for f in features:
-        done = (f.get("attributes") or {}).get("COMPLETED")
-        rings = (f.get("geometry") or {}).get("rings") or []
-        if done is None or done >= cutoff or not rings:
-            continue
-        # Esri rings: outer rings clockwise, holes counter-clockwise.
-        outer = [shapely.Polygon(r) for r in rings if len(r) >= 4 and not shapely.LinearRing(r).is_ccw]
-        holes = [shapely.Polygon(r) for r in rings if len(r) >= 4 and shapely.LinearRing(r).is_ccw]
-        if outer:
-            shape = shapely.union_all(outer).buffer(0)
-            if holes:
-                shape = shape.difference(shapely.union_all(holes))
-            polys.append(shape)
+    polys = [shape for _, done, shape in footprints(features) if done < before]
     return shapely.union_all(polys) if polys else shapely.GeometryCollection()
