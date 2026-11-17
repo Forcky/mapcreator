@@ -51,6 +51,7 @@ out any that fail (`settle`).
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass, field
 
@@ -1150,10 +1151,12 @@ def footprint(base: mesh.Footprint | None, built: Built, rows: int) -> mesh.Foot
         base = mesh.Footprint({"L": np.zeros(rows - 1, bool), "R": np.zeros(rows - 1, bool)}, [], [], [])
     n = len(base.ribbons)
     cut = {key: base.cut[key] | built.cut[key] for key in "LR"}
-    return mesh.Footprint(cut, base.ribbons + built.ribbons, base.patches + built.patches, base.edges + built.edges,
-                          ribbon_cuts=(base.ribbon_cuts or [None] * n) + built.ribbon_cuts,
-                          open_last=(base.open_last or [False] * n) + [False] * len(built.ribbons),
-                          interior=(base.interior or set()) | built.interior)
+    # Every other field (an open deck's spans, `core.bridges`) carries over as it is.
+    return dataclasses.replace(base, cut=cut, ribbons=list(base.ribbons) + built.ribbons,
+                               patches=list(base.patches) + built.patches, edges=list(base.edges) + built.edges,
+                               ribbon_cuts=list(base.ribbon_cuts or [None] * n) + built.ribbon_cuts,
+                               open_last=list(base.open_last or [False] * n) + [False] * len(built.ribbons),
+                               interior=(base.interior or set()) | built.interior)
 
 
 def road_cut(cut: dict | None, edge_break: dict | None, built: Built | None):
