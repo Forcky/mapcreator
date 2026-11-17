@@ -1,4 +1,5 @@
-"""Drivable OSM roads in a bounding box: from the local index when one is configured, else Overpass.
+"""Drivable OSM roads in a bounding box (and the railways and paths that cross them): from the local index when one
+is configured, else Overpass.
 
 Production sets `osm_index` to a file built by `index.py` from a Geofabrik
 extract. Without one, development falls back to an Overpass server, whose
@@ -31,6 +32,22 @@ def for_bbox(bbox: tuple[float, float, float, float], settings: Settings, *,
         return index.query(settings.osm_index, bbox)
     west, south, east, north = bbox
     return (fetch or overpass.fetch)(overpass.query_for_bbox(south, west, north, east), settings)
+
+
+def railways_and_paths_for_bbox(bbox: tuple[float, float, float, float], settings: Settings, *,
+                                fetch: Callable[[str, Settings], dict] | None = None) -> dict:
+    """Overpass-style JSON for the railways and paths crossing `bbox` (west, south, east, north, WGS84), from the
+    same source as `for_bbox`. They are never routed on: they're what may cross the route on a bridge or under one.
+
+    Overpass's answer is narrowed to what the index keeps (`index.as_indexed`): the same ways, tags and nodes, so a
+    build finds the same crossings from either source. An index built before railways and paths were kept raises
+    `index.IndexUnavailable` (one of `INDEX_ERRORS`), and the caller goes on without them.
+    """
+    if settings.osm_index:
+        return index.railways_and_paths(settings.osm_index, bbox)
+    west, south, east, north = bbox
+    data = (fetch or overpass.fetch)(overpass.railways_and_paths_query_for_bbox(south, west, north, east), settings)
+    return index.as_indexed(data, ("railway", "path"))
 
 
 def selection(settings: Settings) -> dict[str, str]:

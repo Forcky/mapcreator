@@ -1,7 +1,9 @@
 """The local OSM index: built from a small hand-written extract, queried like Overpass, routed on."""
 
 import json
+import shutil
 import sqlite3
+import xml.etree.ElementTree as ET
 from contextlib import closing
 from dataclasses import replace
 
@@ -15,7 +17,7 @@ from mapcreator.providers.base import LONLAT_CRS
 from mapcreator.job import Job, Waypoint
 from mapcreator.pipeline import route_stage
 from mapcreator.pipeline.workdir import WorkDir
-from mapcreator.providers.osm import graph, index, overpass
+from mapcreator.providers.osm import graph, index, overpass, roads
 from mapcreator.service.routing import DevRouter, RouterUnavailable
 
 EPSG = 28355  # MGA zone 55, the fixture is near Hobart
@@ -25,6 +27,10 @@ EPSG = 28355  # MGA zone 55, the fixture is near Hobart
 # a house between the roads, a shed far away, an unclosed "building" and a route relation.
 # Power: an 11 kV minor line drawn with vertices 400 m apart, a 220/110 kV double-circuit line, an
 # underground line (indexed, never built) and a power=cable way (not indexed).
+# Railways and paths (layout 3): a footbridge over Main Road (no shared node), a railway crossing Back Street at grade
+# (sharing node 5), a disused railway on a bridge over Main Road, a rail trail (a cycleway with railway=abandoned: a
+# path), a platform and a tram line (not indexed), and far away a former station drawn as a closed building with
+# railway=disused (a building) and a street with railway=abandoned (a road).
 FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
 <osm version="0.6" generator="hand-written test fixture">
   <node id="1" lat="-42.8000000" lon="147.3000000"/>
@@ -59,6 +65,20 @@ FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
   <node id="64" lat="-42.8030000" lon="147.3045000"><tag k="power" v="tower"/></node>
   <node id="65" lat="-42.8040000" lon="147.3000000"/>
   <node id="66" lat="-42.8040000" lon="147.3050000"/>
+  <node id="70" lat="-42.7995000" lon="147.3070000"/>
+  <node id="71" lat="-42.8005000" lon="147.3070000"/>
+  <node id="72" lat="-42.7970000" lon="147.3040000"/>
+  <node id="73" lat="-42.7990000" lon="147.3062000"/>
+  <node id="74" lat="-42.7990000" lon="147.3080000"/>
+  <node id="75" lat="-42.8010000" lon="147.3080000"/>
+  <node id="76" lat="-42.8020000" lon="147.3000000"/>
+  <node id="77" lat="-42.8020000" lon="147.3100000"/>
+  <node id="80" lat="-42.7995000" lon="147.4020000"/>
+  <node id="81" lat="-42.7995000" lon="147.4025000"/>
+  <node id="82" lat="-42.7992000" lon="147.4025000"/>
+  <node id="83" lat="-42.7992000" lon="147.4020000"/>
+  <node id="84" lat="-42.8050000" lon="147.4000000"/>
+  <node id="85" lat="-42.8050000" lon="147.4100000"/>
   <way id="10">
     <nd ref="3"/><nd ref="2"/><nd ref="1"/>
     <tag k="highway" v="secondary"/><tag k="oneway" v="yes"/><tag k="name" v="Main Road"/>
@@ -115,6 +135,41 @@ FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
     <nd ref="65"/><nd ref="66"/>
     <tag k="power" v="cable"/>
   </way>
+  <way id="50">
+    <nd ref="70"/><nd ref="71"/>
+    <tag k="highway" v="footway"/><tag k="bridge" v="yes"/><tag k="layer" v="1"/><tag k="name" v="Example Footbridge"/>
+    <tag k="surface" v="concrete"/><tag k="lit" v="yes"/><tag k="wheelchair" v="yes"/>
+  </way>
+  <way id="51">
+    <nd ref="72"/><nd ref="5"/><nd ref="73"/>
+    <tag k="railway" v="rail"/><tag k="usage" v="main"/><tag k="gauge" v="1067"/><tag k="name" v="Western Line"/>
+    <tag k="operator" v="Someone"/>
+  </way>
+  <way id="52">
+    <nd ref="74"/><nd ref="75"/>
+    <tag k="railway" v="disused"/><tag k="bridge" v="yes"/><tag k="layer" v="1"/><tag k="source" v="survey"/>
+  </way>
+  <way id="53">
+    <nd ref="76"/><nd ref="77"/>
+    <tag k="highway" v="cycleway"/><tag k="railway" v="abandoned"/><tag k="name" v="Rail Trail"/>
+    <tag k="bicycle" v="designated"/>
+  </way>
+  <way id="54">
+    <nd ref="72"/><nd ref="73"/>
+    <tag k="railway" v="platform"/>
+  </way>
+  <way id="55">
+    <nd ref="80"/><nd ref="81"/><nd ref="82"/><nd ref="83"/><nd ref="80"/>
+    <tag k="building" v="yes"/><tag k="railway" v="disused"/><tag k="name" v="Former Station"/>
+  </way>
+  <way id="56">
+    <nd ref="84"/><nd ref="85"/>
+    <tag k="highway" v="residential"/><tag k="railway" v="abandoned"/><tag k="name" v="Old Rail Street"/>
+  </way>
+  <way id="57">
+    <nd ref="76"/><nd ref="77"/>
+    <tag k="railway" v="tram"/>
+  </way>
   <relation id="100">
     <member type="way" ref="10" role=""/><member type="way" ref="11" role=""/>
     <tag k="type" v="route"/><tag k="route" v="road"/>
@@ -145,14 +200,19 @@ def _ways_table(path) -> list[tuple]:
         return con.execute("SELECT id, kind, tags_json, coords, node_ids FROM ways ORDER BY id").fetchall()
 
 
+COUNTS = {"roads": 6, "buildings": 3, "power_lines": 3, "railways": 2, "paths": 3, "skipped": 5}
+
+
 def test_build_keeps_drivable_roads_and_closed_buildings(extract, tmp_path):
     counts = index.build_index(extract, tmp_path / "out.sqlite", reader="xml")
-    # Skipped: the footway, the service road, the unclosed building and the power=cable way.
-    assert counts == {"roads": 5, "buildings": 2, "power_lines": 3, "skipped": 4}
+    # Skipped: the service road, the unclosed building, the power=cable way, the platform and the tram line.
+    assert counts == COUNTS
     rows = {r[0]: r for r in _ways_table(tmp_path / "out.sqlite")}
-    assert {i for i, r in rows.items() if r[1] == "road"} == {10, 11, 12, 14, 15}
-    assert {i for i, r in rows.items() if r[1] == "building"} == {30, 31}
+    assert {i for i, r in rows.items() if r[1] == "road"} == {10, 11, 12, 14, 15, 56}
+    assert {i for i, r in rows.items() if r[1] == "building"} == {30, 31, 55}
     assert {i for i, r in rows.items() if r[1] == "power"} == {40, 41, 42}
+    assert {i for i, r in rows.items() if r[1] == "railway"} == {51, 52}
+    assert {i for i, r in rows.items() if r[1] == "path"} == {13, 50, 53}
     # Power lines keep what their model needs, not who runs them, and which vertices are mapped supports.
     assert json.loads(rows[40][2]) == {"power": "minor_line", "voltage": "11000", "mapcreator:supports": "-P-"}
     assert json.loads(rows[41][2])["mapcreator:supports"] == "TT"
@@ -163,7 +223,8 @@ def test_build_keeps_drivable_roads_and_closed_buildings(extract, tmp_path):
     assert json.loads(rows[30][2]) == {"building": "house", "building:levels": "2"}
     assert rows[30][4] is None
     meta = index.metadata(tmp_path / "out.sqlite")
-    assert meta["source"] == "fixture.osm" and meta["roads"] == "5" and meta["schema"] == index.SCHEMA_VERSION
+    assert meta["source"] == "fixture.osm" and meta["roads"] == "6" and meta["schema"] == index.SCHEMA_VERSION == "3"
+    assert meta["railways"] == "2" and meta["paths"] == "3" and meta["railway_classes"] == overpass.RAILWAYS
     assert not (tmp_path / "out.sqlite.partial").exists()
 
 
@@ -252,8 +313,7 @@ def test_pyosmium_builds_the_same_index_from_xml_and_pbf(extract, osm_index, tmp
     expected = _ways_table(osm_index)
     for source in (extract, pbf):
         out = tmp_path / (source.name + ".sqlite")
-        assert index.build_index(source, out, reader="osmium") == {"roads": 5, "buildings": 2, "power_lines": 3,
-                                                                  "skipped": 4}
+        assert index.build_index(source, out, reader="osmium") == COUNTS
         assert _ways_table(out) == expected
         assert index.metadata(out)["reader"].startswith("pyosmium ")
     assert index.metadata(tmp_path / "fixture.osm.pbf.sqlite")["osm_timestamp"] == "2026-11-01T20:21:02Z"
@@ -262,10 +322,11 @@ def test_pyosmium_builds_the_same_index_from_xml_and_pbf(extract, osm_index, tmp
 def test_command_line_builds_and_queries(extract, tmp_path, capsys):
     out = tmp_path / "cli.sqlite"
     assert index.main(["build", str(extract), str(out), "--reader", "xml"]) == 0
-    assert "indexed 5 roads, 2 buildings and 3 power lines" in capsys.readouterr().out
+    assert "indexed 6 roads, 2 railways, 3 paths, 3 buildings and 3 power lines" in capsys.readouterr().out
     assert index.main(["query", str(out), *map(str, QUERY)]) == 0
     text = capsys.readouterr().out
     assert "roads: 3 ways, 7 nodes" in text and "buildings: 1 in EPSG:28355" in text
+    assert "railways and paths: 2 railways, 3 paths" in text
     assert index.main(["query", str(out), *map(str, QUERY), "--json"]) == 0
     assert len(json.loads(capsys.readouterr().out)["elements"]) == 10
 
@@ -371,3 +432,94 @@ def test_an_index_from_before_power_lines_still_routes_but_has_no_power(osm_inde
     assert [e["id"] for e in index.query(old, QUERY)["elements"] if e["type"] == "way"] == [10, 11, 12]
     with pytest.raises(index.IndexUnavailable, match="before power lines"):
         index.power_lines(old, TO_XY.transform_bounds(*QUERY, densify_pts=21), EPSG)
+    with pytest.raises(index.IndexUnavailable, match="before railways and paths"):
+        index.railways_and_paths(old, QUERY)
+
+
+# ----- railways and paths (layout 3): what crosses the route on a bridge, or under the route's bridge -----
+
+def test_railways_and_paths_come_back_as_overpass_json_with_their_node_ids(osm_index):
+    data = index.railways_and_paths(osm_index, QUERY)
+    ways = {e["id"]: e for e in data["elements"] if e["type"] == "way"}
+    assert list(ways) == [13, 50, 51, 52, 53]  # in way id order; not the platform or the tram line
+    # What they are, their names and whether they're on a bridge; not who runs them or who may use them.
+    assert ways[50]["tags"] == {"highway": "footway", "bridge": "yes", "layer": "1", "name": "Example Footbridge",
+                                "surface": "concrete"}
+    assert ways[51]["tags"] == {"railway": "rail", "usage": "main", "gauge": "1067", "name": "Western Line"}
+    assert ways[52]["tags"] == {"railway": "disused", "bridge": "yes", "layer": "1"}
+    assert ways[53]["tags"] == {"highway": "cycleway", "railway": "abandoned", "name": "Rail Trail"}
+    # The level crossing shares Back Street's node; the footbridge over Main Road shares none.
+    assert ways[51]["nodes"] == [72, 5, 73] and ways[50]["nodes"] == [70, 71]
+    nodes = {e["id"]: e for e in data["elements"] if e["type"] == "node"}
+    assert set(nodes) == {2, 5, 8, 70, 71, 72, 73, 74, 75, 76, 77}
+    assert nodes[5] == {"type": "node", "id": 5, "lat": -42.798, "lon": 147.305}
+    # The roads stay apart, so the router is never given a path or a railway.
+    assert [e["id"] for e in index.query(osm_index, QUERY)["elements"] if e["type"] == "way"] == [10, 11, 12]
+    assert index.railways_and_paths(osm_index, (147.5, -42.9, 147.6, -42.8))["elements"] == []
+
+
+def _overpass_answer(box, keep) -> dict:
+    """What an Overpass server answers for the fixture's ways that `keep(tags)` and that cross `box`: every tag, and
+    every node (tagged nodes with their tags)."""
+    root = ET.fromstring(FIXTURE)
+    nodes = {int(n.get("id")): n for n in root.iter("node")}
+    ways = []
+    for w in root.iter("way"):
+        tags = {t.get("k"): t.get("v") for t in w.iter("tag")}
+        refs = [int(nd.get("ref")) for nd in w.iter("nd")]
+        points = [(float(nodes[r].get("lon")), float(nodes[r].get("lat"))) for r in refs if r in nodes]
+        if keep(tags) and len(points) > 1 and shapely.intersects(shapely.LineString(points), shapely.box(*box)):
+            ways.append({"type": "way", "id": int(w.get("id")), "nodes": refs, "tags": tags})
+    out = []
+    for r in sorted({r for w in ways for r in w["nodes"] if r in nodes}):
+        node = {"type": "node", "id": r, "lat": float(nodes[r].get("lat")), "lon": float(nodes[r].get("lon"))}
+        tags = {t.get("k"): t.get("v") for t in nodes[r].iter("tag")}
+        out.append(node | ({"tags": tags} if tags else {}))
+    return {"version": 0.6, "generator": "Overpass API (test)", "elements": out + ways}
+
+
+def test_overpass_gives_the_same_railways_and_paths_as_the_index(osm_index, tmp_path):
+    box = (147.28, -42.82, 147.42, -42.78)  # the whole fixture, with the far street that has railway=abandoned
+    answer = _overpass_answer(box, lambda t: t.get("railway") in overpass.RAILWAYS.split("|")
+                              or t.get("highway") in overpass.PATHS.split("|"))
+    assert 56 in {e["id"] for e in answer["elements"]}  # Overpass's tag filter takes the street
+    queries = []
+
+    def fake_overpass(query, settings):
+        queries.append(query)
+        return answer
+
+    from_overpass = roads.railways_and_paths_for_bbox(box, _settings(tmp_path), fetch=fake_overpass)
+    from_index = index.railways_and_paths(osm_index, box)
+    assert from_overpass["elements"] == from_index["elements"]
+    # One query for both, south, west, north, east, as Overpass takes it.
+    assert len(queries) == 1 and overpass.RAILWAYS_FILTER in queries[0] and overpass.PATHS_FILTER in queries[0]
+    assert queries[0].count("(-42.820000,147.280000,-42.780000,147.420000)") == 2
+    # With an index configured, Overpass isn't asked.
+    assert roads.railways_and_paths_for_bbox(box, _settings(tmp_path, osm_index), fetch=_no_overpass) == from_index
+
+
+def test_the_roads_query_to_overpass_is_unchanged():
+    # Its text keys the development cache, so a change would fetch every cached box again.
+    assert overpass.query_for_bbox(-42.82, 147.28, -42.78, 147.33) == (
+        f"[out:json][timeout:180];\n{overpass.ROADS_FILTER}(-42.820000,147.280000,-42.780000,147.330000);\n"
+        "(._;>;);\nout body;\n")
+
+
+def test_an_index_from_before_railways_and_paths_still_serves_the_rest(osm_index, tmp_path, capsys):
+    old = tmp_path / "layout2.sqlite"
+    shutil.copyfile(osm_index, old)
+    with closing(sqlite3.connect(old)) as con:  # as a layout 2 build leaves it: no railway or path rows or tables
+        con.execute("UPDATE meta SET value = '2' WHERE key = 'schema'")
+        con.execute("DELETE FROM ways WHERE kind IN ('railway', 'path')")
+        con.commit()
+        con.executescript("DROP TABLE railway_rtree; DROP TABLE path_rtree;")
+    assert [e["id"] for e in index.query(old, QUERY)["elements"] if e["type"] == "way"] == [10, 11, 12]
+    assert len(index.buildings(old, TO_XY.transform_bounds(*QUERY), EPSG)) == 1
+    assert len(index.power_lines(old, TO_XY.transform_bounds(*QUERY, densify_pts=21), EPSG)) == 2
+    with pytest.raises(index.IndexUnavailable, match="before railways and paths were indexed; rebuild it"):
+        index.railways_and_paths(old, QUERY)
+    with pytest.raises(roads.INDEX_ERRORS):
+        roads.railways_and_paths_for_bbox(QUERY, _settings(tmp_path, old), fetch=_no_overpass)
+    assert index.main(["query", str(old), *map(str, QUERY)]) == 0
+    assert "railways and paths: not in this index" in capsys.readouterr().out
