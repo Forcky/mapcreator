@@ -44,6 +44,10 @@ GRID_CLEARANCE_M = 3.5  # grid spots closer than this would put two cars in one 
 TRUNK_SPAWN_CLEARANCE_M = 3.0  # a tree or pole collider nearer a spawn than this could be inside or touching the car
 SCENERY_COLLIDERS = (("tree", TRUNK_MESH), ("power", POWER_COLLIDER),  # invisible walls the scenery stage adds
                      ("pier", PIER_MESH), ("abutment", ABUTMENT_MESH))  # and a bridge over the route's (mesh stage)
+# Structures over the route, visual only (`core.rail_and_paths`): their decks clear the road under them by this.
+OVERHEAD_DECKS = ("FOOTBRIDGE_", "RAILBRIDGE_")
+OVERHEAD_CLEARANCE_M = 4.6
+OVERHEAD_TOLERANCE_M = 0.01  # float32 vertices
 SPAWN_HEIGHT = (0.15, 0.5)
 AI_HEIGHT = (0.3, 0.5)
 # A gate must reach past both road edges; any span is fine as long as it does. This floor only catches
@@ -524,6 +528,7 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
             gap = float(cKDTree(xz).query(spawns, workers=cpus.count())[0].min())
             rep.check(gap >= TRUNK_SPAWN_CLEARANCE_M,
                       f"{label}: {what} colliders at least {TRUNK_SPAWN_CLEARANCE_M:.0f} m from every spawn ({gap:.1f} m)")
+    overhead_checks(rep, label, data, road)
     for gate in ("AC_AB_START", "AC_AB_FINISH"):
         left, right = dummies.get(f"{gate}_L"), dummies.get(f"{gate}_R")
         if left is None or right is None:
@@ -566,6 +571,23 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
         ai_dir = line.pos[hi] - line.pos[lo]
         ai_dir /= max(float(np.linalg.norm(ai_dir)), 1e-9)
         rep.check(float(fwd @ ai_dir) > 0.8, f"{label}: {name} faces the AI line's direction")
+
+
+def overhead_checks(rep: Report, label: str, data: dict, road: "RoadSurface") -> None:
+    """Every deck over the road (footbridges and rail bridges, `core.rail_and_paths`) clears it by
+    OVERHEAD_CLEARANCE_M: each deck vertex over the road, its height above the road there."""
+    decks = [n for n in data["nodes"] if n["class"] == 2 and n["name"].startswith(OVERHEAD_DECKS)
+             and "_DECK" in n["name"]]
+    if not decks:
+        return
+    pos = np.unique(np.concatenate([m["vertices"]["pos"] for m in decks]).astype(float).round(3), axis=0)
+    over = pos[road.covers(pos[:, [0, 2]])]
+    gaps = [p[1] - h for p in over if (h := road.height(p[0], p[2])) is not None]
+    if not gaps:
+        rep.passed.append(f"{label}: {len(decks)} deck meshes over the route, none over the road itself")
+        return
+    rep.check(min(gaps) >= OVERHEAD_CLEARANCE_M - OVERHEAD_TOLERANCE_M,
+              f"{label}: decks over the road clear it by at least {OVERHEAD_CLEARANCE_M} m ({min(gaps):.2f} m)")
 
 
 class _Cover:

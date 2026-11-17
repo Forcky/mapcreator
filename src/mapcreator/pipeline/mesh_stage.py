@@ -25,7 +25,7 @@ import numpy as np
 from mapcreator import cpus
 from mapcreator.config import Settings
 from mapcreator.core import furniture, grass, junctions, mesh, police_car, reach, roadside, stub_closures, stubs
-from mapcreator.core import crossing_roads
+from mapcreator.core import crossing_roads, rail_and_paths
 from mapcreator.core import roundabouts as rb_core
 from mapcreator.core import water as water_core
 from mapcreator.core.layout import layouts_for
@@ -33,6 +33,7 @@ from mapcreator.core.scene import LocalFrame, Material, Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import profile_stage, route_stage, section_stage
 from mapcreator.pipeline.workdir import WorkDir
+from mapcreator.providers.base import OSM_LINES
 from mapcreator.regions import FINE_DEM_M, job_region
 
 STAGE = "04_mesh"
@@ -50,6 +51,8 @@ STUB_REBUILDS = 3
 ROUNDABOUTS = "roundabouts.json"
 # The roads crossing the route as built: the section stage's plan, each road's pieces drawn and those left out.
 CROSSING_ROADS = "crossing_roads.json"
+# The railways and paths crossing the route, each drawn or left out and why (`core.rail_and_paths`).
+RAIL_AND_PATHS = "rail_and_paths.json"
 
 log = logging.getLogger(__name__)
 
@@ -192,6 +195,28 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(),
     return rb, built, water, meshes
 
 
+def _rail_and_paths(work: WorkDir, c, sec, frame: LocalFrame, dem, meshes, rb, built) -> rail_and_paths.Built:
+    """Footbridges and rail bridges over the route, and paths and railways under its own bridges
+    (`core.rail_and_paths`), on the ground and road just built; and `RAIL_AND_PATHS`, what was drawn or left out."""
+    (work.stage(STAGE) / RAIL_AND_PATHS).unlink(missing_ok=True)
+    found = route_stage.crossing_lines(work)
+    if not found:
+        return rail_and_paths.Built()
+    areas = []
+    for cr in found:
+        st = cr.get("structure") or {}
+        pts = np.vstack([np.asarray(p, float).reshape(-1, 2) for p in
+                         [cr["line"], st.get("deck") or [], *(st.get("approaches") or [])] if len(p)])
+        lo, hi = pts.min(axis=0) - 10.0, pts.max(axis=0) + 10.0
+        areas.append((float(lo[0]), float(lo[1]), float(hi[0]), float(hi[1])))
+    ground = stub_closures.TopSurface([m for m in meshes if m.name.startswith("1GRASS")], frame, areas)
+    road = stub_closures.TopSurface([m for m in meshes if m.name.startswith(("1ROAD", "1GRAVEL"))], frame, areas)
+    footprint = mesh.terrain_region(rb, 1.0, built.footprint if built is not None else None)[1]
+    out = rail_and_paths.build(found, c, sec, frame, dem.sample, ground, road, footprint)
+    work.write_json(STAGE, RAIL_AND_PATHS, {"version": rail_and_paths.FORMAT_VERSION, "structures": out.records})
+    return out
+
+
 def frame_for(xy: np.ndarray, z: np.ndarray) -> LocalFrame:
     lo, hi = xy.min(axis=0), xy.max(axis=0)
     return LocalFrame(e0=float(round((lo[0] + hi[0]) / 2)), n0=float(round((lo[1] + hi[1]) / 2)),
@@ -324,6 +349,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         textures[furniture.MATERIAL] = str(out / "furniture.png")
         atlas.image.save(textures[furniture.MATERIAL])
     meshes += roadside.end_walls(c["s"], c["xy"], c["z"], c["heading"], dem.sample, frame)
+    # Railways and paths crossing the route (`core.rail_and_paths`), on the ground and road built above.
+    lines_built = _rail_and_paths(work, c, sec, frame, dem, meshes, rb, built)
+    meshes += lines_built.meshes
     # The closures placed and checked above, last, as before.
     (out / CLOSURES).unlink(missing_ok=True)
     if closed is not None:
@@ -365,6 +393,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             # The terrain's materials: `terrain` alone, or with a vegetation map those of its ground classes.
             **{c.material: Material(c.material, texture=c.texture) for c in grass.CLASSES if c.material in used},
             "rail": Material("rail", texture="steel"),
+            # The bridges' concrete and ballast, and the paths' surfaces (`core.rail_and_paths`).
+            **{name: Material(name, texture=rail_and_paths.TEXTURES[name])
+               for name in sorted(lines_built.materials - {"rail"})},
             **({"water": Material("water", texture="water")} if water else {}),
             # The furniture's materials (plain, reflectors, the boards' faces) all draw on the one atlas.
             **{name: Material(name, furniture.MATERIAL) for name in sorted({m.material for m in furn})},
@@ -380,7 +411,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     if gmap is not None:
         ground_summary |= {"areas": len(gmap), **_ground_shares(meshes, frame, c["xy"])}
     work.write_json(STAGE, "grass.json", ground_summary)
-    work.write_json(STAGE, "attributions.json", [asdict(a) for a in (gmap.attributions if gmap is not None else ())])
+    credits = list(gmap.attributions if gmap is not None else ())
+    if any(r["drawn"] for r in lines_built.records):
+        credits.append(OSM_LINES)  # footbridges, rail bridges and the lines under the route's bridges
+    work.write_json(STAGE, "attributions.json", [asdict(a) for a in credits])
     if settings.preview_obj:
         scene.write_obj(out / "preview.obj")
 
@@ -401,4 +435,5 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "water": water_summary,
         "ground": ground_summary,
     } | ({"junctions": junction_stats} if junction_stats is not None else {}) | (
-        {"crossing_roads": cross_stats} if cross_stats is not None else {})
+        {"crossing_roads": cross_stats} if cross_stats is not None else {}) | (
+        {"rail_and_paths": lines_built.stats} if lines_built.records else {})

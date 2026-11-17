@@ -371,10 +371,12 @@ def test_route_stage_asks_overpass_without_an_index(osm_index, tmp_path, monkeyp
     job = Job(track_id="overpass_road", waypoints=WESTBOUND)
     result = route_stage.run(job, _settings(tmp_path), WorkDir(tmp_path / "work"))
     assert result["ways"] == 1
-    # Overpass takes south, west, north, east.
-    assert len(queries) == 1 and "(-42.820000,147.280500,-42.780000,147.329500)" in queries[0]
+    # Overpass takes south, west, north, east. Then the railways and paths round the route (stage 2c).
+    assert len(queries) == 2 and "(-42.820000,147.280500,-42.780000,147.329500)" in queries[0]
+    assert overpass.RAILWAYS_FILTER in queries[1] and overpass.PATHS_FILTER in queries[1]
     work = WorkDir(tmp_path / "work")
-    assert route_stage.osm_selection(work, _settings(tmp_path)) == {"overpass_filter": overpass.ROADS_FILTER}
+    assert route_stage.osm_selection(work, _settings(tmp_path)) == {"overpass_filter": overpass.ROADS_FILTER,
+                                                                     "overpass_lines_filter": roads.LINES_SELECTION}
     # A work folder routed before the selection was recorded gets the current settings' answer.
     (tmp_path / "work" / route_stage.STAGE / route_stage.OSM_SELECTION).unlink()
     assert route_stage.osm_selection(work, _settings(tmp_path, osm_index))["index"] == "fixture.osm"

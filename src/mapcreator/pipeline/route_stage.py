@@ -8,12 +8,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import httpx
 import numpy as np
 
 from mapcreator.config import Settings
 from mapcreator.core import centreline
 from mapcreator.core import crossings as crossings_core
 from mapcreator.core import junctions as junctions_core
+from mapcreator.core import rail_and_paths
 from mapcreator.core.centreline import cumulative
 from mapcreator.job import Job, Junctions
 from mapcreator.pipeline.workdir import WorkDir
@@ -28,6 +30,8 @@ OSM_SELECTION = "osm_selection.json"
 JUNCTIONS = "junctions.json"
 # The roads crossing over or under the route without meeting it (`core.crossings`; the format is in docs/ac-format.md).
 CROSSINGS = "crossings.json"
+# The railways and paths crossing over or under the route (`core.rail_and_paths`; the format is in docs/ac-format.md).
+CROSSING_LINES = "crossing_lines.json"
 
 
 class RouteTooLong(osm_graph.RouteError):
@@ -227,6 +231,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     summary = {"length_m": round(length, 1), "retraced_m": round(route.retraced_m, 1), "ways": len(route_runs),
                "region": region.key, "sharp_turns": sharp}
     summary |= _write_crossings(g, route, region, work)
+    summary |= _write_crossing_lines(data, g, route, region, settings, work)
     if job.junctions == Junctions.CLOSED:
         found = junctions_core.find(g, route.xy, to_lonlat=region.to_lonlat())
         work.write_json(STAGE, JUNCTIONS, {"version": found.pop("version"), "crs": f"EPSG:{region.epsg}", **found})
@@ -243,6 +248,76 @@ def _write_crossings(g: osm_graph.RoadGraph, route: osm_graph.Route, region, wor
     return {"crossings": {"over": sum(c["relation"] == "over" for c in found["crossings"]),
                           "under": sum(c["relation"] == "under" for c in found["crossings"]),
                           "unresolved": len(found["unresolved"])}}
+
+
+LINES_MARGIN_DEG = 0.003  # railways and paths are fetched in the route's box with this much more round it
+
+
+def _write_crossing_lines(data: dict, g: osm_graph.RoadGraph, route: osm_graph.Route, region, settings: Settings,
+                          work: WorkDir) -> dict:
+    """Write crossing_lines.json (`core.rail_and_paths`): the railways and paths crossing over or under the route, each
+    over it with the whole bridge it's part of, its approaches and the roads that bridge passes over. Without them
+    (an OSM index built before they were kept, or Overpass not answering) the file lists none and says why, and the
+    build goes on."""
+    head = {"version": rail_and_paths.FORMAT_VERSION, "crs": f"EPSG:{region.epsg}"}
+    lon, lat = region.to_lonlat().transform(route.xy[:, 0], route.xy[:, 1])
+    m = LINES_MARGIN_DEG
+    bbox = (float(min(lon)) - m, float(min(lat)) - m, float(max(lon)) + m, float(max(lat)) + m)
+    try:
+        lines = osm_roads.railways_and_paths_for_bbox(bbox, settings)
+    except osm_roads.INDEX_ERRORS:
+        why = "the OSM index was built before railways and paths were kept: rebuild it"
+    except httpx.HTTPError:
+        why = "the Overpass server didn't answer"
+    else:
+        why = None
+    if why is not None:
+        work.write_json(STAGE, CROSSING_LINES, {**head, "unavailable": why, "crossings": [], "unresolved": []})
+        return {"crossing_lines": {"unavailable": why}}
+    if not settings.osm_index:  # from Overpass: ATTRIBUTION.txt names these filters too (`osm_roads.selection_note`)
+        work.write_json(STAGE, OSM_SELECTION, {**work.read_json(STAGE, OSM_SELECTION),
+                                               "overpass_lines_filter": osm_roads.LINES_SELECTION})
+    to_xy = region.to_xy()
+    route_ids = {route.ways[int(w)]["id"] for w in route.seg_way}
+    # The route's own ways with the railways and paths, as one network, so a node they share is a junction there.
+    road_ways = [e for e in data["elements"] if e["type"] == "way" and e["id"] in route_ids]
+    used = {n for w in road_ways for n in w["nodes"]}
+    road_nodes = [e for e in data["elements"] if e["type"] == "node" and e["id"] in used]
+    line_ways = [e for e in lines["elements"] if e["type"] == "way"]
+    line_nodes = [e for e in lines["elements"] if e["type"] == "node"]
+    net = osm_graph.build({"elements": road_nodes + line_nodes + road_ways + line_ways}, to_xy)
+    index_of = {w["id"]: i for i, w in enumerate(net.ways)}
+    seg_way = np.array([index_of[route.ways[int(w)]["id"]] for w in route.seg_way], dtype=np.int64)
+    found = rail_and_paths.find(net, route.xy, seg_way, to_lonlat=region.to_lonlat())
+    if line_nodes:
+        ids = [e["id"] for e in line_nodes]
+        x, y = to_xy.transform([e["lon"] for e in line_nodes], [e["lat"] for e in line_nodes])
+        where = dict(zip(ids, zip(x, y)))
+    else:
+        where = {}
+    ways = {w["id"]: rail_and_paths.LineWay(w["nodes"], np.array([where[n] for n in w["nodes"]], dtype=float),
+                                            w.get("tags") or {})
+            for w in line_ways if len(w["nodes"]) >= 2 and all(n in where for n in w["nodes"])}
+    route_tags = {w["id"]: w.get("tags") or {} for w in road_ways}
+    for c in found["crossings"]:
+        if "maxheight" in route_tags.get(c["route"]["way_id"], {}):
+            c["route"]["maxheight"] = route_tags[c["route"]["way_id"]]["maxheight"]  # a signed clearance, for the notes
+        st = (rail_and_paths.structure(ways, c["way_id"], c["xy"])
+              if c["relation"] == "over" and c["way_id"] in ways else {"deck": None})
+        c["structure"] = st
+        if st.get("deck"):
+            c["roads_crossed"] = rail_and_paths.roads_crossed(np.array(st["deck"]), g, route_ways=route_ids)
+    work.write_json(STAGE, CROSSING_LINES, {**head, "version": found.pop("version"), **found})
+    return {"crossing_lines": {"over": sum(c["relation"] == "over" for c in found["crossings"]),
+                               "under": sum(c["relation"] == "under" for c in found["crossings"]),
+                               "unresolved": len(found["unresolved"])}}
+
+
+def crossing_lines(work: WorkDir) -> list[dict]:
+    """The railways and paths crossing over or under the route, as crossing_lines.json lists them: none for a route
+    stage run before they were found, or without them."""
+    path = work.root / STAGE / CROSSING_LINES
+    return work.read_json(STAGE, CROSSING_LINES)["crossings"] if path.exists() else []
 
 
 def crossings(work: WorkDir) -> list[dict]:

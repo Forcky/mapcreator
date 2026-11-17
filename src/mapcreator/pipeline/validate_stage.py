@@ -215,6 +215,31 @@ def _dem_age_warnings(work: WorkDir, covered: set | None = None) -> list[str]:
     return dem_age.Report(bridges, doc.get("not_bridges", 0), doc.get("unmatched", 0)).warnings()
 
 
+STRUCTURE_WORDS = {"footbridge": "footbridge", "railbridge": "rail bridge"}
+
+
+def rail_and_paths_notes(work: WorkDir) -> list[str]:
+    """The build's warnings about railways and paths crossing the route (`core.rail_and_paths`): each footbridge or
+    rail bridge over it left out, and why (the maintainer's Q8: say why in the warnings), and none looked for when
+    the data had none. A path or railway under the route that isn't drawn is only in `RAIL_AND_PATHS`."""
+    out = []
+    path = work.root / route_stage.STAGE / route_stage.CROSSING_LINES
+    if path.exists():
+        why = work.read_json(route_stage.STAGE, route_stage.CROSSING_LINES).get("unavailable")
+        if why:
+            out.append(f"Footbridges and rail bridges over the route weren't looked for: {why}.")
+    path = work.root / mesh_stage.STAGE / mesh_stage.RAIL_AND_PATHS
+    if not path.exists():
+        return out
+    for r in work.read_json(mesh_stage.STAGE, mesh_stage.RAIL_AND_PATHS)["structures"]:
+        if r["drawn"] or r["structure"] not in STRUCTURE_WORDS:
+            continue
+        what = STRUCTURE_WORDS[r["structure"]]
+        named = f" ({r['name']})" if r.get("name") else ""
+        out.append(f"A {what}{named} at {r['at_m']:.0f} m along the route isn't drawn: {r['reason']}.")
+    return out
+
+
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     ring_checks, ring_exits = roundabout_checks(job, work)
     rep = validate.track_folder(work.root / track_stage.STAGE / job.track_id, allow_tight_bends=job.allow_tight_bends,
@@ -231,6 +256,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     built_path = work.root / mesh_stage.STAGE / mesh_stage.CROSSING_ROADS
     rep.warnings += crossing_core.warnings(
         plan, work.read_json(mesh_stage.STAGE, mesh_stage.CROSSING_ROADS) if plan and built_path.exists() else None)
+    rep.warnings += rail_and_paths_notes(work)
     work.write_json(STAGE, "report.json", {"ok": rep.ok, "passed": rep.passed, "failed": rep.failed,
                                            "route_failed": rep.route_failed, "warnings": rep.warnings})
     if rep.failed:

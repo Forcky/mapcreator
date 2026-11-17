@@ -50,6 +50,9 @@ def railways_and_paths_for_bbox(bbox: tuple[float, float, float, float], setting
     return index.as_indexed(data, ("railway", "path"))
 
 
+LINES_SELECTION = f"{overpass.RAILWAYS_FILTER} and {overpass.PATHS_FILTER}"
+
+
 def selection(settings: Settings) -> dict[str, str]:
     """How `for_bbox` picks the roads: the index's extract and its OSM data timestamp, or the Overpass filter.
     The route stage records it, and ATTRIBUTION.txt says it (`selection_note`)."""
@@ -69,6 +72,9 @@ def selection_note(sel: dict[str, str], *, build: str, source_url: str = "") -> 
         of = f", with data as of {sel['osm_timestamp']}" if sel.get("osm_timestamp") else ""
         return (f"The OpenStreetMap data was selected with mapcreator's index builder "
                 f"(src/mapcreator/providers/osm/index.py{at}, build {build}) from {extract}{of}.")
+    lines = (f" Railways and paths were selected with the filters {sel['overpass_lines_filter']}, narrowed to what "
+             "the index builder keeps (src/mapcreator/providers/osm/index.py)." if sel.get("overpass_lines_filter")
+             else "")
     return (f"The OpenStreetMap data was selected from an Overpass API server with the filter "
             f"{sel['overpass_filter']} around the route (src/mapcreator/providers/osm/overpass.py{at}, "
-            f"build {build}).")
+            f"build {build}).{lines}")

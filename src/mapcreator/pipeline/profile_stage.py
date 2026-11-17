@@ -95,8 +95,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     width = sec.mapped_width([r["tags"] for r in runs], line.s, run_idx)
     strip = pf.road_strip_heights(line.s, line.xy, line.heading, dem.sample, z_raw, fine,
                                   width=width) if not coarse else None
-    # Where a road crosses over the route, a hump the DEM shows there is bridged like the route's own bridges.
-    over_at = crossing_stations(line, route["xy"], crossings_core.over(route_stage.crossings(work)))
+    # Where a road, a railway or a path crosses over the route, a hump the DEM shows there is bridged like the route's
+    # own bridges.
+    over = crossings_core.over(route_stage.crossings(work) + route_stage.crossing_lines(work))
+    over_at = crossing_stations(line, route["xy"], over)
     under = pf.humps_under(line.s, z_raw if coarse else strip.z, over_at)
     fill = _fill_mask(run_idx, runs) | under
     if coarse:
