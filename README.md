@@ -1,5 +1,7 @@
 # mapcreator
 
+[![tests](https://github.com/Forcky/mapcreator/actions/workflows/tests.yml/badge.svg)](https://github.com/Forcky/mapcreator/actions/workflows/tests.yml)
+
 Generate drivable [Assetto Corsa](https://www.assettocorsa.it/) tracks from real roads, using only open data that may legally be redistributed.
 
 **Status:** an early-stage personal project, maintained in spare time. The pipeline builds installable tracks, and they've been driven in game end to end, with AI opponents (Grasstree Hill both ways, the Esperance coast road and the Lyell Highway among them). Expect rough edges, and changes without notice.
@@ -64,5 +66,7 @@ On PowerShell, set the token with `$env:MAPCREATOR_WORKER_TOKEN = "..."`. Locall
 This project is not affiliated with or endorsed by Kunos Simulazioni. Assetto Corsa is a trademark of its owner. Custom tracks work in the original Assetto Corsa on PC only.
 
 ## Licence
+
+Copyright 2026 Forcky and the mapcreator contributors.
 
 Apache License 2.0: see `LICENSE`. Third-party material keeps its own licence and notice (see `THIRD_PARTY_NOTICES.md`). Built tracks carry the data licences of their sources (see `docs/data-sources.md`).
