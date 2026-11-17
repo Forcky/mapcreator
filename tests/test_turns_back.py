@@ -255,3 +255,64 @@ def test_graphhopper_is_asked_for_roundabouts_and_street_names():
     router = GraphHopperRouter("http://router.example.org:8989/", client=httpx.Client(transport=httpx.MockTransport(handler)))
     router.preview(HOBART)
     assert asked == [["roundabout", "street_name", "road_environment"]]
+
+
+# -- back alongside itself -------------------------------------------------------------------------------------------
+
+def _round_and_back(gap: float, ring_r: float = 12.0) -> np.ndarray:
+    """East 200 m on one carriageway, round a turn `ring_r` metres long at the end, and back west 200 m on the
+    other carriageway, `gap` metres from the first (centreline to centreline)."""
+    a = np.radians(np.linspace(-90.0, 90.0, 19))
+    turn = np.column_stack([200.0 + ring_r * np.cos(a), gap / 2 * np.sin(a)])
+    return np.vstack([np.column_stack([np.linspace(0.0, 200.0, 41), np.full(41, -gap / 2)]), turn[1:-1],
+                      np.column_stack([np.linspace(200.0, 0.0, 41), np.full(41, gap / 2)])])
+
+
+def test_a_route_back_alongside_itself_is_found_where_the_other_checks_see_nothing():
+    # Nov 2026: a test route went down a one-way split, round the roundabout and back up the other side, 2 m from
+    # itself. No road driven twice, every turn round the ring: it failed validation as an internal error.
+    xy = _round_and_back(2.0)
+    assert route_stage.turn_back(xy) is None
+    assert route_stage.u_turn(xy, rings=[(200.0, centreline.cumulative(xy)[-42])]) is None
+    k, earlier = route_stage.alongside(xy)
+    s = centreline.cumulative(xy)
+    assert 200.0 < s[k] < s[-1] and earlier < s[k] - 10.0  # the later part, beside an earlier one
+
+
+@pytest.mark.parametrize("xy", [
+    [[0.0, 0.0], [100.0, 0.0], [200.0, 0.0]],
+    [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0]],
+    [[-50.0, 3.0], *[[3.0 * np.sin(a), 3.0 * np.cos(a)] for a in np.radians(np.arange(0, 181, 15))], [-50.0, -3.0]],
+], ids=["straight", "right angle", "3 m hairpin"])
+def test_good_routes_don_t_come_back_alongside(xy):
+    # A hairpin's legs are close, but only a little further apart along the road than across: not another part.
+    assert route_stage.alongside(np.array(xy)) is None
+
+
+def test_a_divided_road_s_carriageways_far_enough_apart_aren_t_alongside():
+    assert route_stage.alongside(_round_and_back(12.0)) is None
+
+
+def test_the_alongside_message_says_where():
+    assert route_stage.alongside_message(2323.0, 2155.0) == (
+        "The route comes back alongside itself 2.3 km along, beside where it was 2.2 km along, usually by going "
+        "round a roundabout and back up the other side of a divided road. A track can't run back beside itself: "
+        "move the point near there, or finish the track before it turns.")
+
+
+def test_dev_router_preview_marks_a_route_back_alongside_itself():
+    # Out east on the north carriageway of a divided road, through the far end's turning link onto the south one,
+    # and back west: the finish is on the south carriageway, behind the start.
+    lons = [147.300 + i * 0.002 for i in range(6)]
+    north = [{"type": "node", "id": i + 1, "lon": x, "lat": -42.80} for i, x in enumerate(lons)]
+    south = [{"type": "node", "id": i + 11, "lon": x, "lat": -42.80002} for i, x in enumerate(lons)]
+    roads = {"elements": [*north, *south,
+                          {"type": "way", "id": 1, "nodes": [n["id"] for n in north],
+                           "tags": {"highway": "secondary", "oneway": "yes", "name": "Main Road"}},
+                          {"type": "way", "id": 2, "nodes": [n["id"] for n in south][::-1],
+                           "tags": {"highway": "secondary", "oneway": "yes", "name": "Main Road"}},
+                          {"type": "way", "id": 3, "nodes": [6, 16],
+                           "tags": {"highway": "secondary", "oneway": "yes", "junction": "roundabout"}}]}
+    pts = [Waypoint(lon=147.301, lat=-42.80), Waypoint(lon=147.302, lat=-42.80002)]
+    turn = DevRouter(settings=OVERPASS, fetch=lambda q, s: roads).preview(pts)["turns_back"]
+    assert turn["message"].startswith("The route comes back alongside itself ")

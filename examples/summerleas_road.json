@@ -2,7 +2,7 @@
   "track_id": "summerleas_road",
   "waypoints": [
     {"lon": 147.2844, "lat": -42.9650},
-    {"lon": 147.3036, "lat": -42.9755}
+    {"lon": 147.30327, "lat": -42.975459}
   ],
   "width": "as_mapped",
   "layouts": "forward"

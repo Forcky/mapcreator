@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import numpy as np
+from scipy.spatial import cKDTree
 
 from mapcreator.config import Settings
 from mapcreator.core import centreline
@@ -137,6 +138,54 @@ def segment_names(route: osm_graph.Route) -> list[str | None]:
     return [route.ways[w]["tags"].get("name") for w in route.seg_way]
 
 
+# Another part of the route this close (centreline to centreline) is a road over the route's own: two 3.2 m half
+# widths overlap below 6.4 m. "Another part" is the junction finder's rule (much further along than straight across),
+# so a hairpin's legs, whose along-distance is short, aren't another part.
+ALONGSIDE_M = 5.0
+ALONGSIDE_STEP_M = 1.0
+# And only a real run back: at least this much further along than the part it's beside, for at least this long. A
+# sharp V where a link meets a road at a narrow angle is close for a few metres, a short way along: validation's
+# tight bend (which can be built on request) judges that. Going round even a small roundabout and back is longer.
+ALONGSIDE_GAP_M = 30.0
+ALONGSIDE_RUN_M = 10.0
+
+
+def alongside(xy: np.ndarray) -> tuple[int, float] | None:
+    """Where the route first comes back alongside itself: another part of it within `ALONGSIDE_M`, as when it goes
+    round a roundabout and back up the other carriageway of a divided road beside the way it came (Nov 2026: a
+    test route down a one-way split, round the roundabout and back up the other side, 2 m from itself, failed
+    validation as an internal error). No road is driven twice and every turn is round the ring, so `turn_back` and
+    `u_turn` don't see it. Returns the index of the point (the later of the two parts) and the distance along the
+    route of the earlier part, or None."""
+    xy = np.asarray(xy, dtype=float)
+    s = cumulative(xy)
+    if len(xy) < 2 or s[-1] <= 0:
+        return None
+    dense_s = np.arange(0.0, s[-1] + 1e-9, ALONGSIDE_STEP_M)
+    dense = np.column_stack([np.interp(dense_s, s, xy[:, 0]), np.interp(dense_s, s, xy[:, 1])])
+    pairs = cKDTree(dense).query_pairs(ALONGSIDE_M, output_type="ndarray")
+    if not len(pairs):
+        return None
+    d = np.hypot(*(dense[pairs[:, 0]] - dense[pairs[:, 1]]).T)
+    gap = np.abs(dense_s[pairs[:, 1]] - dense_s[pairs[:, 0]])
+    far = pairs[(gap > junctions_core.OTHER_PART_RATIO * d + junctions_core.OTHER_PART_SLACK_M)
+                & (gap >= ALONGSIDE_GAP_M)]
+    later = np.unique(far.max(axis=1))
+    if len(later) * ALONGSIDE_STEP_M < ALONGSIDE_RUN_M:
+        return None
+    k = int(later[0])
+    earlier = int(far[far.max(axis=1) == k].min())
+    return int(np.searchsorted(s, dense_s[k], side="left").clip(0, len(xy) - 1)), float(dense_s[earlier])
+
+
+def alongside_message(along_m: float, earlier_m: float) -> str:
+    """What to tell the person about `alongside`, in the build's words and the preview's."""
+    return (f"The route comes back alongside itself {_distance(along_m)} along, beside where it was "
+            f"{_distance(earlier_m)} along, usually by going round a roundabout and back up the other side of a "
+            "divided road. A track can't run back beside itself: move the point near there, or finish the track "
+            "before it turns.")
+
+
 def u_turn_message(along_m: float) -> str:
     """What to tell the person about a `u_turn`, in the build's words and the preview's."""
     return (f"The route makes a U-turn {_distance(along_m)} along, usually because a point is on the far side of a "
@@ -202,6 +251,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     u = u_turn(route.xy, ring_spans(route), segment_names(route))
     if u is not None:
         raise RouteTurnsBack(u_turn_message(float(cumulative(route.xy)[u])))
+    beside = alongside(route.xy)
+    if beside is not None:
+        raise RouteTurnsBack(alongside_message(float(cumulative(route.xy)[beside[0]]), beside[1]))
 
     sharp = sharp_turns(route.xy)
     lon, lat = region.to_lonlat().transform(route.xy[:, 0], route.xy[:, 1])

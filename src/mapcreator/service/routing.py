@@ -152,6 +152,15 @@ def _preview(lon: Sequence[float], lat: Sequence[float], length_m: float, xy: np
         out["turns_back"] = {"lon": round(float(lon[u]), 6), "lat": round(float(lat[u]), 6),
                              "along_m": round(along_m, 1), "retraced_m": 0.0,
                              "message": route_stage.u_turn_message(along_m)}
+        return out
+    # Back up the other side of a divided road, beside the way it came: refused the same way.
+    beside = route_stage.alongside(xy)
+    if beside is not None:
+        k, earlier_m = beside
+        along_m = float(cumulative(xy)[k])
+        out["turns_back"] = {"lon": round(float(lon[k]), 6), "lat": round(float(lat[k]), 6),
+                             "along_m": round(along_m, 1), "retraced_m": 0.0,
+                             "message": route_stage.alongside_message(along_m, earlier_m)}
     return out
 
 
