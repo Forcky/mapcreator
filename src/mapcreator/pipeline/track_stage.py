@@ -495,7 +495,7 @@ def _write_centreline(track_dir, job: Job, c, sec, region, lonlat, attributions,
                            "surface_class": st["surface"], "length_m": st["length_m"], "license": "ODbL-1.0",
                            **({"leaves": st["parent"]} if st.get("parent") else {})},
         })
-    for r in ramps:  # from where its centreline leaves the road's edge to its stub's end
+    for r in ramps:  # from 20 m before its nose to its stub's end
         xy = np.asarray(r["rows"]["xy"], float)
         z = np.asarray(r["rows"]["z"], float)
         lon, lat = lonlat.transform(xy[:, 0], xy[:, 1])

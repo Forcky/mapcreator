@@ -110,20 +110,21 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             stub_summary["in_clusters"] = in_clusters
     else:
         (work.stage(STAGE) / STUBS).unlink(missing_ok=True)  # no junctions, or built without them
-    # Slip ramps (`core.ramps`), planned after the stubs and rings: each keeps off them, so none of those changes.
+    cross_summary = _crossing_roads(work, job, region, c, section, dem)
+    # Slip ramps (`core.ramps`), planned after the stubs, rings and crossing roads: each keeps off the stubs and rings,
+    # so none of those changes, and off the piers and abutments of the bridges over the route.
     ramp_summary = None
     ramp_list = route_stage.ramps(work, job)
     if ramp_list:
         ramp_plan = ramps_core.plan(ramp_list, c, section, dem.sample, width_factor=job.width.factor, layouts=layouts,
                                     junctions=found, stubs_plan=plan["stubs"] if found else [],
-                                    rings=ring_plan["roundabouts"] if rings else [])
+                                    rings=ring_plan["roundabouts"] if rings else [], crossing=crossing_roads(work))
         work.write_json(STAGE, RAMPS, {"version": ramp_plan.pop("version"), "crs": f"EPSG:{region.epsg}", **ramp_plan})
         ramp_summary = {"ramps": len(ramp_plan["ramps"]), "skipped": {}}
         for sk in ramp_plan["skipped"]:
             ramp_summary["skipped"][sk["reason"]] = ramp_summary["skipped"].get(sk["reason"], 0) + 1
     else:
         (work.stage(STAGE) / RAMPS).unlink(missing_ok=True)
-    cross_summary = _crossing_roads(work, job, region, c, section, dem)
     sources: dict[str, float] = {}
     inherited: dict[str, float] = {}
     for r, run, m in zip(per_run, runs, lengths):

@@ -275,6 +275,30 @@ def test_what_is_left_out_and_why():
     assert len(p["ramps"]) == 1 and p["skipped"][0]["reason"] == "overlaps"
 
 
+def test_a_ramp_keeps_off_the_piers_and_abutments_of_a_bridge_over_the_route():
+    c, sec = road()
+    _, r = plan_one(ramp(300.0, 6.0))
+    # A deck crossing the road square at 380 m, with a pier column on the ramp and abutments 30 m out either side.
+    rows = {"xy": [[380.0, y] for y in np.arange(-30.0, 31.0, 2.0)]}
+    pier = {"columns": [np.asarray(r["rows"]["xy"])[0].tolist()]}
+    deck = {"rows": rows, "deck_half_m": 4.5, "piers": [pier],
+            "abutments": [{"end": "start", "face_row": 1, "end_row": 0}, {"end": "end", "face_row": 29, "end_row": 30}]}
+    p, r2 = plan_one(ramp(300.0, 6.0), c, sec, crossing={"decks": [deck]})
+    assert r2 is None and p["skipped"][0]["reason"] == "bridge"
+    # With the pier elsewhere, it passes under the deck.
+    deck["piers"] = [{"columns": [[380.0, -6.0]]}]
+    assert plan_one(ramp(300.0, 6.0), c, sec, crossing={"decks": [deck]})[1] is not None
+    assert ramps.structures(None) is None and ramps.structures({"decks": []}) is None
+
+
+def test_a_vertex_whose_triangles_have_no_area_points_up():
+    pos = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [2.0, 2.0, 2.0], [0.0, 0.0, 5.0], [5.0, 0.0, 0.0]])
+    tri = np.array([[0, 1, 2], [0, 3, 4]])  # the first three in a line: vertex 1 has nothing else
+    n = mesh._vertex_normals(pos, tri)
+    assert np.allclose(np.linalg.norm(n, axis=1), 1.0) and np.allclose(n[1], [0.0, 1.0, 0.0])
+    assert np.allclose(n[3], [0.0, 1.0, 0.0])  # a real triangle's normal is as before
+
+
 def test_a_ramp_whose_mouth_would_leave_a_timing_gate_nowhere_to_stand_is_left_out():
     p, r = plan_one(ramp(20.0, 8.0, kind="merge", length=100.0))  # behind the start, then
     assert r is None
@@ -405,6 +429,9 @@ def test_the_terrain_fits_round_the_ramp_and_its_island_with_no_gap_and_nothing_
     on_island = validate._grid_in(island.buffer(-0.3), 0.53)
     assert (coverage(triangles(every, "1GRASS"), ac_xz(on_island)) == 1).all()  # the island: grass, once
     assert (coverage(triangles(every, "1ROAD"), ac_xz(on_island)) == 0).all()
+    # The ramp's first row's inner verge and skirt, on the nose between the throat and the island, face no terrain.
+    fp = ramps.footprint(None, b, len(c["s"]))
+    assert len(b.interior) >= 2 and b.interior <= fp.interior
 
 
 def test_ramp_meshes_are_named_and_valid():

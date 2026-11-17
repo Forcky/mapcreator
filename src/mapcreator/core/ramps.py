@@ -90,6 +90,8 @@ DEM_SMOOTH_M = stubs.DEM_SMOOTH_M
 MIN_RIBBON_M = stubs.MIN_RIBBON_M  # a ramp with less than this of its own ribbon past the island isn't drawn
 LEAD_M = 20.0  # ramps.json keeps the ramp's rows from this far before the nose
 CLEAR_M = stubs.CLEAR_M
+STRUCTURE_CLEAR_M = 1.0  # a ramp keeps this far from a bridge's piers and abutments (`core.crossing_roads`)
+PIER_R_M = 0.45  # a pier column's radius (`crossing_roads.PIER_R`)
 SKIRT_CLEAR_M = 1.0  # the ramp's skirt stops this short of the road's, so the ground between them is no sliver
 RAMP_ID_BASE = 200000  # ramps' ids, apart from junctions' (0 up) and roundabout exits' (100000 up)
 # The paint (module notes).
@@ -610,10 +612,10 @@ def _footprint(cand: _Candidate) -> shapely.Geometry:
 
 
 def _fit(cand: _Candidate, m: stubs._Mainline, kept: list[_Candidate], taken: list[tuple[str, tuple, object]],
-         avoid: shapely.Geometry | None) -> tuple[_Candidate | None, str | None]:
+         avoid: shapely.Geometry | None, piers: shapely.Geometry | None = None) -> tuple[_Candidate | None, str | None]:
     """The ramp cut short where its ribbon comes within a verge of another part of the route; None, with the reason,
-    if too little is left, or it would overlap a roundabout, a side road's stub or a ramp already kept. `taken`: the
-    stubs' and rings' (side, mouth rows, footprint)."""
+    if too little is left, or it would overlap a roundabout, a bridge's pier or abutment (`piers`), a side road's stub
+    or a ramp already kept. `taken`: the stubs' and rings' (side, mouth rows, footprint)."""
     at = cand.record["station_m"]
     k = cand.first
     dist, idx = m.tree.query(cand.rows_xy[k:])
@@ -630,6 +632,8 @@ def _fit(cand: _Candidate, m: stubs._Mainline, kept: list[_Candidate], taken: li
     fp = _footprint(cand)
     if avoid is not None and fp.intersects(avoid):
         return None, "roundabout"
+    if piers is not None and fp.intersects(piers):
+        return None, "bridge"
     a, b = cand.record["mouth"]["rows"]
     for side, (ka, kb), geom in taken + [(c.record["side"], tuple(c.record["mouth"]["rows"]), _footprint(c))
                                          for c in kept]:
@@ -640,11 +644,12 @@ def _fit(cand: _Candidate, m: stubs._Mainline, kept: list[_Candidate], taken: li
 
 def plan(ramps: list[dict], c, section, dem_sample, *, width_factor: float = 1.0, layouts: tuple[bool, ...] = (False,),
          junctions: list[dict] | None = None, stubs_plan: list[dict] | None = None,
-         rings: list[dict] | None = None) -> dict:
+         rings: list[dict] | None = None, crossing: dict | None = None) -> dict:
     """The ramps' plan: the content of ramps.json (without `crs`). `ramps` are ramps.json's from the route stage; `c`,
     `section` and `dem_sample` as `stubs.plan` takes them. The side roads' stubs (`stubs_plan`, for `junctions`) and
     the roundabouts (`rings`, roundabouts.json's) are already planned: a ramp keeps off them, never the other way, so
-    no stub drawn without ramps changes."""
+    no stub drawn without ramps changes. `crossing`: the roads crossing the route (crossing_roads.json): a ramp keeps
+    off the piers and abutments of the bridges over the route (`bridge`); one may pass under a deck."""
     m = stubs._Mainline(c, section)
     cands, skipped = [], []
     for r in ramps:
@@ -663,9 +668,10 @@ def plan(ramps: list[dict], c, section, dem_sample, *, width_factor: float = 1.0
     for ring in rings or []:
         taken.append((ring["island_side"], tuple(ring["mouth"]["rows"]), shapely.Polygon(ring["outline"]).buffer(0)))
     avoid = rb_core.avoid(rings) if rings else None
+    piers = structures(crossing)
     kept: list[_Candidate] = []
     for cand in sorted(cands, key=lambda k: k.priority):
-        fitted, reason = _fit(cand, m, kept, taken, avoid)
+        fitted, reason = _fit(cand, m, kept, taken, avoid, piers)
         if fitted is None:
             skipped.append({"junction": cand.record["junction"], "name": cand.record["name"], "reason": reason})
             continue
@@ -720,6 +726,26 @@ def _clear_gates(kept: list[_Candidate], c, section, layouts, junctions, stubs_p
 
 
 # -- reading the plan -------------------------------------------------------------------------------------------------
+
+def structures(crossing: dict | None) -> shapely.Geometry | None:
+    """The ground the bridges over the route stand on (crossing_roads.json's `decks`): each pier's columns and each
+    abutment, between its face and the deck's end, as wide as the deck, with STRUCTURE_CLEAR_M round them. None with
+    none."""
+    parts = []
+    for d in (crossing or {}).get("decks") or []:
+        for p in d.get("piers") or []:
+            parts += [shapely.Point(col).buffer(STRUCTURE_CLEAR_M + PIER_R_M) for col in p.get("columns") or []]
+        xy = np.asarray((d.get("rows") or {}).get("xy") or [], float).reshape(-1, 2)
+        for a in d.get("abutments") or []:
+            lo, hi = sorted((int(a["face_row"]), int(a["end_row"])))
+            seg = xy[lo:hi + 1]
+            if len(seg) >= 2:
+                parts.append(shapely.LineString(seg).buffer(float(d["deck_half_m"]) + STRUCTURE_CLEAR_M,
+                                                            cap_style="flat"))
+            elif len(seg) == 1:
+                parts.append(shapely.Point(seg[0]).buffer(float(d["deck_half_m"]) + STRUCTURE_CLEAR_M))
+    return shapely.unary_union(parts) if parts else None
+
 
 def junctions_for(ramps: list[dict]) -> list[dict]:
     """The ramps as junctions.json's junctions, for the closures (`stub_closures.place`): the node and way their seeds
@@ -805,6 +831,9 @@ class Built:
     edges: list[tuple[np.ndarray, np.ndarray]]
     stats: dict
     failed: dict = field(default_factory=dict)  # a ramp that couldn't be built, by its id: why
+    # The ramps' first rows' inner verge and skirt points, on the nose between the throat and the island: they face
+    # no terrain (`mesh.Footprint(interior=)`), or the terrain could triangulate slivers along the nose.
+    interior: set = field(default_factory=set)
 
 
 def _cdt(poly: shapely.Polygon) -> np.ndarray:
@@ -1035,7 +1064,8 @@ def _build_one(r: dict, rb: mesh.Ribbon, frame: LocalFrame, dem_sample, skirt: b
     meshes += mesh.soup_meshes(f"1GRASS_{tag}I", "grass", grass, frame)
     lo, hi = r["mouth"]["rows"]
     br0, br1 = r["taper"]["edge_break_rows"]
-    return meshes, sb, own_cut, patches, edges, (side, lo, hi, br0, br1)
+    interior = {(float(sb.e[0, cc]), float(sb.n[0, cc])) for cc in [in_verge] + in_skirt}
+    return meshes, sb, own_cut, patches, edges, (side, lo, hi, br0, br1), interior
 
 
 def rb_stations(rb: mesh.Ribbon, rows: np.ndarray) -> np.ndarray:
@@ -1085,13 +1115,13 @@ def build(ramps: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
     rows = len(s)
     cut = {"L": np.zeros(rows - 1, bool), "R": np.zeros(rows - 1, bool)}
     edge_break = {"L": np.zeros(rows, bool), "R": np.zeros(rows, bool)}
-    out = Built([], cut, edge_break, [], [], [], [], {}, {})
+    out = Built([], cut, edge_break, [], [], [], [], {}, {}, set())
     others = np.asarray(others, float).reshape(-1, 2)
     for r in ramps:
         tag = f"JS{int(r['junction']) - RAMP_ID_BASE}_"
         rest = centres([q for q in ramps if q is not r])
         try:
-            meshes, sb, own_cut, patches, edges, (side, lo, hi, br0, br1) = _build_one(
+            meshes, sb, own_cut, patches, edges, (side, lo, hi, br0, br1), interior = _build_one(
                 r, rb, frame, dem_sample, skirt, np.vstack([others, rest]), tag)
         except (ValueError, KeyError, IndexError, shapely.errors.GEOSException) as e:
             out.failed[r["junction"]] = f"{type(e).__name__}: {e}"
@@ -1103,6 +1133,7 @@ def build(ramps: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
         out.ribbon_cuts.append(own_cut)
         out.patches += patches
         out.edges += edges
+        out.interior |= interior
     built = [r for r in ramps if r["junction"] not in out.failed]
     out.stats = {"ramps": len(built), "meshes": len(out.meshes),
                  "vertices": int(sum(len(m.positions) for m in out.meshes)),
@@ -1122,7 +1153,7 @@ def footprint(base: mesh.Footprint | None, built: Built, rows: int) -> mesh.Foot
     return mesh.Footprint(cut, base.ribbons + built.ribbons, base.patches + built.patches, base.edges + built.edges,
                           ribbon_cuts=(base.ribbon_cuts or [None] * n) + built.ribbon_cuts,
                           open_last=(base.open_last or [False] * n) + [False] * len(built.ribbons),
-                          interior=base.interior)
+                          interior=(base.interior or set()) | built.interior)
 
 
 def road_cut(cut: dict | None, edge_break: dict | None, built: Built | None):
