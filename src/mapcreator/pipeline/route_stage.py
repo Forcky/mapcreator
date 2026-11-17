@@ -71,9 +71,11 @@ def u_turn(xy: np.ndarray, rings: Sequence[tuple[float, float]] = (),
     round a small ring can turn as hard, and a build can still go round it on request.
 
     `names`: the name of the road each segment of `xy` is on, where known. A U-turn then has to leave the road and
-    come back onto it, as through the median onto the other carriageway, or into a side street and straight back out;
-    a hairpin on one road is left to validation. (Tasmania, Nov 2026: 38 roads have a hairpin drawn this tight, and
-    26 of them pass validation or can be built on request; no path through any of 391 roundabouts was refused.)"""
+    come back onto it: the same road before the first corner and after the last, and another between, as through the
+    median onto the other carriageway, or into a side street and straight back out. A hairpin on one road, and a turn
+    off one road into a tight loop on another (a court's turning circle), are left to validation. (Tasmania, Nov
+    2026: 38 roads have a hairpin drawn this tight, and 26 of them pass validation or can be built on request; no
+    path through any of 391 roundabouts was refused.)"""
     xy = np.asarray(xy, dtype=float)
     seg = np.diff(xy, axis=0)
     keep = np.flatnonzero(np.hypot(*seg.T) > 1e-6)
@@ -90,11 +92,16 @@ def u_turn(xy: np.ndarray, rings: Sequence[tuple[float, float]] = (),
         end = int(np.searchsorted(at, at[i] + centreline.REVERSAL_SPAN_M, side="right"))
         if on_ring[i:end].any():
             continue
-        if names is not None and len({names[k] or "" for k in range(keep[i], keep[end] + 1)}) < 2:
-            continue  # on one road from the segment before the first corner to the one after the last
-        if np.abs(np.cumsum(turn[i:end])).max() > centreline.REVERSAL_DEG:
-            return int(node[i])
+        for j in i + np.flatnonzero(np.abs(np.cumsum(turn[i:end])) > centreline.REVERSAL_DEG):
+            if names is None or _comes_back(names, int(keep[i]), int(keep[j + 1])):
+                return int(node[i])
     return None
+
+
+def _comes_back(names: Sequence[str | None], before: int, after: int) -> bool:
+    """Whether the route leaves the road segment `before` is on and comes back onto it by segment `after`."""
+    road = names[before] or ""
+    return (names[after] or "") == road and any((names[k] or "") != road for k in range(before + 1, after))
 
 
 def ring_spans(route: osm_graph.Route) -> list[tuple[float, float]]:
