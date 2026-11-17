@@ -15,6 +15,7 @@ from mapcreator.config import Settings
 from mapcreator.core import ai_line, bridges, dem_age, junctions, rail_and_paths, scenery, stubs, validate
 from mapcreator.core import crossing_roads as crossing_core
 from mapcreator.core import mesh as base_mesh
+from mapcreator.core import ramps as ramps_core
 from mapcreator.core import roundabouts as rb_core
 from mapcreator.core.layout import AI_END_SHORT_M, RoadModel, layouts_for
 from mapcreator.core.scene import Scene
@@ -255,10 +256,43 @@ def bridge_checks(work: WorkDir) -> list[validate.BridgeCheck]:
     return bridges.checks(records, Scene.load(work.root / mesh_stage.STAGE).frame)
 
 
+def ramp_checks(job: Job, work: WorkDir) -> list[validate.JunctionCheck]:
+    """The slip ramps as built (`core.ramps`) as side roads' junctions, in AC x/z, for the validator: the mouth is the
+    ramp's taper, gore and nose island beside the road, out to MOUTH_BAND_M beyond its edge; the side road, the ramp's
+    paved outline and island; and its stub check (`ramps_core.check`)."""
+    ramps = mesh_stage.built_ramps(work, job)
+    if not ramps:
+        return []
+    frame = Scene.load(work.root / mesh_stage.STAGE).frame
+    c = np.load(work.root / profile_stage.STAGE / "centreline.npz")
+    sec = np.load(work.root / section_stage.STAGE / "section.npz")
+
+    def to_ac(geom):
+        return shapely.transform(geom, lambda p: frame.to_ac(p[:, 0], p[:, 1], np.zeros(len(p)))[:, [0, 2]])
+
+    out = []
+    for r in ramps:
+        side = "L" if r["side"] == "left" else "R"
+        a, b = r["mouth"]["rows"]
+        rows = np.arange(a, b + 1)
+        half = sec["half_left" if side == "L" else "half_right"][rows]
+        sign = 1.0 if side == "L" else -1.0
+        nrm = np.column_stack([-np.sin(c["heading"][rows]), np.cos(c["heading"][rows])]) * sign
+        edge = c["xy"][rows] + nrm * half[:, None]
+        band = shapely.Polygon(np.vstack([edge, (edge + nrm * junctions.MOUTH_BAND_M)[::-1]])).buffer(0)
+        road = shapely.union(ramps_core.paved(r), shapely.Polygon(r["island"]["outline"]).buffer(0))
+        label = (f"{r.get('name') or 'an unnamed ramp'} ({r['highway']}, {r['closure']}, slip ramp) at "
+                 f"{r['station_m'] / 1000:.2f} km on the {r['side']}")
+        ramp, _ = ramps_core.check(r, c, sec, frame)
+        out.append(validate.JunctionCheck(label, to_ac(road.intersection(band)), to_ac(road), ramp))
+    return out
+
+
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     ring_checks, ring_exits = roundabout_checks(job, work)
     rep = validate.track_folder(work.root / track_stage.STAGE / job.track_id, allow_tight_bends=job.allow_tight_bends,
-                                road_radius=road_radius(job, work), junctions=junction_checks(job, work) + ring_exits,
+                                road_radius=road_radius(job, work),
+                                junctions=junction_checks(job, work) + ring_exits + ramp_checks(job, work),
                                 roundabouts=ring_checks, crossing=crossing_check(work), bridges=bridge_checks(work))
     rings = _roundabouts(job, work)
     if rings:
