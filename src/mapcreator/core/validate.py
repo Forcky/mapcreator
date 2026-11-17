@@ -531,7 +531,7 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
     road = RoadSurface(data["nodes"])
     for name in sorted(n for n in dummies if SPAWN.match(n)):
         x, y, z = dummies[name]["matrix"][3, :3]
-        h = road.height(x, z, below=y)
+        h = road.height(x, z, below=y + 1.0)  # the road under it, not one under the route's bridge
         ok = h is not None and SPAWN_HEIGHT[0] <= y - h <= SPAWN_HEIGHT[1]
         rep.check(ok, f"{label}: {name} sits {('%.2f m' % (y - h)) if h is not None else 'off the road'} above the road")
     starts = np.array([d["matrix"][3, :3] for n, d in sorted(dummies.items()) if re.fullmatch(r"AC_START_\d+", n)])
@@ -575,7 +575,9 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
     rep.check(True, f"{label}: fast_lane.ai v7 reads back ({len(line.pos)} points)")
     rep.check(bool(np.all(np.diff(line.length) > 0)), f"{label}: AI distances strictly increase")
     sample = line.pos[:: max(len(line.pos) // 200, 1)]
-    lift = [p[1] - h for p in sample if (h := road.height(p[0], p[2], below=p[1])) is not None]
+    # Against the road under each point (anything within a metre above it counts too, so a line under the road
+    # still fails), not a road drawn under the route's bridge.
+    lift = [p[1] - h for p in sample if (h := road.height(p[0], p[2], below=p[1] + 1.0)) is not None]
     rep.check(len(lift) > 0.9 * len(sample) and AI_HEIGHT[0] <= min(lift) and max(lift) <= AI_HEIGHT[1],
               f"{label}: AI line {min(lift):.2f}-{max(lift):.2f} m above the road" if lift else f"{label}: AI line off the road")
     _middle, middle_radius = road_middle(line)
