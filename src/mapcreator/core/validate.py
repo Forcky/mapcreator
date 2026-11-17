@@ -393,8 +393,9 @@ def _banking(line: ai_line.AiLine, road: RoadSurface, where: np.ndarray) -> np.n
     left = np.column_stack([along[:, 1], -along[:, 0]]) / np.maximum(np.hypot(*along.T), 1e-9)[:, None]
     half = (line.extra[:, 5] + line.extra[:, 6]) / 2 - BANKING_INSET_M
     for i in np.flatnonzero(where & (half > 0)):
-        up = road.height(*(middle[i] + left[i] * half[i]))
-        down = road.height(*(middle[i] - left[i] * half[i]))
+        top = float(line.pos[i, 1]) + 1.0  # the road under the line, not one under the route's bridge
+        up = road.height(*(middle[i] + left[i] * half[i]), below=top)
+        down = road.height(*(middle[i] - left[i] * half[i]), below=top)
         if up is not None and down is not None:
             out[i] = (up - down) / (2 * half[i])
     return out
@@ -418,7 +419,9 @@ def is_road_mesh(name: str) -> bool:
 
 
 class RoadSurface:
-    """Height of the road (1ROAD and 1GRAVEL meshes) under arbitrary X/Z points."""
+    """Height of the road (1ROAD and 1GRAVEL meshes) under arbitrary X/Z points. Where two road surfaces overlap in plan
+    (a road drawn under the route's bridge, `core.crossing_roads`, and the deck, `core.bridges`), `height` takes the
+    one closest below a given height, or the highest."""
 
     def __init__(self, nodes: list[dict]):
         tris = []
@@ -429,10 +432,13 @@ class RoadSurface:
         self.tri = np.concatenate(tris) if tris else np.zeros((0, 3, 3))
         self.tree = cKDTree(self.tri.mean(axis=1)[:, [0, 2]]) if len(self.tri) else None
 
-    def height(self, x: float, z: float) -> float | None:
+    def height(self, x: float, z: float, below: float | None = None, within: float | None = None) -> float | None:
+        """The road's height at x/z: the highest surface there, or with `below` the highest at or under that height
+        (5 cm of slack), and with `within` too no lower than `below - within`; None where there's none."""
         if self.tree is None:
             return None
         _, idx = self.tree.query([x, z], k=min(16, len(self.tri)))
+        found = []
         for i in np.atleast_1d(idx):
             a, b, c = self.tri[i][:, [0, 2]]
             v0, v1, v2 = c - a, b - a, np.array([x, z]) - a
@@ -443,8 +449,10 @@ class RoadSurface:
             v = (v0[0] * v2[1] - v2[0] * v0[1]) / den
             if u >= -1e-6 and v >= -1e-6 and u + v <= 1 + 1e-6:
                 ya, yb, yc = self.tri[i][:, 1]
-                return float(ya + u * (yc - ya) + v * (yb - ya))
-        return None
+                found.append(float(ya + u * (yc - ya) + v * (yb - ya)))
+        if below is not None:
+            found = [h for h in found if h <= below + 0.05 and (within is None or h >= below - within)]
+        return max(found) if found else None
 
     def covers(self, xz: np.ndarray, batch: int = 8192) -> np.ndarray:
         """Whether each X/Z point is over the road: `height` for many points at once."""
@@ -523,7 +531,7 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
     road = RoadSurface(data["nodes"])
     for name in sorted(n for n in dummies if SPAWN.match(n)):
         x, y, z = dummies[name]["matrix"][3, :3]
-        h = road.height(x, z)
+        h = road.height(x, z, below=y)
         ok = h is not None and SPAWN_HEIGHT[0] <= y - h <= SPAWN_HEIGHT[1]
         rep.check(ok, f"{label}: {name} sits {('%.2f m' % (y - h)) if h is not None else 'off the road'} above the road")
     starts = np.array([d["matrix"][3, :3] for n, d in sorted(dummies.items()) if re.fullmatch(r"AC_START_\d+", n)])
@@ -553,8 +561,10 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
         pl, pr = left["matrix"][3, :3], right["matrix"][3, :3]
         span = float(np.linalg.norm(pl - pr))
         mid = (pl + pr) / 2
-        spans = (span >= MIN_GATE_M and road.height(mid[0], mid[2]) is not None
-                 and road.height(pl[0], pl[2]) is None and road.height(pr[0], pr[2]) is None)
+        # Each end off the road at its own level: a road drawn under the route's bridge, far below, doesn't count.
+        spans = (span >= MIN_GATE_M and road.height(mid[0], mid[2], below=mid[1] + 1.0, within=2.0) is not None
+                 and road.height(pl[0], pl[2], below=pl[1] + 1.0, within=2.0) is None
+                 and road.height(pr[0], pr[2], below=pr[1] + 1.0, within=2.0) is None)
         rep.check(spans, f"{label}: {gate} gate spans the road ({span:.1f} m, ends beyond both edges)")
 
     try:
@@ -565,7 +575,7 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
     rep.check(True, f"{label}: fast_lane.ai v7 reads back ({len(line.pos)} points)")
     rep.check(bool(np.all(np.diff(line.length) > 0)), f"{label}: AI distances strictly increase")
     sample = line.pos[:: max(len(line.pos) // 200, 1)]
-    lift = [p[1] - h for p in sample if (h := road.height(p[0], p[2])) is not None]
+    lift = [p[1] - h for p in sample if (h := road.height(p[0], p[2], below=p[1])) is not None]
     rep.check(len(lift) > 0.9 * len(sample) and AI_HEIGHT[0] <= min(lift) and max(lift) <= AI_HEIGHT[1],
               f"{label}: AI line {min(lift):.2f}-{max(lift):.2f} m above the road" if lift else f"{label}: AI line off the road")
     _middle, middle_radius = road_middle(line)

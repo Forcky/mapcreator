@@ -535,7 +535,7 @@ OpenStreetMap draws a bridge over a road without joining the two, so a road cros
 These follow the maintainer's answers of 17 Nov 2026 (the flyovers research, Q2-Q5). The bridges are the route's runs tagged `bridge` (as above), two stations or more. The gap is the profile's height over the DEM's ground under the centreline.
 
 - **Every tagged bridge** gets a concrete kerb and footway strip 1.0 m wide in place of the 2 m grass verge, rising 0.1 m to its outer edge (`1ROAD_BK<k>L/R`, physics ROAD, the roundabout kerb's `kerb` material). It's the ribbon's own verge column moved in (`mesh.build_ribbon(verge_l=, verge_r=)`), so it shares the road's edge and meets the grass verge beside the bridge in one ribbon.
-  - On its outer edge stands a solid concrete parapet, 0.35 m thick and 0.8 m high, with one steel rail on posts along its top at 0.92-1.02 m.
+  - On its outer edge stands a solid concrete parapet, 0.35 m thick and 0.8 m high, with one steel rail on posts along its top at 1.0-1.1 m.
   - Its collider (`1WALL_BRIDGE_<k>L/R`) is flush with the parapet's face, from 0.3 m below to 1.0 m above the kerb, as the guard rails' are, with no invisible wall above it.
   - A reflector on a short post on the parapet's top every 18 m (`FURNITURE_BRIDGE_<n>`, red on the left, white on the right, on the furniture's retroreflective material) stands in for guide posts. No guide post, curve marker or speed sign stands on a bridge.
   - Across a side road's mouth on its side, neither kerb nor parapet stands.

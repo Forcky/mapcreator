@@ -1,5 +1,5 @@
-"""The route's own bridges (`core.bridges`): the plan (open spans, piers, parapets clear of mouths), the kerb strip in the
-ribbon, the open deck with the terrain running on under it, the abutments' seams with the road and the ground, the
+"""The route's own bridges (`core.bridges`): the plan (open spans, piers, parapets clear of mouths), the kerb strip in
+the ribbon, the open deck with the terrain running on under it, the abutments' seams with the road and the ground, the
 parapets' colliders flush with their faces, 1:2 batters on fills, the meshes' names and budget, and the checks."""
 
 import numpy as np
@@ -38,8 +38,8 @@ def road(dem, rows=(165, 235), n=N, angle=0.0):
     filled = bridge.copy()
     if rows is not None:
         filled[rows[0] - 3:rows[1] + 4] = True
-    c = {"s": s, "xy": xy, "heading": np.full(n, angle), "curvature": np.zeros(n), "z": np.full(n, DECK), "z_raw": z_raw,
-         "bridge": bridge, "filled": filled, "tunnel": np.zeros(n, bool), "under": np.zeros(n, bool),
+    c = {"s": s, "xy": xy, "heading": np.full(n, angle), "curvature": np.zeros(n), "z": np.full(n, DECK),
+         "z_raw": z_raw, "bridge": bridge, "filled": filled, "tunnel": np.zeros(n, bool), "under": np.zeros(n, bool),
          "run": np.zeros(n, int), "grade": np.zeros(n)}
     sec = {"half_left": np.full(n, HALF), "half_right": np.full(n, HALF), "slope_left": np.full(n, CROWN),
            "slope_right": np.full(n, CROWN), "style": np.zeros(n, np.int8)}
@@ -367,3 +367,16 @@ def test_a_timing_gate_on_a_bridge_reaches_past_the_kerb_strip():
         assert abs(gated[f"AC_AB_START_{side}"].position[2]) == pytest.approx(
             HALF + GATE_OUTSIDE_EDGE_M + bridges.KERB_M)
         assert gated[f"AC_AB_FINISH_{side}"].position == plain[f"AC_AB_FINISH_{side}"].position
+
+
+def test_the_road_surface_takes_the_one_closest_below_where_a_road_runs_under_the_deck():
+    def node(name, y):
+        pos = np.array([[0.0, y, 0.0], [10.0, y, 0.0], [0.0, y, 10.0]], np.float32)
+        return {"class": 2, "name": name, "vertices": {"pos": pos}, "indices": np.array([0, 1, 2])}
+
+    road = validate.RoadSurface([node("1ROAD_000", 10.0), node("1ROAD_X000", 2.0), node("1GRASS_T000", 12.0)])
+    assert road.height(2.0, 2.0) == pytest.approx(10.0)  # the highest road, never the grass
+    assert road.height(2.0, 2.0, below=10.3) == pytest.approx(10.0)  # a spawn or AI point on the deck
+    assert road.height(2.0, 2.0, below=5.0) == pytest.approx(2.0)  # a point under the deck: the road below
+    assert road.height(2.0, 2.0, below=11.0, within=2.0) == pytest.approx(10.0)
+    assert road.height(2.0, 2.0, below=6.0, within=2.0) is None  # a gate's end over the road below: off the road

@@ -42,9 +42,9 @@ height over the DEM's ground under the centreline, `z - z_raw` (none over the se
   under water), over the deck's plan and GUARD_M beyond. Points under the deck and along its edges join the terrain
   (`edges`), so its triangles follow the ground there, never a long one from an abutment's foot to the other's.
 - **Batters** (`ground`, and the ribbon's skirt): on untagged fills (`filled` in `centreline.npz`, less bridges,
-  tunnels and the humps under crossing roads) and on bridges' closed stretches, padded by BATTER_PAD_M, the ground
-  beside the road is at least `verge - BATTER x distance` past the verge's edge, out to BATTER_REACH_M: a 1:2 batter
-  down to where it meets the ground.
+  tunnels and the humps under crossing roads), padded by BATTER_PAD_M, and on bridges' closed stretches and their
+  approaches, padded by BATTER_APPROACH_M, the ground beside the road is at least `verge - BATTER x distance` past
+  the verge's edge, out to BATTER_REACH_M: a 1:2 batter down to where it meets the ground.
 
 **The structure** (`Decks.meshes`), all visual but the colliders:
 - the parapet (`BRIDGE_<k>`, material `bridge_concrete`, as the bridges over the route): a concrete barrier PARAPET_W thick and PARAPET_H high on the kerb's
@@ -86,12 +86,12 @@ KERB_M = 1.0  # the kerb and footway strip, from the road's edge to the parapet'
 KERB_RISE_M = 0.1  # its outer edge stands this far above the road's edge: a footway, ramped so a car isn't snagged
 PARAPET_W = 0.35  # the concrete barrier's thickness
 PARAPET_H = 0.8  # its height above the kerb
-RAIL = (0.92, 1.02)  # the steel rail's bottom and top above the kerb, on posts from the barrier's top (about 1.1 m
-# overall with the rail, an estimate from common practice)
+RAIL = (1.0, 1.1)  # the steel rail's bottom and top above the kerb, on posts from the barrier's top (about 1.1 m
+# overall, an estimate from common practice; as the overpasses' decks, `core.crossing_roads`)
 RAIL_W = 0.1  # the rail's width
-RAIL_POST_W = 0.06
+RAIL_POST_W = 0.08
 RAIL_POST_SPACING_M = 2.5
-RAIL_STRIDE = 2  # the rail has a point every this many rows: it's thin, and a chord of 2 m is within 5 mm on a 100 m bend
+RAIL_STRIDE = 2  # the rail has a point every this many rows: a 2 m chord is within 5 mm of a 100 m bend
 DECK_DEPTH_M = 1.3  # the fascia, from the kerb's top down to the open deck's underside (a guess for a beam deck)
 EDGE_BEAM_M = 0.6  # on the ground the fascia reaches this far below the kerb, into the batter
 CLEAR_M = 0.5  # the ground under an open deck stays at least this far below its underside
@@ -107,6 +107,7 @@ REFLECTOR_POST = (0.08, 0.04, 0.22)  # its post on the parapet's top: across, al
 REFLECTOR_SIZE = (0.05, 0.12)  # each reflector: wide, high, its top 0.03 m below the post's
 BATTER = 0.5  # a fill's side falls 1 m in 2 (Q2)
 BATTER_PAD_M = 5.0  # the batter reaches this far along the road past a fill
+BATTER_APPROACH_M = 30.0  # and this far past a bridge, whose approaches are usually embankments
 BATTER_REACH_M = 40.0  # and at most this far from the centreline
 BATTER_ALONG_M = 2.0  # beside its nearest station, never further along the road than this (so not past its ends)
 PIER_HEADSTOCK = (1.0, 1.2)  # a pier's headstock: deep (below the underside), along the road
@@ -123,9 +124,7 @@ KERB_MATERIAL = "kerb"  # the roundabout island's concrete kerb (`core.roundabou
 MATERIAL = crossing_roads.CONCRETE
 UNDERSIDE_MATERIAL = crossing_roads.SOFFIT
 RAIL_MATERIAL = "rail"
-COLLIDER_PREFIX = "1WALL_BRIDGE_"
-FAULTS = {"ground_above": f"no ground within {CLEAR_M:.1f} m of an open deck's underside",
-          "collider_gap": "a collider along each parapet with no gap"}
+COLLIDER_PREFIX = "1WALL_BRIDGE_"  # as `validate.BRIDGE_COLLIDER`
 
 
 def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
@@ -234,7 +233,7 @@ def layout_intervals(bridges: list[dict], s: np.ndarray, reverse: bool) -> list[
     return sorted(out)
 
 
-# -- the ground ---------------------------------------------------------------------------------------------------------
+# -- the ground --------------------------------------------------------------------------------------------------------
 
 def _normals(heading: np.ndarray) -> np.ndarray:
     return np.column_stack([-np.sin(heading), np.cos(heading)])
@@ -242,24 +241,26 @@ def _normals(heading: np.ndarray) -> np.ndarray:
 
 def batter_rows(c, bridges: list[dict]) -> np.ndarray:
     """Stations whose ground beside the road takes a 1:2 batter: untagged fills (`filled`, less bridges, tunnels and
-    the humps under crossing roads) and bridges' closed stretches, padded by BATTER_PAD_M, never inside an open
-    span."""
+    the humps under crossing roads) padded by BATTER_PAD_M, and bridges' closed stretches and approaches, padded by
+    BATTER_APPROACH_M; never inside an open span. Where the road isn't above the ground, a batter changes nothing."""
     s = np.asarray(c["s"], float)
     n = len(s)
-    if "filled" not in c:
-        return np.zeros(n, bool)
-    fill = np.asarray(c["filled"], bool).copy()
+    step = float(s[1] - s[0]) if n > 1 else 1.0
+
+    def padded(mask, metres):
+        if not mask.any():
+            return mask
+        return binary_dilation(mask, structure=np.ones(2 * max(int(round(metres / step)), 1) + 1))
+
+    fill = np.asarray(c["filled"], bool).copy() if "filled" in c else np.zeros(n, bool)
     for key in ("bridge", "tunnel", "under"):
         if key in c:
             fill &= ~np.asarray(c[key], bool)
+    deck = np.zeros(n, bool)
     for b in bridges:
         i0, i1 = b["rows"]
-        fill[i0:i1 + 1] = True
-    if not fill.any():
-        return fill
-    step = float(s[1] - s[0]) if n > 1 else 1.0
-    fill = binary_dilation(fill, structure=np.ones(2 * max(int(round(BATTER_PAD_M / step)), 1) + 1))
-    return fill & ~open_rows(bridges, n)
+        deck[i0:i1 + 1] = True
+    return (padded(fill, BATTER_PAD_M) | padded(deck, BATTER_APPROACH_M)) & ~open_rows(bridges, n)
 
 
 def embanked(sample, c, sec, rows: np.ndarray, kerb: dict[str, np.ndarray] | None = None):
@@ -338,7 +339,7 @@ def under_decks(sample, decks: list[tuple[shapely.Geometry, np.ndarray, np.ndarr
     return capped
 
 
-# -- the decks ----------------------------------------------------------------------------------------------------------
+# -- the decks ---------------------------------------------------------------------------------------------------------
 
 @dataclass
 class _Span:
@@ -704,7 +705,7 @@ class Decks:
         return out
 
 
-# -- mesh pieces --------------------------------------------------------------------------------------------------------
+# -- mesh pieces -------------------------------------------------------------------------------------------------------
 # A piece is (positions (n, 3) easting, northing, height; normals (n, 3) in the same axes; uv (n, 2); triangles), its
 # triangles wound so each face's normal points the way its vertices' normals do.
 
@@ -845,7 +846,7 @@ def _collider(name: str, line: np.ndarray, base: np.ndarray, frame: LocalFrame) 
                 tri.astype(np.int64), renderable=False)
 
 
-# -- reflectors ---------------------------------------------------------------------------------------------------------
+# -- reflectors --------------------------------------------------------------------------------------------------------
 
 def reflectors(decks: Decks, rb: mesh.Ribbon, frame: LocalFrame, atlas) -> list[Mesh]:
     """A reflector on a short post on each parapet's top every REFLECTOR_SPACING_M, facing both ways: red seen by the
@@ -888,7 +889,7 @@ def reflectors(decks: Decks, rb: mesh.Ribbon, frame: LocalFrame, atlas) -> list[
     return out
 
 
-# -- checks -------------------------------------------------------------------------------------------------------------
+# -- checks ------------------------------------------------------------------------------------------------------------
 
 def checks(records: list[dict], frame: LocalFrame) -> list:
     """Each bridge as the validator's checks see it (`validate.BridgeCheck`), in AC axes."""
