@@ -1,13 +1,14 @@
-"""A local OSM index for production: drivable roads, building footprints and power lines in SQLite.
+"""A local OSM index for production: drivable roads, railways, paths, building footprints and power lines in SQLite.
 
 Public Overpass servers are for light development use only, so build workers
 read OpenStreetMap from a Geofabrik extract instead. Reading a 900 MB
 `.osm.pbf` for every job would take minutes, so the extract is indexed once:
 one pass keeps the drivable highway ways (the classes `overpass.DRIVABLE`
-asks for), closed `building=*` ways and overhead power lines (`power=line` and
-`power=minor_line`), with their node coordinates resolved, in a SQLite file with
-an R*Tree per kind on the ways' lon/lat boxes. A query
-then takes milliseconds and returns the same JSON shape as Overpass, so
+asks for), railways and paths (`overpass.RAILWAYS` and `overpass.PATHS`, which
+cross roads on bridges and under them), closed `building=*` ways and overhead
+power lines (`power=line` and `power=minor_line`), with their node coordinates
+resolved, in a SQLite file with an R*Tree per kind on the ways' lon/lat boxes.
+A query then takes milliseconds and returns the same JSON shape as Overpass, so
 `graph.build` works unchanged.
 
 Reading `.osm.pbf` needs pyosmium (the `osm` extra). Without it, `.osm` XML
@@ -53,13 +54,24 @@ import shapely
 from pyproj import Transformer
 
 from mapcreator.providers.base import LONLAT_CRS
-from mapcreator.providers.osm.overpass import DRIVABLE
+from mapcreator.providers.osm.overpass import DRIVABLE, PATHS, RAILWAYS
 
-# Bump when the table layout changes; queries refuse an index built for another layout. Layout 1 (no power
-# lines) still answers road and building queries, so a worker keeps building tracks until its index is rebuilt.
-SCHEMA_VERSION = "2"
-READABLE_SCHEMAS = ("1", "2")
+# Bump when the table layout changes; queries refuse an index built for another layout. An older layout still
+# answers what it holds, so a worker keeps building tracks until its index is rebuilt: layout 1 has no power lines,
+# and layouts 1 and 2 have no railways or paths.
+SCHEMA_VERSION = "3"
+READABLE_SCHEMAS = ("1", "2", "3")
 POWER_LINES = frozenset({"line", "minor_line"})
+RAILWAY_CLASSES = frozenset(RAILWAYS.split("|"))
+PATH_CLASSES = frozenset(PATHS.split("|"))
+# What a railway or path keeps of its tags: what it is, its name, whether it's on a bridge, in a tunnel or on an
+# embankment, and what decides how it looks. Its node ids are kept too: a path or level crossing that meets a road at
+# grade shares a node with it, and a bridge doesn't.
+LINE_TAGS = ("highway", "railway", "name", "ref", "bridge", "bridge:structure", "bridge:name", "layer", "tunnel",
+             "covered", "indoor", "location", "embankment", "cutting", "width", "surface", "service", "usage",
+             "gauge", "electrified", "footway", "area", "maxheight")
+# The kinds whose ways keep their node ids.
+_WITH_NODES = ("road", "railway", "path")
 # A power line's vertices that are mapped supports, stored per vertex in its tags as one letter each:
 # T for power=tower (or portal), P for power=pole, - for anything else.
 SUPPORTS_TAG = "mapcreator:supports"
@@ -76,18 +88,21 @@ _SCHEMA = """
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE ways (
     id INTEGER PRIMARY KEY,   -- OSM way id
-    kind TEXT NOT NULL,       -- 'road', 'building' or 'power'
+    kind TEXT NOT NULL,       -- 'road', 'railway', 'path', 'building' or 'power'
     tags_json TEXT NOT NULL,
     coords BLOB NOT NULL,     -- little-endian float64, (n, 2) lon/lat in way order
-    node_ids BLOB             -- little-endian int64, (n,) OSM node ids; roads only
+    node_ids BLOB             -- little-endian int64, (n,) OSM node ids; roads, railways and paths only
 );
--- One R*Tree per kind, so a road query in a city never wades through its buildings.
+-- One R*Tree per kind, so a road query in a city never wades through its buildings or footpaths.
 CREATE VIRTUAL TABLE road_rtree USING rtree(id, minx, maxx, miny, maxy);
 CREATE VIRTUAL TABLE building_rtree USING rtree(id, minx, maxx, miny, maxy);
 CREATE VIRTUAL TABLE power_rtree USING rtree(id, minx, maxx, miny, maxy);
+CREATE VIRTUAL TABLE railway_rtree USING rtree(id, minx, maxx, miny, maxy);
+CREATE VIRTUAL TABLE path_rtree USING rtree(id, minx, maxx, miny, maxy);
 """
-_RTREE = {"road": "road_rtree", "building": "building_rtree", "power": "power_rtree"}
-_COUNT = {"road": "roads", "building": "buildings", "power": "power_lines"}
+_RTREE = {"road": "road_rtree", "building": "building_rtree", "power": "power_rtree", "railway": "railway_rtree",
+          "path": "path_rtree"}
+_COUNT = {"road": "roads", "building": "buildings", "power": "power_lines", "railway": "railways", "path": "paths"}
 
 
 class IndexUnavailable(RuntimeError):
@@ -96,24 +111,34 @@ class IndexUnavailable(RuntimeError):
 
 @dataclass(slots=True)
 class _Way:
-    """A road, building or power line as either reader hands it over, with nodes of unknown location dropped."""
+    """A way of a kind the index keeps, as either reader hands it over, with nodes of unknown location dropped."""
 
     id: int
-    kind: str  # "road", "building" or "power"
+    kind: str  # "road", "railway", "path", "building" or "power"
     tags: dict[str, str]
     coords: np.ndarray  # (n, 2) float64 lon/lat in way order
-    refs: list[int] | None  # OSM node ids in line with `coords`, for roads; None for buildings
+    refs: list[int] | None  # OSM node ids in line with `coords`, for roads, railways and paths; None for the rest
     complete: bool  # every node's location was known
 
 
-def _kind(highway: str | None, building: str | None, closed: bool, power: str | None = None) -> str | None:
-    """Which kind of way this is, from the tags that decide it, or None to skip it unread."""
+def _kind(highway: str | None, building: str | None, closed: bool, power: str | None = None,
+          railway: str | None = None) -> str | None:
+    """Which kind of way this is, from the tags that decide it, or None to skip it unread.
+
+    A way tagged as two kinds is the first of road, building, power line, path and railway. So the kinds added later
+    (paths and railways, layout 3) take no way from the earlier ones: a former station drawn as a closed way with
+    `building` and `railway=disused` stays a building. A rail trail (a cycleway that also carries `railway=abandoned`)
+    is a path, and keeps both tags."""
     if highway in ROAD_CLASSES:
         return "road"
     if building not in (None, "no") and closed:
         return "building"
     if power in POWER_LINES:
         return "power"
+    if highway in PATH_CLASSES:
+        return "path"
+    if railway in RAILWAY_CLASSES:
+        return "railway"
     return None
 
 
@@ -122,12 +147,13 @@ def _kind(highway: str | None, building: str | None, closed: bool, power: str | 
 def build_index(source: str | os.PathLike, out: str | os.PathLike, *, reader: str = "auto",
                 locations: str = DEFAULT_LOCATIONS,
                 progress: Callable[[dict[str, int]], None] | None = None) -> dict[str, int]:
-    """Index the drivable roads, building footprints and power lines of an OSM file into a new SQLite file.
+    """Index the drivable roads, railways, paths, building footprints and power lines of an OSM file into a new
+    SQLite file.
 
     `reader` is "osmium" (pyosmium: .pbf or XML), "xml" (standard library: XML only) or "auto"
     (pyosmium when installed, else XML). `locations` picks pyosmium's node location store.
     `progress`, if given, is called with running counts every few hundred thousand ways.
-    Returns the counts: roads, buildings and power lines stored, and other tagged ways skipped.
+    Returns the counts: roads, buildings, power lines, railways and paths stored, and other tagged ways skipped.
     """
     src, dst = Path(source), Path(out)
     if not src.is_file():
@@ -136,7 +162,8 @@ def build_index(source: str | os.PathLike, out: str | os.PathLike, *, reader: st
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_name(dst.name + ".partial")
     tmp.unlink(missing_ok=True)
-    counts = {"roads": 0, "buildings": 0, "power_lines": 0, "skipped": 0}
+    counts = {"roads": 0, "buildings": 0, "power_lines": 0, "railways": 0, "paths": 0, "skipped": 0}
+    stored = [name for name in counts if name != "skipped"]
     next_report = _REPORT_EVERY
     try:
         with closing(sqlite3.connect(tmp)) as con:
@@ -144,7 +171,7 @@ def build_index(source: str | os.PathLike, out: str | os.PathLike, *, reader: st
             # 256 MB page cache holds a national extract's R*Tree nodes while they're being filled.
             con.executescript("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF; PRAGMA cache_size = -262144;"
                               + _SCHEMA)
-            batch: dict[str, list] = {"road": [], "building": [], "power": []}
+            batch: dict[str, list] = {kind: [] for kind in _RTREE}
             for way in ways:
                 row = _row(way) if way is not None else None
                 if row is None:
@@ -156,7 +183,7 @@ def build_index(source: str | os.PathLike, out: str | os.PathLike, *, reader: st
                 if len(batch[kind]) >= _BATCH:
                     _insert(con, kind, batch[kind])
                     batch[kind] = []
-                if progress and counts["roads"] + counts["buildings"] + counts["power_lines"] >= next_report:
+                if progress and sum(counts[name] for name in stored) >= next_report:
                     progress(dict(counts))
                     next_report += _REPORT_EVERY
             for kind, rows in batch.items():
@@ -168,6 +195,8 @@ def build_index(source: str | os.PathLike, out: str | os.PathLike, *, reader: st
                 "built": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "reader": header["reader"],
                 "road_classes": DRIVABLE,
+                "railway_classes": RAILWAYS,
+                "path_classes": PATHS,
                 **{k: str(v) for k, v in counts.items()},
             }
             con.executemany("INSERT INTO meta (key, value) VALUES (?, ?)", meta.items())
@@ -180,23 +209,34 @@ def build_index(source: str | os.PathLike, out: str | os.PathLike, *, reader: st
 
 
 def _row(way: _Way) -> tuple | None:
-    """The `ways` row for a road, building or power line, plus its coordinates, or None if too little is known."""
-    if way.kind == "road":
+    """The `ways` row for a way of a kept kind, plus its coordinates, or None if too little is known."""
+    if way.kind in _WITH_NODES:
         if len(way.coords) < 2:
             return None  # at the edge of an extract, a way can lose all but one node
-        tags, node_ids = way.tags, np.asarray(way.refs, dtype="<i8").tobytes()
+        tags, node_ids = _kept_tags(way.kind, way.tags), np.asarray(way.refs, dtype="<i8").tobytes()
     elif way.kind == "power":
         if len(way.coords) < 2:
             return None
-        tags, node_ids = _power_tags(way.tags), None
+        tags, node_ids = _kept_tags(way.kind, way.tags), None
     else:
         # A footprint with a node missing would be a different shape, so drop it whole.
         if not way.complete or len(way.coords) < 4:
             return None
-        tags, node_ids = _building_tags(way.tags), None
+        tags, node_ids = _kept_tags(way.kind, way.tags), None
     coords = way.coords.astype("<f8", copy=False)
     return (way.id, way.kind, json.dumps(tags, ensure_ascii=False, separators=(",", ":")), coords.tobytes(),
             node_ids, coords)
+
+
+def _kept_tags(kind: str, tags: dict[str, str]) -> dict[str, str]:
+    """The tags the index keeps for a way of this kind: all of a road's, and `LINE_TAGS` of a railway's or path's."""
+    if kind in ("railway", "path"):
+        return {k: v for k, v in tags.items() if k in LINE_TAGS}
+    if kind == "building":
+        return _building_tags(tags)
+    if kind == "power":
+        return _power_tags(tags)
+    return tags
 
 
 def _building_tags(tags: dict[str, str]) -> dict[str, str]:
@@ -249,7 +289,7 @@ def _open_reader(src: Path, reader: str, locations: str) -> tuple[Iterator[_Way 
 
 
 def _read_osmium(src: Path, locations: str) -> tuple[Iterator[_Way | None], dict[str, str]]:
-    """Ways through pyosmium. Yields None for a highway, building or power way that isn't kept."""
+    """Ways through pyosmium. Yields None for a highway, railway, building or power way that isn't kept."""
     try:
         import osmium
         import osmium.geom
@@ -267,11 +307,11 @@ def _read_osmium(src: Path, locations: str) -> tuple[Iterator[_Way | None], dict
         timestamp = r.header().get("osmosis_replication_timestamp", "")
 
     # Every node goes through the location store before the filters, so ways get their
-    # coordinates; only ways tagged highway, building or power ever reach Python.
+    # coordinates; only ways tagged highway, railway, building or power ever reach Python.
     fp = (osmium.FileProcessor(str(src))
           .with_locations(locations)
           .with_filter(osmium.filter.EntityFilter(osmium.osm.WAY))
-          .with_filter(osmium.filter.KeyFilter("highway", "building", "power")))
+          .with_filter(osmium.filter.KeyFilter("highway", "railway", "building", "power")))
     header = {"reader": f"pyosmium {osmium.version.pyosmium_release}", "osm_timestamp": timestamp}
     # Which nodes are towers and poles, for the power lines' supports: a pass over tagged nodes only (about 650,000
     # for Australia), before the ways.
@@ -283,19 +323,20 @@ def _read_osmium(src: Path, locations: str) -> tuple[Iterator[_Way | None], dict
 
     def ways() -> Iterator[_Way | None]:
         # Per-node access from Python costs microseconds a node, and a national extract has tens
-        # of millions of them, so coordinates come from one WKB call per way. Only roads need
-        # node ids. A way with a node of unknown location (the edge of an extract) can't be made
-        # into WKB, so it takes the slow path, which drops that node.
+        # of millions of them, so coordinates come from one WKB call per way. Only roads, railways
+        # and paths keep node ids (power lines read them for their supports). A way with a node of
+        # unknown location (the edge of an extract) can't be made into WKB, so it takes the slow
+        # path, which drops that node.
         for w in fp:
             tags = w.tags
             building = tags.get("building")
-            kind = _kind(tags.get("highway"), building, w.is_closed(), tags.get("power"))
+            kind = _kind(tags.get("highway"), building, w.is_closed(), tags.get("power"), tags.get("railway"))
             if kind is None:
                 yield None
                 continue
             try:
                 coords = _wkb_coords(wkb.create_linestring(w, every_node))
-                refs = [n.ref for n in w.nodes] if kind in ("road", "power") else None
+                refs = [n.ref for n in w.nodes] if kind in (*_WITH_NODES, "power") else None
                 complete = True
             except Exception:  # pyosmium raises InvalidLocationError, or a geometry error for one node
                 refs, points = [], []
@@ -306,7 +347,7 @@ def _read_osmium(src: Path, locations: str) -> tuple[Iterator[_Way | None], dict
                         points.append((loc.lon, loc.lat))
                 complete = len(refs) == len(w.nodes)
                 coords = np.array(points, dtype="<f8").reshape(-1, 2)
-                refs = refs if kind in ("road", "power") else None
+                refs = refs if kind in (*_WITH_NODES, "power") else None
             # Reading tags costs microseconds each, and most footprints are tagged building=yes alone.
             tag_dict = {"building": building} if kind == "building" and len(tags) == 1 else dict(tags)
             if kind == "power":
@@ -344,7 +385,7 @@ def _fixed(value: str) -> float:
 def _read_xml(src: Path) -> Iterator[_Way | None]:
     """Ways from an OSM XML file, in one pass (nodes come before ways in a well-formed file).
 
-    Yields None for a highway, building or power way that isn't kept, like the pyosmium reader.
+    Yields None for a highway, railway, building or power way that isn't kept, like the pyosmium reader.
     """
     nodes: dict[int, tuple[float, float]] = {}
     supports: dict[int, str] = {}
@@ -363,10 +404,11 @@ def _read_xml(src: Path) -> Iterator[_Way | None]:
                         supports[int(el.get("id"))] = _SUPPORT_CODE[tag.get("v")]
             elif el.tag == "way":
                 tags = {t.get("k"): t.get("v") for t in el.iter("tag")}
-                if "highway" in tags or "building" in tags or "power" in tags:
+                if "highway" in tags or "railway" in tags or "building" in tags or "power" in tags:
                     all_refs = [int(nd.get("ref")) for nd in el.iter("nd")]
                     closed = len(all_refs) > 1 and all_refs[0] == all_refs[-1]
-                    kind = _kind(tags.get("highway"), tags.get("building"), closed, tags.get("power"))
+                    kind = _kind(tags.get("highway"), tags.get("building"), closed, tags.get("power"),
+                                 tags.get("railway"))
                     if kind is None:
                         yield None
                     else:
@@ -374,7 +416,7 @@ def _read_xml(src: Path) -> Iterator[_Way | None]:
                         coords = np.array([nodes[r] for r in refs], dtype="<f8").reshape(-1, 2)
                         if kind == "power":
                             tags[SUPPORTS_TAG] = "".join(supports.get(r, "-") for r in refs)
-                        yield _Way(int(el.get("id")), kind, tags, coords, refs if kind == "road" else None,
+                        yield _Way(int(el.get("id")), kind, tags, coords, refs if kind in _WITH_NODES else None,
                                    len(refs) == len(all_refs))
             root.clear()  # keep memory flat: each top-level element is finished with
 
@@ -415,6 +457,10 @@ def _candidates(con: sqlite3.Connection, kind: str, bbox: tuple[float, float, fl
         (east, west, north, south)).fetchall()
 
 
+def _schema(con: sqlite3.Connection) -> str:
+    return con.execute("SELECT value FROM meta WHERE key = 'schema'").fetchone()[0]
+
+
 def query(index_path: str | os.PathLike, bbox: tuple[float, float, float, float]) -> dict:
     """The drivable roads crossing `bbox` as Overpass JSON: `{"elements": [nodes..., ways...]}`.
 
@@ -425,6 +471,55 @@ def query(index_path: str | os.PathLike, bbox: tuple[float, float, float, float]
     area = _check_bbox(bbox)
     with closing(_connect(index_path)) as con:
         rows = _candidates(con, "road", area)
+    return _overpass_json(rows, area)
+
+
+def railways_and_paths(index_path: str | os.PathLike, bbox: tuple[float, float, float, float]) -> dict:
+    """The railways and paths crossing `bbox` as Overpass JSON, like `query` gives the roads: each way whole, with
+    its node ids (a path or railway meeting a road at grade shares a node with it; a bridge doesn't) and `LINE_TAGS`
+    of its tags. Never routed on: `graph.build` must not be given them with the roads.
+
+    An index built before railways and paths were kept (layouts 1 and 2) raises `IndexUnavailable`, and the caller
+    goes on without them until the index is rebuilt.
+    """
+    area = _check_bbox(bbox)
+    with closing(_connect(index_path)) as con:
+        if _schema(con) in ("1", "2"):
+            raise IndexUnavailable(f"{Path(index_path).name} was built before railways and paths were indexed; "
+                                   "rebuild it")
+        rows = sorted(_candidates(con, "railway", area) + _candidates(con, "path", area), key=lambda r: r[0])
+    return _overpass_json(rows, area)
+
+
+def as_indexed(data: dict, kinds: tuple[str, ...]) -> dict:
+    """An Overpass answer narrowed to what the index keeps of the given kinds ("road", "railway", "path"), so the
+    development fallback answers as the index does: those kinds' ways in way id order, with the tags the index keeps
+    and the nodes they use (untagged). Overpass selects by one tag at a time, so a way the index files under another
+    kind is left out: a residential street that also carries `railway=abandoned` is a road, not a railway."""
+    elements = data.get("elements", [])
+    located = {e["id"]: (e["lon"], e["lat"]) for e in elements if e.get("type") == "node" and "lon" in e}
+    used: dict[int, tuple[float, float]] = {}
+    ways = []
+    for e in sorted((e for e in elements if e.get("type") == "way"), key=lambda e: e["id"]):
+        tags, refs = e.get("tags") or {}, e.get("nodes") or []
+        closed = len(refs) > 1 and refs[0] == refs[-1]
+        kind = _kind(tags.get("highway"), tags.get("building"), closed, tags.get("power"), tags.get("railway"))
+        if kind not in kinds or kind not in _WITH_NODES:
+            continue
+        refs = [r for r in refs if r in located]
+        if len(refs) < 2:
+            continue
+        used.update((r, located[r]) for r in refs)
+        ways.append({"type": "way", "id": e["id"], "nodes": refs, "tags": _kept_tags(kind, tags)})
+    nodes = [{"type": "node", "id": i, "lat": lat, "lon": lon} for i, (lon, lat) in sorted(used.items())]
+    out = {"version": data.get("version", 0.6), "generator": data.get("generator", ""), "elements": nodes + ways}
+    if data.get("remark"):
+        out["remark"] = data["remark"]
+    return out
+
+
+def _overpass_json(rows: list[tuple], area: tuple[float, float, float, float]) -> dict:
+    """Overpass JSON for the candidate rows (id, tags_json, coords, node_ids) that cross `area`."""
     if not rows:
         return {"version": 0.6, "generator": "mapcreator osm index", "elements": []}
     coords = [np.frombuffer(r[2], dtype="<f8").reshape(-1, 2) for r in rows]
@@ -486,8 +581,7 @@ def power_lines(index_path: str | os.PathLike, bbox: tuple[float, float, float, 
     lonlat = Transformer.from_crs(epsg, LONLAT_CRS, always_xy=True).transform_bounds(minx, miny, maxx, maxy,
                                                                                  densify_pts=21)
     with closing(_connect(index_path)) as con:
-        schema = con.execute("SELECT value FROM meta WHERE key = 'schema'").fetchone()[0]
-        if schema == "1":
+        if _schema(con) == "1":
             raise IndexUnavailable(f"{Path(index_path).name} was built before power lines were indexed; rebuild it")
         rows = _candidates(con, "power", _check_bbox(lonlat))
     to_xy = Transformer.from_crs(LONLAT_CRS, epsg, always_xy=True)
@@ -526,7 +620,8 @@ def _mga_epsg(lon: float) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m mapcreator.providers.osm.index",
-                                 description="Build or inspect the local OSM index of roads, buildings and power lines.")
+                                 description="Build or inspect the local OSM index of roads, railways, paths, "
+                                             "buildings and power lines.")
     sub = ap.add_subparsers(dest="command", required=True)
     b = sub.add_parser("build", help="index an OSM extract (.osm.pbf needs pyosmium; .osm XML works without)")
     b.add_argument("extract", type=Path)
@@ -535,7 +630,7 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--locations", default=DEFAULT_LOCATIONS,
                    help="pyosmium node location store: flex_mem (default, in memory) or "
                         "sparse_file_array,<file> to keep node locations on disk")
-    q = sub.add_parser("query", help="count the roads and buildings in a box, for debugging")
+    q = sub.add_parser("query", help="count the roads, railways, paths and buildings in a box, for debugging")
     q.add_argument("index", type=Path)
     for name in ("west", "south", "east", "north"):
         q.add_argument(name, type=float)
@@ -546,14 +641,14 @@ def main(argv: list[str] | None = None) -> int:
     t0 = time.perf_counter()
     if args.command == "build":
         def report(c: dict[str, int]) -> None:
-            print(f"  {c['roads']:,} roads, {c['buildings']:,} buildings, {c['power_lines']:,} power lines "
-                  f"({time.perf_counter() - t0:.0f} s)",
+            print(f"  {c['roads']:,} roads, {c['railways']:,} railways, {c['paths']:,} paths, "
+                  f"{c['buildings']:,} buildings, {c['power_lines']:,} power lines ({time.perf_counter() - t0:.0f} s)",
                   file=sys.stderr, flush=True)
 
         counts = build_index(args.extract, args.out, reader=args.reader, locations=args.locations, progress=report)
         size_mb = args.out.stat().st_size / 1e6
-        print(f"indexed {counts['roads']:,} roads, {counts['buildings']:,} buildings and "
-              f"{counts['power_lines']:,} power lines "
+        print(f"indexed {counts['roads']:,} roads, {counts['railways']:,} railways, {counts['paths']:,} paths, "
+              f"{counts['buildings']:,} buildings and {counts['power_lines']:,} power lines "
               f"({counts['skipped']:,} other ways skipped) from {args.extract.name} "
               f"in {time.perf_counter() - t0:.1f} s: {args.out.name}, {size_mb:,.1f} MB")
         return 0
@@ -562,6 +657,12 @@ def main(argv: list[str] | None = None) -> int:
     meta = metadata(args.index)
     roads = query(args.index, bbox)
     t_roads = time.perf_counter() - t0
+    t1 = time.perf_counter()
+    try:
+        lines = railways_and_paths(args.index, bbox)
+    except IndexUnavailable:
+        lines = None  # an index from before railways and paths were kept
+    t_lines = time.perf_counter() - t1
     epsg = args.epsg or _mga_epsg((args.west + args.east) / 2)
     projected = Transformer.from_crs(LONLAT_CRS, epsg, always_xy=True).transform_bounds(*bbox, densify_pts=21)
     t1 = time.perf_counter()
@@ -574,6 +675,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"index: {meta.get('source', '?')}, OSM data as of {meta.get('osm_timestamp') or 'unknown'}, "
           f"built {meta.get('built', '?')}")
     print(f"roads: {len(roads['elements']) - n_nodes:,} ways, {n_nodes:,} nodes ({t_roads:.3f} s)")
+    if lines is None:
+        print("railways and paths: not in this index (built before layout 3); rebuild it")
+    else:
+        ways = [e for e in lines["elements"] if e["type"] == "way"]
+        n_rail = sum(w["tags"].get("highway") not in PATH_CLASSES for w in ways)
+        print(f"railways and paths: {n_rail:,} railways, {len(ways) - n_rail:,} paths ({t_lines:.3f} s)")
     print(f"buildings: {len(footprints):,} in EPSG:{epsg} ({t_buildings:.3f} s)")
     return 0
 
