@@ -25,6 +25,7 @@ import numpy as np
 from mapcreator import cpus
 from mapcreator.config import Settings
 from mapcreator.core import furniture, grass, junctions, mesh, police_car, reach, roadside, stub_closures, stubs
+from mapcreator.core import crossing_roads
 from mapcreator.core import roundabouts as rb_core
 from mapcreator.core import water as water_core
 from mapcreator.core.layout import layouts_for
@@ -47,6 +48,8 @@ STUBS = "stubs.json"
 STUB_REBUILDS = 3
 # The roundabouts as built: the section stage's plan less any ring or exit left out here (`rb_core.settle`).
 ROUNDABOUTS = "roundabouts.json"
+# The roads crossing the route as built: the section stage's plan, each road's pieces drawn and those left out.
+CROSSING_ROADS = "crossing_roads.json"
 
 log = logging.getLogger(__name__)
 
@@ -122,12 +125,18 @@ def built_roundabouts(work: WorkDir, job: Job) -> list[dict]:
     return work.read_json(STAGE, ROUNDABOUTS)["roundabouts"]
 
 
-def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=()):
+def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(), crossing=None, crossed=None):
     """The road's ribbon, the stubs (`stubs.build`) and roundabouts (`rb_core.build`), water, and the road, verge, stub,
-    ring and terrain meshes for `plan` and `rings`."""
+    ring and terrain meshes for `plan` and `rings`. `crossing`: the roads crossing the route to draw
+    (`core.crossing_roads`), kept off the ground the rest takes; what was drawn goes in `crossed["built"]`."""
     ring_pts = rb_core.centres(rings) if rings else None
+    # The road's skirt is held short of the roads crossing it as well (`core.crossing_roads`), as of a stub's.
+    cross_pts = crossing_roads.centres(crossing)
     if rings:
-        caps = stubs.mainline_caps(plan, c["xy"], c["heading"], extra=ring_pts)
+        caps = stubs.mainline_caps(plan, c["xy"], c["heading"],
+                                   extra=ring_pts if cross_pts is None else np.vstack([ring_pts, cross_pts]))
+    elif cross_pts is not None:
+        caps = stubs.mainline_caps(plan, c["xy"], c["heading"], extra=cross_pts)
     else:
         caps = stubs.mainline_caps(plan, c["xy"], c["heading"]) if plan else (None, None)
     rb = mesh.build_ribbon(c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
@@ -145,6 +154,15 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=())
         edge_break = {k: ring_built.edge_break[k] | (built.edge_break[k] if built is not None else False)
                       for k in "LR"}
         extra = rb_core.footprint(built, ring_built, cut)
+    cross_built = None
+    if crossing and crossing["roads"]:
+        # Roads crossing the route (`core.crossing_roads`): each its own ribbon, clear of the ground taken already.
+        taken = mesh.terrain_region(rb, TERRAIN_CORRIDOR_M, extra)[1]
+        others = np.vstack([main_xy] + [stubs._centre(st) for st in plan])
+        cross_built = crossing_roads.build(crossing, taken, frame, dem.sample, skirt=gmap is None, others_xy=others)
+        extra = crossing_roads.footprint(extra, cross_built, len(c["s"]))
+        if crossed is not None:
+            crossed["built"] = cross_built
     water = _water(c, rb, dem, settings, region, extra)
     # Inside water the terrain sits just under the surface, so the land never shows through it.
     ground = water_core.lowered(dem.sample, water) if water else dem.sample
@@ -161,6 +179,8 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=())
         meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None, cut=built.cut,
                                     edge_break=built.edge_break)
         meshes += built.meshes
+    if cross_built is not None:
+        meshes += cross_built.meshes
     if gmap is None:
         meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, ground, frame, extra=extra)
     else:
@@ -197,9 +217,14 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     lonlat = region.to_lonlat().transform(c["xy"][::50, 0], c["xy"][::50, 1])
     jurisdiction = police_car.jurisdiction_for(region, list(zip(*lonlat)))
     reverses = tuple(lay.reverse for lay in layouts_for(job.layouts.value))
+    # Roads crossing the route (`core.crossing_roads`): the ground under each deck over it is held below its underside.
+    crossing = section_stage.crossing_roads(work)
+    ground_dem = crossing_roads.GroundUnderDecks(dem, crossing["decks"]) if crossing and crossing["decks"] else dem
+    crossed: dict = {}
 
     def build(stubs_now):
-        rb, built, water, ground_meshes = _road_and_ground(stubs_now, c, sec, frame, dem, gmap, settings, region)
+        rb, built, water, ground_meshes = _road_and_ground(stubs_now, c, sec, frame, ground_dem, gmap, settings, region,
+                                                           crossing=crossing, crossed=crossed)
         closed = None
         if stubs_now:
             # Each stub closed off the stage, and police cars at some of the major closures (`core.stub_closures`),
@@ -220,8 +245,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         # their exits closed with the side roads; a ring that fails is left out whole (`rb_core.settle`).
         def build_rings(state):
             stubs_now, rings_now = state
-            rb, pair, water, ground_meshes = _road_and_ground(stubs_now, c, sec, frame, dem, gmap, settings, region,
-                                                              rings=rings_now)
+            rb, pair, water, ground_meshes = _road_and_ground(stubs_now, c, sec, frame, ground_dem, gmap, settings,
+                                                              region, rings=rings_now, crossing=crossing,
+                                                              crossed=crossed)
             closed = None
             every = stubs_now + rb_core.exit_stubs(rings_now)
             if every:
@@ -308,6 +334,19 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         work.write_json(STAGE, CLOSURES, {"version": 1, "closures": closed.records})
         junction_stats["closures"] = closed.stats
 
+    # The bridges over the route (`core.crossing_roads`), and the roads crossing it as drawn.
+    deck_meshes, deck_stats = crossing_roads.decks(crossing, frame, ground_dem.sample)
+    meshes += deck_meshes
+    (out / CROSSING_ROADS).unlink(missing_ok=True)
+    cross_stats = None
+    if crossing:
+        cross_built = crossed.get("built")
+        drawn = crossing_roads.as_built(crossing, cross_built) if cross_built is not None else {
+            **crossing, "roads": [], "left_out": []}
+        work.write_json(STAGE, CROSSING_ROADS, drawn)
+        cross_stats = {**crossing_roads.summary(drawn), "decks": deck_stats,
+                       "roads_built": cross_built.stats if cross_built is not None else {"pieces": 0}}
+
     used = {m.material for m in meshes}
     scene = Scene(
         frame=frame,
@@ -320,6 +359,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             # A roundabout island's kerb (`core.roundabouts`).
             **({rb_core.KERB_MATERIAL: Material(rb_core.KERB_MATERIAL, texture=rb_core.KERB_TEXTURE)}
                if rb_core.KERB_MATERIAL in used else {}),
+            # The bridges over the route: their concrete and its darker underside (`core.crossing_roads`).
+            **{name: Material(name, texture=crossing_roads.CONCRETE_TEXTURE, properties=props)
+               for name, props in crossing_roads.KN5_PROPERTIES.items() if name in used},
             # The terrain's materials: `terrain` alone, or with a vegetation map those of its ground classes.
             **{c.material: Material(c.material, texture=c.texture) for c in grass.CLASSES if c.material in used},
             "rail": Material("rail", texture="steel"),
@@ -358,4 +400,5 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "furniture": furn_stats,
         "water": water_summary,
         "ground": ground_summary,
-    } | ({"junctions": junction_stats} if junction_stats is not None else {})
+    } | ({"junctions": junction_stats} if junction_stats is not None else {}) | (
+        {"crossing_roads": cross_stats} if cross_stats is not None else {})

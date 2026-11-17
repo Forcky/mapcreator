@@ -32,6 +32,8 @@ FORMAT_VERSION = 1
 
 CLIP_M = 150.0  # each crossing way's line is kept this far either side of the crossing, along the way
 SAME_POINT_M = 0.05  # a crossing this close to a node the two ways share is that node: a junction, not a crossing
+# The crossing road followed past its way's ends (`road_through`): into the way that turns least, if under this.
+ROAD_TURN_MAX_DEG = 60.0
 # The crossing way's tags kept in crossings.json.
 KEEP_TAGS = ("highway", "name", "ref", "bridge", "tunnel", "layer", "lanes", "width", "oneway", "surface", "maxspeed",
              "bridge:structure", "bridge:name", "maxheight")
@@ -122,6 +124,7 @@ def find(net, route_xy: np.ndarray, route_seg_way: np.ndarray, *, to_lonlat=None
         at_point.setdefault((p[0], p[1]), []).append(i)
     route_nodes = {n for p in route_xy.tolist() for n in at_point.get((p[0], p[1]), []) if on_route_way[n]}
     lines = _way_lines(net)
+    at_node = None  # each node's ways, for following a crossing road past its way's ends (`road_through`)
     found, unresolved, seen = [], [], set()
     for wi, (nodes, line) in lines.items():
         if wi in route_ways:
@@ -162,6 +165,10 @@ def find(net, route_xy: np.ndarray, route_seg_way: np.ndarray, *, to_lonlat=None
             if to_lonlat is not None:
                 lon, lat = to_lonlat.transform(*record["xy"])
                 record["lonlat"] = [round(float(lon), 7), round(float(lat), 7)]
+            if record["relation"]:
+                if at_node is None:
+                    at_node = _node_ways(lines)
+                record["road"] = road_through(net, lines, at_node, wi, j, p, route_ways)
             (found if record["relation"] else unresolved).append(record)
     found.sort(key=lambda c: (c["at_m"], c["way_id"]))
     unresolved.sort(key=lambda c: (c["at_m"], c["way_id"]))
@@ -171,6 +178,123 @@ def find(net, route_xy: np.ndarray, route_seg_way: np.ndarray, *, to_lonlat=None
             "rule": {"levels": "layer, else 1 on a bridge and -1 in a tunnel, else 0", "clip_m": CLIP_M},
             "crossings": [{"id": n, **c} for n, c in enumerate(found)],
             "unresolved": unresolved}
+
+
+def _node_ways(lines: dict) -> dict[int, list[tuple[int, int]]]:
+    """Each node's (way index, position in the way's node list), for every way through it."""
+    out: dict[int, list[tuple[int, int]]] = {}
+    for wi, (nodes, _) in lines.items():
+        for k, n in enumerate(nodes.tolist()):
+            out.setdefault(n, []).append((wi, k))
+    return out
+
+
+def _step(nodes: np.ndarray, k: int, d: int) -> int | None:
+    """The next position from k in direction d along a way's nodes, round a closed way, or None at its end."""
+    closed = len(nodes) > 2 and nodes[0] == nodes[-1]
+    nxt = k + d
+    if closed:
+        last = len(nodes) - 1  # the closing node repeats the first
+        if nxt > last:
+            nxt = 1
+        elif nxt < 0:
+            nxt = last - 1
+    return nxt if 0 <= nxt < len(nodes) else None
+
+
+def _follow(lines: dict, at_node: dict, route_ways: set, way: int, k: int, d: int, reach: float,
+            first: np.ndarray) -> tuple[list[np.ndarray], list[tuple[int, float, float]], str]:
+    """The road's points from `first` (on way `way` between its node k-d and node k), through node k and on in
+    direction d, past the way's end into the way that turns least (under ROAD_TURN_MAX_DEG, and not one of the
+    route's own), until `reach` metres. Returns the points, each way's (index, from, to) metres from `first`, and why
+    it stopped: `length`, `dead_end` (no way carries on) or `route` (only the route's own ways do)."""
+    pts, ways, dist, used = [], [], 0.0, {(way, d)}
+    prev = np.asarray(first, float)
+    while True:
+        nodes, line = lines[way]
+        start, guard = dist, 0
+        while k is not None and guard <= len(nodes):
+            p = line[k]
+            dist += float(np.hypot(*(p - prev)))
+            pts.append(p)
+            prev = p
+            guard += 1
+            if dist >= reach:
+                ways.append((way, start, dist))
+                return pts, ways, "length"
+            nxt = _step(nodes, k, d)
+            if nxt is None:
+                break
+            k = nxt
+        ways.append((way, start, dist))
+        node = int(nodes[k])
+        back = pts[-2] if len(pts) > 1 else np.asarray(first, float)
+        heading = pts[-1] - back
+        best, blocked = None, False
+        for w2, p2 in at_node.get(node, []):
+            if w2 == way:
+                continue
+            n2, l2 = lines[w2]
+            for d2 in (1, -1):
+                q = _step(n2, p2, d2)
+                if q is None or (w2, d2) in used:
+                    continue
+                out = l2[q] - l2[p2]
+                cos = float(heading @ out) / max(float(np.hypot(*heading) * np.hypot(*out)), 1e-12)
+                turn = math.degrees(math.acos(max(-1.0, min(1.0, cos))))
+                if turn >= ROAD_TURN_MAX_DEG:
+                    continue
+                if w2 in route_ways:
+                    blocked = True
+                    continue
+                if best is None or turn < best[0]:
+                    best = (turn, w2, q, d2)
+        if best is None:
+            return pts, ways, "route" if blocked else "dead_end"
+        _, way, k, d = best
+        used.add((way, d))
+
+
+def road_through(net, lines: dict, at_node: dict, wi: int, j: int, p: np.ndarray, route_ways: set,
+                 reach: float = CLIP_M) -> dict:
+    """The crossing road's line within `reach` either side of its crossing at `p` (on segment j of way `wi`): along
+    its own way and on past either end into the way that carries straight on (`_follow`), so a road drawn some way
+    past the crossing doesn't stop where its way does (a bridge is usually its own way). The content of a crossing's
+    `road` in crossings.json: `line`, `at_m` (where the crossing is along it), `ways` (each way along it: `way_id`,
+    `from_m`, `to_m`, `bridge`, `tunnel`, `level`, `highway`) and `ends` (why it stopped, before and after)."""
+    p = np.asarray(p, float)
+    fwd, fwd_ways, fwd_end = _follow(lines, at_node, route_ways, wi, j + 1, 1, reach, p)
+    bwd, bwd_ways, bwd_end = _follow(lines, at_node, route_ways, wi, j, -1, reach, p)
+    line = np.vstack([np.asarray(bwd[::-1]).reshape(-1, 2), p[None], np.asarray(fwd).reshape(-1, 2)])
+    s = cumulative(line)
+    at = float(s[len(bwd)])
+    clipped, at_clipped = _clip(line, at, reach)
+    lo = at - at_clipped
+    spans: list[tuple[int, float, float]] = []
+    for w, a, b in reversed(bwd_ways):
+        spans.append((w, at - b, at - a))
+    for w, a, b in fwd_ways:
+        spans.append((w, at + a, at + b))
+    out_ways = []
+    length = float(cumulative(clipped)[-1])
+    for w, a, b in spans:
+        a, b = max(a - lo, 0.0), min(b - lo, length)
+        if b - a <= 1e-6:
+            continue
+        if out_ways and out_ways[-1]["way"] == w and abs(out_ways[-1]["to_m"] - a) < 1e-6:
+            out_ways[-1]["to_m"] = b  # the crossing's own way, either side of the crossing
+            continue
+        out_ways.append({"way": w, "from_m": a, "to_m": b})
+    for o in out_ways:
+        w = o.pop("way")
+        tags = net.ways[w].get("tags") or {}
+        o.update({"way_id": net.ways[w]["id"], "from_m": round(o["from_m"], 2), "to_m": round(o["to_m"], 2),
+                  "bridge": is_bridge(tags), "tunnel": is_tunnel(tags), "level": level(tags),
+                  "highway": tags.get("highway")})
+    out_ways = [{k: o[k] for k in ("way_id", "from_m", "to_m", "bridge", "tunnel", "level", "highway")}
+                for o in out_ways]
+    return {"line": np.round(clipped, 2).tolist(), "at_m": round(at_clipped, 2), "ways": out_ways,
+            "ends": [bwd_end, fwd_end]}
 
 
 def over(crossings: list[dict]) -> list[dict]:
