@@ -22,6 +22,7 @@ from dataclasses import asdict
 
 import numpy as np
 
+from mapcreator import cpus
 from mapcreator.config import Settings
 from mapcreator.core import furniture, grass, junctions, mesh, police_car, reach, roadside, stub_closures, stubs
 from mapcreator.core import roundabouts as rb_core
@@ -90,7 +91,7 @@ def _ground_shares(meshes, frame: LocalFrame, centre_xy: np.ndarray) -> dict:
     a, b, cc = p[:, 0], p[:, 1], p[:, 2]
     area = np.abs((b[:, 0] - a[:, 0]) * (cc[:, 2] - a[:, 2]) - (cc[:, 0] - a[:, 0]) * (b[:, 2] - a[:, 2])) / 2
     en = np.column_stack([p[:, :, 0].mean(axis=1) + frame.e0, -p[:, :, 2].mean(axis=1) + frame.n0])
-    near = cKDTree(centre_xy).query(en, distance_upper_bound=250.0, workers=-1)[0] <= 250.0
+    near = cKDTree(centre_xy).query(en, distance_upper_bound=250.0, workers=cpus.count())[0] <= 250.0
     out = {}
     for key, weight in (("all", area), ("within_250m", area * near)):
         per_mesh = np.bincount(which, weights=weight, minlength=len(ground))

@@ -10,7 +10,7 @@ from collections import Counter
 
 import numpy as np
 
-from mapcreator import __version__, buildinfo
+from mapcreator import __version__, buildinfo, cpus
 from mapcreator.config import Settings
 from mapcreator.core import roundabouts as rb_core
 from mapcreator.core import (ai_line, closures, furniture, grass, grassfx, junctions, kn5, package, stubs, textures,
@@ -72,7 +72,7 @@ def _preview_raster(dem, frame, pframe, road_xy) -> tuple[np.ndarray, np.ndarray
     ge, gn, _ = frame.from_ac(np.stack([gx, np.zeros_like(gx), gz], axis=-1))
     heights = dem.sample(ge, gn)
     cell = float(xs[1] - xs[0])
-    d, _ = cKDTree(road_xy[::5]).query(np.column_stack([ge.ravel(), gn.ravel()]), workers=-1)
+    d, _ = cKDTree(road_xy[::5]).query(np.column_stack([ge.ravel(), gn.ravel()]), workers=cpus.count())
     fade = np.clip((PREVIEW_REACH_M - 100 - d.reshape(gx.shape)) / 400.0, 0, 1)
     fade[~np.isfinite(heights)] = 0
     return package.hillshade(heights, cell), fade

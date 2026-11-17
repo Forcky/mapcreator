@@ -32,6 +32,10 @@ Stopping: the first Ctrl+C or SIGTERM finishes the current job and exits;
 a second one aborts at once, killing the build, and the abandoned job goes
 back in the queue when its heartbeat goes stale.
 
+A build uses the CPUs its container may use (`mapcreator.cpus`), not every CPU
+the host has: the worker sizes the build process's thread pools before it
+starts, and scipy's queries ask for as many threads.
+
 A build that runs past `build_timeout_s` is taken to be stuck (a hung
 download, say): the worker stops heartbeating, kills the build process and
 anything it started, reports nothing, and carries on. The job goes stale and
@@ -62,7 +66,7 @@ from pathlib import Path
 import httpx
 from pydantic import ValidationError
 
-from mapcreator import buildinfo
+from mapcreator import buildinfo, cpus
 from mapcreator.job import Job
 from mapcreator.service.settings import ServiceSettings
 from mapcreator.service.storage import Storage, storage_for
@@ -653,6 +657,8 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("give the web app's base URL with --api or MAPCREATOR_API_BASE")
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    cpus.limit_thread_pools()  # before any build process starts: they inherit it
+    log.info("builds use %d CPUs", cpus.count())
     stop = threading.Event()
 
     def on_signal(signum, frame) -> None:
