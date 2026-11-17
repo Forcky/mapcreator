@@ -380,3 +380,54 @@ def test_the_road_surface_takes_the_one_closest_below_where_a_road_runs_under_th
     assert road.height(2.0, 2.0, below=5.0) == pytest.approx(2.0)  # a point under the deck: the road below
     assert road.height(2.0, 2.0, below=11.0, within=2.0) == pytest.approx(10.0)
     assert road.height(2.0, 2.0, below=6.0, within=2.0) is None  # a gate's end over the road below: off the road
+
+
+def test_a_road_drawn_under_the_open_deck_runs_on_under_it_with_no_hole_round_it():
+    """With the deck's span out of the footprint (`core.crossing_roads` clips its roads against it), a road under the
+    route's bridge is drawn whole, the points under the deck keep off it, and the deck still passes its checks."""
+    import math
+
+    from mapcreator.core import crossing_roads as cr
+
+    dem = gully()
+    c, sec = road(dem)
+    line = [[200.0, d] for d in np.linspace(-150.0, 150.0, 31)]
+    under = {"id": 0, "at_m": 200.0, "xy": [200.0, 0.0], "relation": "under", "angle_deg": 90.0, "way_id": 7,
+             "highway": "secondary", "name": "Gully Road", "level": 0.0, "bridge": False, "tunnel": False,
+             "tags": {"highway": "secondary"}, "line": line, "line_at_m": 150.0,
+             "route": {"way_id": 1, "level": 1.0, "bridge": True, "tunnel": False},
+             "road": {"line": line, "at_m": 150.0, "ends": ["length", "length"],
+                      "ways": [{"way_id": 7, "from_m": 0.0, "to_m": 300.0, "bridge": False, "tunnel": False,
+                                "level": 0.0, "highway": "secondary"}]}}
+    p = cr.plan([under], c, sec, dem)
+    assert p["roads"], p
+    plan = bridges.plan(c)
+    decks = bridges.Decks(plan, c, sec)
+    rb = mesh.build_ribbon(c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
+                           sec["slope_left"], sec["slope_right"], decks.embanked(dem), **decks.verges())
+    extra = decks.footprint(rb, None)
+    taken = mesh.terrain_region(rb, 120.0, extra)[1]
+    b = cr.build(p, taken, FRAME, dem, skirt=True)
+    (piece,) = b.pieces
+    assert piece["length_m"] == pytest.approx(p["roads"][0]["length_m"], abs=0.5)  # whole, under the deck too
+    extra = cr.footprint(extra, b, len(c["s"]))
+    assert extra.spans  # the deck's span stays out of the footprint
+    ground = decks.ground(dem)
+    extra = decks.footprint_points(extra, ground)
+    meshes = mesh.ribbon_meshes(rb, c["s"], FRAME, cut=decks.cut(None), kerb=decks.kerb()) + b.meshes
+    meshes += mesh.terrain_meshes(rb, 120.0, ground, FRAME, extra=extra)
+    deck_meshes, _ = decks.meshes(rb, FRAME, ground)
+    road_poly = shapely.Polygon(piece["outline"]).buffer(0)
+    mine = np.vstack([np.asarray(pts) for pts, _h in extra.edges[-3:]])  # the abutments' feet and the points under
+    assert len(mine) and (np.abs(mine[:, 1]) < 6.0).all()
+    assert (shapely.distance(road_poly, shapely.points(mine)) >= bridges.UNDER_CLEAR_OF_M - 1e-6).all()
+    around = validate._grid_in(shapely.box(150.0, -30.0, 250.0, 30.0), 0.71)
+    covers = validate._Cover(triangles(meshes + deck_meshes))
+    assert np.isfinite(covers.top(ac(around)[:, [0, 2]])).all()
+    assert validate.bridge_failures(validate.mesh_nodes(meshes + deck_meshes),
+                                    [(0, chk) for chk in bridges.checks(decks.records(rb), FRAME)]) == {0: []}
+    # Where the two overlap in plan, a point on the deck reads the deck, and one below it the road under it.
+    surface = validate.RoadSurface(validate.mesh_nodes(meshes)["nodes"])
+    assert surface.height(200.0, 0.0, below=DECK + 0.3) == pytest.approx(DECK, abs=0.01)
+    low = surface.height(200.0, 0.0, below=DECK - 5.0)
+    assert low is not None and math.isclose(low, DECK - 10.0, abs_tol=0.5)
