@@ -332,6 +332,7 @@ Stage 1 of the flyovers work (`core/bridges.py`; `docs/ac-format.md`, "The route
   - **the kerb strip:** drive onto it: concrete (ROAD physics), a gentle 0.1 m rise over its metre, no snag; and the grass verge narrowing to it over a metre at each end of the bridge;
   - **the seams:** at each abutment no crack between the road, the kerb, the abutment's face and the ground; with the free camera from below, the abutment's face meets the ground and the underside, the ground runs on under the deck, and nothing pokes up through it;
   - **the piers** stand on the ground and under the headstock; Bradshaw Bridge's through the lake's surface;
+  - **what runs under a deck:** the Kingston Bypass's carriageways under Summerleas Road (`summerleas_road`, stage 2a), and the Western Line's ballast and rails and the paths under the Bass Highway (`rail_under_bass_highway`, about 0.92 km; stage 2c) run on under the open deck, with no gap or hole where they pass the abutments' feet;
   - **Bradshaw Bridge's start:** the route starts on the bridge, so the deck starts 2 m in, behind the end wall, and a 42 m abutment face stands at the world's start, mostly under the lake. Does it read right from the grid, looking back?
   - **night:** the parapets' reflectors light up as the guide posts' do (red on the left, white on the right); no guide post, curve marker or speed sign stands on a bridge;
   - **trees:** crowns overhanging a deck from the gully: does any clip through the deck or a parapet? Tree FX and Grass FX should put nothing on the deck or the kerb (their materials are on neither list), and grass should grow under the deck on the terrain;
@@ -346,16 +347,17 @@ Stage 1 of the flyovers work (`core/bridges.py`; `docs/ac-format.md`, "The route
   - the deck is the road's width plus the kerb strips: `man_made=bridge` outlines, and paths sharing the bridge, aren't read yet;
   - batters reach 30 m along the road past a bridge's ends and 5 m past an untagged fill. Beyond that, an approach standing high over a coarse DEM keeps today's skirt: the Lyell Highway's road is 8 m over the DEM 22 m before its bridge at 42.85 km;
   - a road drawn under the deck (stage 2a) with too little room under it (a gap of 1.5-1.9 m) could reach into the deck: the deck's checks count its verges as ground, so the deck would then be built on the ground, and the road under it stop at the embankment as before.
-- **Summerleas Road now passes validation.** Its one failure ("AI line 0.40-0.51 m above the road", at about 2.14 km on the one-way split before the Channel Highway roundabout) was the road's own ribbon overlapping itself there: two of its triangles cover the same point 11 cm apart, and the check read whichever it found first. The road's height is now read as the surface closest below the point (so a road drawn under the route's bridge never counts), which takes the upper one. The fold itself is still there. **To look at in game:** a bump or flicker on the road there.
-- **Cost** (laptop builds, made-up WorldCover trees; mesh-stage meshes and vertices, and the KN5, main with the crossing roads against this branch). About 45 vertices a metre of bridge (parapets, rail, colliders, kerbs and underside, 13 of them colliders), plus about 300 a pier; 5 to 7 meshes a bridge, 4 to 5 of them drawn. Guard rails on the bridges' rows give way to the parapets.
+- **Cost** (laptop builds, made-up WorldCover trees, the OSM index with railways and paths; mesh-stage meshes and vertices, and the KN5, main against this branch). About 60 vertices a metre of bridge (the generic barrier, rail and posts of `core/decks.py`, the fascia, colliders, kerbs and underside; 13 of them colliders), plus about 300 a pier; 5 to 7 meshes a bridge, 4 to 5 of them drawn. Guard rails on the bridges' rows give way to the parapets, and paths and railways under an open deck run on under it.
 
   | Track | Bridges | Meshes | Vertices | KN5 |
   |---|---|---|---|---|
-  | `brinktop_road` | 2, both open, 1 pier | 252 → 274 | 327,039 → 329,403 | 23.9 → 24.1 MB |
-  | `lyell_highway_mt_arrowsmith` | 11: 8 open, 8 piers, 3 on the ground | 1,141 → 1,249 | 1,900,483 → 1,915,415 | 246.7 → 248.3 MB a layout |
-  | `summerleas_road` | 2: 1 open, 1 pier, 1 on the ground | 93 → 112 | 99,068 → 101,847 | 11.7 → 11.8 MB |
-  | `huon_highway_eastbound` | 1, on the ground | 37 → 45 | 45,311 → 47,415 | 5.4 → 5.5 MB |
-  | `kingston_bypass_southbound` | none (its fills' batters only) | 68 → 68 | 74,085, the same | 10.5 MB |
+  | `brinktop_road` | 2, both open, 1 pier | 253 → 275 | 327,591 → 331,239 | 24.0 → 24.2 MB |
+  | `lyell_highway_mt_arrowsmith` | 11: 8 open, 8 piers, 3 on the ground | 1,141 → 1,249 | 1,900,483 → 1,923,063 | 246.7 → 249.0 MB a layout |
+  | `summerleas_road` | 2: 1 open, 1 pier, 1 on the ground | 85 → 104 | 87,638 → 91,584 | 10.8 → 11.0 MB |
+  | `huon_highway_eastbound` | 1, on the ground | 37 → 45 | 45,311 → 48,183 | 5.4 → 5.6 MB |
+  | `kingston_bypass_southbound` | none (its fills' batters only) | 79 → 79 | 80,085, the same | 10.8 MB |
+  | `rail_under_bass_highway` | 4, all open, 9 piers; two railways (the Western Line and an unnamed one) and two paths run on under them | 78 → 121 | 75,020 → 95,848 | 8.3 → 9.3 MB |
+  | `rail_under_brooker_highway` | 2, on the ground (gaps of 0.4 and 1.1 m); the railway and paths under them stop at the embankment as before | 46 → 64 | 43,003 → 48,465 | 9.1 → 9.4 MB |
 
 ## Roads crossing the route
 
