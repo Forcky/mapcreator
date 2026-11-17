@@ -106,13 +106,24 @@ def _comes_back(names: Sequence[str | None], before: int, after: int) -> bool:
 
 def ring_spans(route: osm_graph.Route) -> list[tuple[float, float]]:
     """The stretches of a routed line on a roundabout's ways, in metres along it, for `u_turn`."""
-    s = cumulative(route.xy)
-    ring = np.array([route.ways[w]["tags"].get("junction") in junctions_core.RING for w in route.seg_way], dtype=bool)
+    return _spans(cumulative(route.xy), [route.ways[w]["tags"].get("junction") in junctions_core.RING
+                                         for w in route.seg_way])
+
+
+def tunnel_spans(route: osm_graph.Route) -> list[tuple[float, float]]:
+    """The stretches of a routed line through a tunnel (any `tunnel` tag but `no`), in metres along it, for the
+    preview's note: a tunnel isn't covered yet, but built as an open cutting."""
+    return _spans(cumulative(route.xy), [route.ways[w]["tags"].get("tunnel") not in (None, "no")
+                                         for w in route.seg_way])
+
+
+def _spans(s: np.ndarray, flags: Sequence[bool]) -> list[tuple[float, float]]:
+    """The runs of flagged segments, as (from, to) in metres along a line whose stations are `s`."""
     out, k = [], 0
-    while k < len(ring):
-        if ring[k]:
+    while k < len(flags):
+        if flags[k]:
             e = k
-            while e + 1 < len(ring) and ring[e + 1]:
+            while e + 1 < len(flags) and flags[e + 1]:
                 e += 1
             out.append((float(s[k]), float(s[e + 1])))
             k = e + 1

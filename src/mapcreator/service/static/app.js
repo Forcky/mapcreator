@@ -453,6 +453,10 @@
         // person builds; the build still decides, and offers to generate it anyway.
         el.routeInfo.textContent += " " + preview.roundabouts.map((r) => r.message).join(" ");
       }
+      if (!preview.turns_back && preview.tunnels && preview.tunnels.length) {
+        // A tunnel isn't covered yet: say so, so nobody expects a roof. It doesn't stop the build.
+        el.routeInfo.textContent += " " + preview.tunnels.map((t) => t.message).join(" ");
+      }
       clearError();
     } catch (err) {
       if (err.name === "AbortError" || seq !== state.previewSeq) return;

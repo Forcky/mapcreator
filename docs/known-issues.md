@@ -304,3 +304,7 @@ A roundabout the route drives is drawn whole: the rest of its ring, a kerbed gra
   - The terrain beside a bridged hump still has the embankment, so the road now runs through it in a cutting. **To judge in game.**
 - **Bridges are embankments at deck height** (no deck, parapets or piers yet; the roads under them aren't drawn). Since 11 Nov each tagged bridge whose deck stands 1.5 m or more above the DEM's ground gets a guard rail and collider on both sides, on any DEM, and its camber is crown only (`roadside.bridge_mask`, `section.off_ground_factor`). Before, rails came only from the DEM on LiDAR ground: on the Lyell Highway example 8 of its 9 such bridges had none, among them the 168 m Bradshaw Bridge over a 45.6 m drop at its start. Now all 9 have rails (158 m of rail on that track before, 1,155 m after).
 - **The validator warns** (it never fails a build) where a crest or sag would pull more than 0.5 g at the AI's planned speed.
+
+## Tunnels
+
+- **Tunnels are open cuttings.** A route through a tunnel gets an open slot with grassy banks and no roof, walls, portals or lights. The preview says so where the route goes through one. A covered box is planned as its own change.

@@ -23,6 +23,7 @@ exception here carries a message that is safe to show the person using the map.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from typing import NotRequired, Protocol, TypedDict
 
@@ -73,11 +74,20 @@ class RoundaboutNote(TypedDict):
     message: str
 
 
+class TunnelNote(TypedDict):
+    lon: float  # the tunnel's middle
+    lat: float
+    along_m: float
+    length_m: float
+    message: str
+
+
 class RoutePreview(TypedDict):
     coordinates: list[list[float]]  # [[lon, lat], ...]
     length_m: float
     turns_back: NotRequired[TurnBack]  # only when the route drives road twice, which no build accepts
     roundabouts: NotRequired[list[RoundaboutNote]]  # only for a small roundabout, or one the build may find too tight
+    tunnels: NotRequired[list[TunnelNote]]  # only where the route goes through a tunnel
 
 
 class Router(Protocol):
@@ -105,10 +115,12 @@ def check_region(waypoints: Sequence[Waypoint]) -> Region:
 
 
 def _preview(lon: Sequence[float], lat: Sequence[float], length_m: float, xy: np.ndarray,
-             rings: Sequence[dict] = (), names: Sequence[str | None] | None = None) -> RoutePreview:
+             rings: Sequence[dict] = (), names: Sequence[str | None] | None = None,
+             tunnels: Sequence[tuple[float, float]] = ()) -> RoutePreview:
     """The preview for the page; `xy` is the same line in the region's metres, to measure any road driven twice.
     `rings`: the roundabouts it drives, as `roundabouts.preview_notes` takes them (`from_m`, `to_m` along `xy`,
-    `radius_m`). `names`: the road each segment of `xy` is on, where the router says (`route_stage.u_turn`)."""
+    `radius_m`). `names`: the road each segment of `xy` is on, where the router says (`route_stage.u_turn`).
+    `tunnels`: the stretches through a tunnel (from, to, in metres along `xy`)."""
     out: RoutePreview = {"coordinates": [[round(float(a), 6), round(float(b), 6)] for a, b in zip(lon, lat)],
                          "length_m": round(float(length_m), 1)}
     if rings:
@@ -119,6 +131,12 @@ def _preview(lon: Sequence[float], lat: Sequence[float], length_m: float, xy: np
                           "lat": round(float(np.interp(note["along_m"], s, lat)), 6), **note})
         if notes:
             out["roundabouts"] = notes
+    if tunnels:
+        s = cumulative(xy)
+        out["tunnels"] = [{"lon": round(float(np.interp((a + b) / 2, s, lon)), 6),
+                           "lat": round(float(np.interp((a + b) / 2, s, lat)), 6),
+                           "along_m": round(a, 1), "length_m": round(b - a, 1), "message": tunnel_message(a, b - a)}
+                          for a, b in _merged(tunnels)]
     found = route_stage.turn_back(xy)
     if found is not None:
         back, retraced_m = found
@@ -134,6 +152,23 @@ def _preview(lon: Sequence[float], lat: Sequence[float], length_m: float, xy: np
         out["turns_back"] = {"lon": round(float(lon[u]), 6), "lat": round(float(lat[u]), 6),
                              "along_m": round(along_m, 1), "retraced_m": 0.0,
                              "message": route_stage.u_turn_message(along_m)}
+    return out
+
+
+def tunnel_message(along_m: float, length_m: float) -> str:
+    """The preview's note about a tunnel on the route."""
+    return (f"The route goes through a tunnel {route_stage._distance(along_m)} along ({route_stage._distance(length_m)} "
+            "long). Tunnels aren't covered yet: it's built as an open cutting with grassy banks and no roof.")
+
+
+def _merged(spans: Sequence[tuple[float, float]], gap_m: float = 5.0) -> list[tuple[float, float]]:
+    """Stretches less than `gap_m` apart joined into one: a tunnel drawn as several ways is one tunnel."""
+    out: list[tuple[float, float]] = []
+    for a, b in sorted(spans):
+        if out and a - out[-1][1] < gap_m:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
     return out
 
 
@@ -175,7 +210,8 @@ class DevRouter:
         # The roundabouts it drives, as the build's route stage records them (`core.junctions`).
         rings = [{"from_m": r["route_from_m"], "to_m": r["route_to_m"], "radius_m": r["radius_m"]}
                  for r in junctions_core.find(graph, route.xy)["roundabouts"] if r["on_route"]]
-        return _preview(lon, lat, cumulative(route.xy)[-1], route.xy, rings, route_stage.segment_names(route))
+        return _preview(lon, lat, cumulative(route.xy)[-1], route.xy, rings, route_stage.segment_names(route),
+                        route_stage.tunnel_spans(route))
 
 
 # GraphHopper names the reason for a 400 in hints[].details (Java exception class names).
@@ -196,13 +232,16 @@ class GraphHopperRouter:
     # The road each stretch is on, for a U-turn's check that the route left the road and came back onto it (checked
     # on the same GraphHopper 11; GraphHopper keeps street names in every graph).
     STREET_DETAIL = "street_name"
+    # Bridge, tunnel, ferry or road, for the preview's tunnel note.
+    ENVIRONMENT_DETAIL = "road_environment"
 
     def __init__(self, base_url: str, *, client: httpx.Client | None = None, timeout_s: float = 10.0,
                  profile: str = "car"):
         self._url = base_url.rstrip("/") + "/route"
         self._client = client or httpx.Client(timeout=timeout_s, follow_redirects=False)
         self._profile = profile
-        self._details = True
+        # The details asked for. One the router says it lacks is dropped (only that one), and not asked for again.
+        self._details = [self.ROUNDABOUT_DETAIL, self.STREET_DETAIL, self.ENVIRONMENT_DETAIL]
 
     def preview(self, waypoints: Sequence[Waypoint]) -> RoutePreview:
         region = check_region(waypoints)
@@ -214,11 +253,11 @@ class GraphHopperRouter:
             "calc_points": True,
         }
         try:
-            r = self._client.post(self._url, json={**body, "details": [self.ROUNDABOUT_DETAIL, self.STREET_DETAIL]}
-                                  if self._details else body)
-            if self._details and r.status_code == 400 and self._lacks_detail(r):
-                self._details = False
-                r = self._client.post(self._url, json=body)
+            r = self._client.post(self._url, json={**body, "details": self._details} if self._details else body)
+            while self._details and r.status_code == 400 and self._lacks_detail(r):
+                missing = self._missing_details(r) & set(self._details)
+                self._details = [d for d in self._details if d not in missing] if missing else []
+                r = self._client.post(self._url, json={**body, "details": self._details} if self._details else body)
         except httpx.HTTPError as e:
             raise RouterUnavailable("The route preview service didn't answer. Try again in a minute.") from e
         if r.status_code == 200:
@@ -236,6 +275,12 @@ class GraphHopperRouter:
             return False
 
     @staticmethod
+    def _missing_details(r: httpx.Response) -> set[str]:
+        """The details a "Cannot find the path details: [a, b]" answer names; none if it names none."""
+        m = re.search(r"\[([^\]]*)\]", str(r.json().get("message", "")))
+        return {d.strip() for d in m.group(1).split(",") if d.strip()} if m else set()
+
+    @staticmethod
     def _parse(r: httpx.Response, region: Region) -> RoutePreview:
         try:
             path = r.json()["paths"][0]
@@ -250,7 +295,25 @@ class GraphHopperRouter:
         x, y = region.to_xy().transform(lon, lat)
         xy = np.column_stack([x, y])
         return _preview(lon, lat, length, xy, GraphHopperRouter._rings(path, xy),
-                        GraphHopperRouter._names(path, len(xy) - 1))
+                        GraphHopperRouter._names(path, len(xy) - 1), GraphHopperRouter._tunnels(path, xy))
+
+    @staticmethod
+    def _tunnels(path: dict, xy: np.ndarray) -> list[tuple[float, float]]:
+        """The stretches through a tunnel, from the `road_environment` detail ([from point, to point, value])."""
+        details = path.get("details")
+        spans = details.get(GraphHopperRouter.ENVIRONMENT_DETAIL) if isinstance(details, dict) else None
+        if not isinstance(spans, list):
+            return []
+        s = cumulative(xy)
+        out = []
+        try:
+            for a, b, value in spans:
+                a, b = int(a), int(b)
+                if value == "tunnel" and 0 <= a < b < len(xy):
+                    out.append((float(s[a]), float(s[b])))
+        except (TypeError, ValueError):
+            return []
+        return out
 
     @staticmethod
     def _names(path: dict, segments: int) -> list[str | None] | None:

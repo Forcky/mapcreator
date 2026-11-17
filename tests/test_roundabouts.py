@@ -393,25 +393,43 @@ def test_graphhopper_previews_ask_for_the_roundabout_detail_and_warn_of_a_small_
 
     router = GraphHopperRouter("http://router.example.org:8989", client=httpx.Client(transport=httpx.MockTransport(handler)))
     preview = router.preview([Waypoint(lon=147.296, lat=-42.80), Waypoint(lon=147.304, lat=-42.80)])
-    assert seen[0]["details"] == ["roundabout", "street_name"]
+    assert seen[0]["details"] == ["roundabout", "street_name", "road_environment"]
     (note,) = preview["roundabouts"]
     assert note["radius_m"] == pytest.approx(10.0, abs=0.5) and "small roundabout" in note["message"]
 
 
-def test_a_graphhopper_without_the_detail_is_asked_again_without_it_and_not_again():
+def _lacking(missing, message=None):
+    """A GraphHopper whose graph has none of the details in `missing`, answering as GraphHopper 11 does."""
     seen = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        seen.append(body)
-        if "details" in body:
-            return httpx.Response(400, json={"message": "Cannot find the path details: [roundabout]",
+        seen.append(body.get("details"))
+        lacks = [d for d in body.get("details") or [] if d in missing]
+        if lacks:
+            return httpx.Response(400, json={"message": message or f"Cannot find the path details: [{', '.join(lacks)}]",
                                              "hints": [{"details": "java.lang.IllegalArgumentException"}]})
         return httpx.Response(200, json={"paths": [{"distance": 100.0, "points": {"coordinates": [
             [147.301, -42.8], [147.302, -42.8]]}}]})
 
-    router = GraphHopperRouter("http://router.example.org:8989", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    return GraphHopperRouter("http://router.example.org:8989", client=httpx.Client(transport=httpx.MockTransport(handler))), seen
+
+
+def test_a_graphhopper_without_a_detail_is_asked_again_without_that_one_and_not_again():
     pts = [Waypoint(lon=147.301, lat=-42.8), Waypoint(lon=147.302, lat=-42.8)]
-    assert "roundabouts" not in router.preview(pts)
+    router, seen = _lacking({"road_environment"})
     router.preview(pts)
-    assert ["details" in b for b in seen] == [True, False, False]
+    router.preview(pts)
+    assert seen == [["roundabout", "street_name", "road_environment"], ["roundabout", "street_name"],
+                    ["roundabout", "street_name"]]
+    router, seen = _lacking({"roundabout", "road_environment"})
+    assert "roundabouts" not in router.preview(pts)
+    assert seen == [["roundabout", "street_name", "road_environment"], ["street_name"]]
+
+
+def test_a_graphhopper_that_won_t_say_which_detail_it_lacks_is_asked_without_any():
+    pts = [Waypoint(lon=147.301, lat=-42.8), Waypoint(lon=147.302, lat=-42.8)]
+    router, seen = _lacking({"roundabout"}, message="Cannot find the path details")
+    router.preview(pts)
+    router.preview(pts)
+    assert seen == [["roundabout", "street_name", "road_environment"], None, None]
