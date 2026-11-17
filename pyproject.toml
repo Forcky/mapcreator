@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+authors = [{ name = "Forcky" }]
 keywords = ["assetto-corsa", "sim-racing", "track-generator", "openstreetmap", "lidar", "gis"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -32,6 +33,11 @@ dependencies = [
     "pydantic>=2.7",
     "pillow>=11.2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Forcky/mapcreator"
+Source = "https://github.com/Forcky/mapcreator"
+Issues = "https://github.com/Forcky/mapcreator/issues"
 
 [project.optional-dependencies]
 plots = ["matplotlib>=3.9"]

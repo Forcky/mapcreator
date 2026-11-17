@@ -1,5 +1,7 @@
 # mapcreator
 
+[![tests](https://github.com/Forcky/mapcreator/actions/workflows/tests.yml/badge.svg)](https://github.com/Forcky/mapcreator/actions/workflows/tests.yml)
+
 Generate drivable [Assetto Corsa](https://www.assettocorsa.it/) tracks from real roads, using only open data that may legally be redistributed.
 
 **Status:** an early-stage personal project, maintained in spare time. The pipeline builds installable tracks, and they've been driven in game end to end, with AI opponents (Grasstree Hill both ways, the Esperance coast road and the Lyell Highway among them). Expect rough edges, and changes without notice.
@@ -7,7 +9,7 @@ Generate drivable [Assetto Corsa](https://www.assettocorsa.it/) tracks from real
 **Requirements:** the tracks need Assetto Corsa on PC with [Custom Shaders Patch](https://acstuff.club/patch/) (CSP), which draws their trees and water. They aren't built to work without it (see "Without CSP" in `docs/known-issues.md`). Tested with CSP 0.2.11.
 
 - **Coverage:** Tasmania has detailed data (2 m LiDAR elevation, canopy heights, vegetation types, building footprints and transmission lines). The rest of Australia uses national data: Geoscience Australia's 5 m LiDAR elevation where it covers the road (Victoria's 10 m model, then 30 m, where it doesn't), ESA WorldCover trees checked against Meta and WRI's canopy map, and OSM buildings and power lines when a local OSM index is set up.
-- **Hosted service:** running. The map page, job queue and build worker are in `src/mapcreator/service/`; [docs/deploy.md](docs/deploy.md) says how to run your own.
+- **Hosted service:** running at [mapcreator.com.au](https://mapcreator.com.au). The map page, job queue and build worker are in `src/mapcreator/service/`; [docs/deploy.md](docs/deploy.md) says how to run your own.
 
 Want to help? See [CONTRIBUTING.md](CONTRIBUTING.md). Developing on a machine with Assetto Corsa: start with [docs/dev-handover.md](docs/dev-handover.md).
 
@@ -64,5 +66,7 @@ On PowerShell, set the token with `$env:MAPCREATOR_WORKER_TOKEN = "..."`. Locall
 This project is not affiliated with or endorsed by Kunos Simulazioni. Assetto Corsa is a trademark of its owner. Custom tracks work in the original Assetto Corsa on PC only.
 
 ## Licence
+
+Copyright 2026 Forcky and the mapcreator contributors.
 
 Apache License 2.0: see `LICENSE`. Third-party material keeps its own licence and notice (see `THIRD_PARTY_NOTICES.md`). Built tracks carry the data licences of their sources (see `docs/data-sources.md`).
