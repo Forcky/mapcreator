@@ -254,4 +254,4 @@ def test_graphhopper_is_asked_for_roundabouts_and_street_names():
 
     router = GraphHopperRouter("http://router.example.org:8989/", client=httpx.Client(transport=httpx.MockTransport(handler)))
     router.preview(HOBART)
-    assert asked == [["roundabout", "street_name"]]
+    assert asked == [["roundabout", "street_name", "road_environment"]]
