@@ -302,8 +302,8 @@ def test_meshes_are_named_by_surface_and_within_the_budget():
             assert sum(k in m.name for k in ("ROAD", "GRASS", "GRAVEL", "WALL")) == 1
     # The bridges over the route's concrete (`core.crossing_roads`): one generic style.
     assert {m.material for m in deck_meshes} == {"kerb", "bridge_concrete", "bridge_soffit", "rail"}
-    # A 70 m bridge with two piers: about 45 vertices a metre (parapets, rails, colliders, kerbs and underside).
-    assert stats["vertices"] == sum(len(m.positions) for m in deck_meshes) < 70 * 50
+    # A 70 m bridge with two piers: about 60 vertices a metre (parapets, rails and posts, colliders, kerbs, underside).
+    assert stats["vertices"] == sum(len(m.positions) for m in deck_meshes) < 70 * 65
     # The underside faces down, the parapets' tops up.
     (u,) = [m for m in deck_meshes if m.name == "BRIDGE_0_U"]
     assert (u.normals[:, 1] < -0.99).all()
@@ -431,3 +431,19 @@ def test_a_road_drawn_under_the_open_deck_runs_on_under_it_with_no_hole_round_it
     assert surface.height(200.0, 0.0, below=DECK + 0.3) == pytest.approx(DECK, abs=0.01)
     low = surface.height(200.0, 0.0, below=DECK - 5.0)
     assert low is not None and math.isclose(low, DECK - 10.0, abs_tol=0.5)
+
+
+def test_the_terrain_s_footprint_leaves_the_open_span_out_for_what_runs_under_the_deck():
+    """The railways and paths under the route's bridges (`core.rail_and_paths`) and the roads (`core.crossing_roads`)
+    keep off `mesh.terrain_region`'s footprint: with the open deck's span out of it, they run on under the deck."""
+    dem = gully()
+    c, sec = road(dem)
+    decks = bridges.Decks(bridges.plan(c), c, sec)
+    rb = mesh.build_ribbon(c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
+                           sec["slope_left"], sec["slope_right"], decks.embanked(dem), **decks.verges())
+    before = mesh.terrain_region(rb, 1.0)[1]
+    after = mesh.terrain_region(rb, 1.0, decks.footprint(rb, None))[1]
+    under = shapely.points([[200.0, 0.0], [200.0, 4.0], [190.0, -2.0]])
+    beside = shapely.points([[100.0, 0.0], [300.0, 3.0], [166.0, 0.0]])  # the road on the ground, a closed end
+    assert shapely.contains(before, under).all()  # today's embankment
+    assert not shapely.contains(after, under).any() and shapely.contains(after, beside).all()

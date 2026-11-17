@@ -46,7 +46,8 @@ height over the DEM's ground under the centreline, `z - z_raw` (none over the se
   approaches, padded by BATTER_APPROACH_M, the ground beside the road is at least `verge - BATTER x distance` past
   the verge's edge, out to BATTER_REACH_M: a 1:2 batter down to where it meets the ground.
 
-**The structure** (`Decks.meshes`), all visual but the colliders:
+**The structure** (`Decks.meshes`), all visual but the colliders, in the generic style the bridges over the route have
+(`core.decks`, its barrier, rail, posts, headstocks and columns, and `core.crossing_roads`'s materials):
 - the parapet (`BRIDGE_<k>`, material `bridge_concrete`, as the bridges over the route): a concrete barrier PARAPET_W thick and PARAPET_H high on the kerb's
   outer edge, its outer face running on down as the deck's fascia, DECK_DEPTH_M below the kerb on the open span
   (EDGE_BEAM_M on the ground, into the batter); and the abutments' faces and the piers;
@@ -71,8 +72,8 @@ from scipy.ndimage import binary_dilation
 from scipy.spatial import cKDTree
 
 from mapcreator import cpus
-from mapcreator.core import crossing_roads, mesh
-from mapcreator.core.scene import Z_SIGN, LocalFrame, Mesh
+from mapcreator.core import crossing_roads, decks, mesh
+from mapcreator.core.scene import LocalFrame, Mesh
 
 FORMAT_VERSION = 1
 
@@ -84,15 +85,16 @@ END_ROWS = 2  # an open span starts and ends at least this many rows from the ro
 MOUTH_CLEAR_M = 3.0  # and this far from any side road's mouth
 KERB_M = 1.0  # the kerb and footway strip, from the road's edge to the parapet's face (Q5)
 KERB_RISE_M = 0.1  # its outer edge stands this far above the road's edge: a footway, ramped so a car isn't snagged
-PARAPET_W = 0.35  # the concrete barrier's thickness
-PARAPET_H = 0.8  # its height above the kerb
-RAIL = (1.0, 1.1)  # the steel rail's bottom and top above the kerb, on posts from the barrier's top (about 1.1 m
-# overall, an estimate from common practice; as the overpasses' decks, `core.crossing_roads`)
-RAIL_W = 0.1  # the rail's width
-RAIL_POST_W = 0.08
-RAIL_POST_SPACING_M = 2.5
+PARAPET_W = crossing_roads.PARAPET_W  # the concrete barrier's thickness (the generic style's, `core.decks`)
+PARAPET_H = crossing_roads.PARAPET_H  # its height above the kerb
+# The steel rail's bottom and top above the kerb, its width, and its posts: the generic style's (`core.decks`, from
+# `core.crossing_roads`): about 1.1 m overall, an estimate from common practice.
+RAIL = (crossing_roads.RAIL_TOP - crossing_roads.RAIL_SIZE, crossing_roads.RAIL_TOP)
+RAIL_W = decks.BARRIER_RAIL[0]
+RAIL_POST_W = decks.BARRIER_POST_W
+RAIL_POST_SPACING_M = decks.BARRIER_POST_M
 RAIL_STRIDE = 2  # the rail has a point every this many rows: a 2 m chord is within 5 mm of a 100 m bend
-DECK_DEPTH_M = 1.3  # the fascia, from the kerb's top down to the open deck's underside (a guess for a beam deck)
+DECK_DEPTH_M = crossing_roads.DECK_DEPTH_M  # the fascia, from the kerb's top down to the underside (a beam deck)
 EDGE_BEAM_M = 0.6  # on the ground the fascia reaches this far below the kerb, into the batter
 CLEAR_M = 0.5  # the ground under an open deck stays at least this far below its underside
 GUARD_M = 0.5  # and so does the ground this far beyond its fascia
@@ -113,7 +115,6 @@ BATTER_ALONG_M = 2.0  # beside its nearest station, never further along the road
 PIER_HEADSTOCK = (1.0, 1.2)  # a pier's headstock: deep (below the underside), along the road
 PIER_EDGE_M = 1.5  # its columns stand at least this far in from the deck's edges
 PIER_COLUMNS_WIDE_M = 12.0  # three columns under a deck at least this wide, else two
-PIER_SIDES = 10  # a column's sides
 PIER_END_M = 3.0  # no pier within this of an abutment
 PIER_BURY_M = 0.5  # a column's foot is this far below the lowest ground round it
 CONCRETE_TILE_M = 2.0  # the concrete's texture repeats every this many metres
@@ -562,9 +563,9 @@ class Decks:
                 for at in b["piers_m"]:
                     concrete += self._pier(rb, sp, at, ground)
                     stats["piers"] += 1
-            out += _pack(f"BRIDGE_{k}", MATERIAL, concrete, frame)
-            out += _pack(f"BRIDGE_{k}_U", UNDERSIDE_MATERIAL, under, frame)
-            out += _pack(f"BRIDGE_{k}_RAIL", RAIL_MATERIAL, steel, frame)
+            out += decks.meshes(f"BRIDGE_{k}", MATERIAL, concrete, frame)
+            out += decks.meshes(f"BRIDGE_{k}_U", UNDERSIDE_MATERIAL, under, frame)
+            out += decks.meshes(f"BRIDGE_{k}_RAIL", RAIL_MATERIAL, steel, frame)
             for name, (line, base) in colliders:
                 out.append(_collider(name, line, base, frame))
         stats["meshes"] = len(out)
@@ -572,58 +573,50 @@ class Decks:
         return out, stats
 
     def _parapet(self, rb: mesh.Ribbon, side: str, r0: int, r1: int, sp: _Span | None):
-        """One run of parapet on `side`, rows r0..r1: its concrete faces, its rail and posts (pieces), and its
-        collider's line and base."""
+        """One run of parapet on `side`, rows r0..r1: its concrete (the generic barrier swept along the kerb's outer
+        edge, `decks.sweep`, and the fascia under its outer face), its rail and posts, and its collider's line and
+        base."""
         k = rb.road_cols.start - 1 if side == "L" else rb.road_cols.stop
+        sign = 1.0 if side == "L" else -1.0  # the barrier stands outwards: to the left of the road on its left
         rows = np.arange(r0, r1 + 1)
         base = np.column_stack([rb.e[rows, k], rb.n[rows, k]])
         hb = rb.h[rows, k]
-        outer = self._outer(rb, side)[rows]
-        out_dir = (outer - base) / PARAPET_W
         depth = np.full(len(rows), EDGE_BEAM_M)
         if sp is not None:
             depth[(rows >= sp.a) & (rows <= sp.b)] = DECK_DEPTH_M
-        top = hb + PARAPET_H
-        bottom = hb - depth
         s = np.asarray(self.c["s"], float)[rows]
-        inward = -out_dir
-        up = np.tile([0.0, 0.0, 1.0], (len(rows), 1))
-        flat_in = np.column_stack([inward, np.zeros(len(rows))])
-        flat_out = -flat_in
-        faces = [
-            _face(np.column_stack([base, hb]), np.column_stack([base, top]), flat_in, s, (hb, top)),
-            _face(np.column_stack([base, top]), np.column_stack([outer, top]), up, s, None),
-            _face(np.column_stack([outer, top]), np.column_stack([outer, bottom]), flat_out, s, (top, bottom)),
-        ]
-        h0, h1 = float(self.c["heading"][r0]), float(self.c["heading"][r1])
-        for i, h, sign in ((0, h0, -1.0), (-1, h1, 1.0)):  # the end caps
-            t = np.array([math.cos(h), math.sin(h), 0.0]) * sign
-            corners = np.array([[*base[i], bottom[i]], [*outer[i], bottom[i]], [*outer[i], top[i]],
-                                [*base[i], top[i]]])
-            faces.append(_quad(corners, t))
-        # The steel rail along the top, a point every RAIL_STRIDE rows (and the last), on posts.
-        mid = (base + outer) / 2
-        across = out_dir * RAIL_W / 2
-        lo, hi = hb + RAIL[0], hb + RAIL[1]
-        a, b = mid - across, mid + across
+        concrete = [decks.sweep(base, hb, [(sign * u, v) for u, v in decks.BARRIER_PROFILE])]
+        # The fascia: the barrier's outer face carried on down below the kerb, the open span's deeper.
+        outer = decks.offset(base, sign * PARAPET_W)
+        _, left = decks.frames(base)
+        out = np.column_stack([decks._unit(left) * sign, np.zeros(len(rows))])
+        concrete.append(_face(np.column_stack([outer, hb]), np.column_stack([outer, hb - depth]), out, s,
+                              (hb, hb - depth)))
+        # The steel rail along the barrier's top, a point every RAIL_STRIDE rows (and the last), on posts.
         j = np.unique(np.append(np.arange(0, len(rows), RAIL_STRIDE), len(rows) - 1))
-        rail = [
-            _face(np.column_stack([a, lo])[j], np.column_stack([a, hi])[j], flat_in[j], s[j], (lo[j], hi[j])),
-            _face(np.column_stack([a, hi])[j], np.column_stack([b, hi])[j], up[j], s[j], None),
-            _face(np.column_stack([b, hi])[j], np.column_stack([b, lo])[j], flat_out[j], s[j], (hi[j], lo[j])),
-            _face(np.column_stack([b, lo])[j], np.column_stack([a, lo])[j], -up[j], s[j], None),
-        ]
+        mid, w = sign * PARAPET_W / 2, RAIL_W / 2
+        steel = [decks.sweep(base[j], hb[j], ((mid - w, RAIL[0]), (mid + w, RAIL[0]), (mid + w, RAIL[1]),
+                                               (mid - w, RAIL[1])))] if len(j) > 1 else []
+        posts_line = decks.offset(base, mid)
+        tangent, _ = decks.frames(base)
         length = s[-1] - s[0]
         count = max(int(round(length / RAIL_POST_SPACING_M)), 1)
         for at in np.linspace(s[0] + 0.2, s[-1] - 0.2, count + 1) if length > 0.5 else []:
             i = int(np.clip(np.searchsorted(s, at), 0, len(s) - 1))
-            h = float(self.c["heading"][rows[i]])
-            rail += _box(mid[i], float(lo[i]), float(top[i]), h, RAIL_POST_W, RAIL_POST_W, ends=False)
-        return faces, rail, (base, hb)
+            steel.append(decks.box(posts_line[i], tangent[i], RAIL_POST_W, RAIL_POST_W, float(hb[i] + PARAPET_H),
+                                   float(hb[i] + RAIL[0])))
+        return concrete, steel, (base, hb)
 
     def _underside(self, rb: mesh.Ribbon, sp: _Span):
+        """The open span's underside, flat across between the fascias' feet (the barriers' outer faces carried on down,
+        offset along the whole bridge's kerb lines, as its parapets are)."""
+        i0, i1 = sp.bridge["rows"]
         rows = np.arange(sp.a, sp.b + 1)
-        left, right = self._outer(rb, "L")[rows], self._outer(rb, "R")[rows]
+        edge = {}
+        for side, k, sign in (("L", rb.road_cols.start - 1, 1.0), ("R", rb.road_cols.stop, -1.0)):
+            line = np.column_stack([rb.e[i0:i1 + 1, k], rb.n[i0:i1 + 1, k]])
+            edge[side] = decks.offset(line, sign * PARAPET_W)[rows - i0]
+        left, right = edge["L"], edge["R"]
         hl, hr = sp.top[:, 0] - DECK_DEPTH_M, sp.top[:, 1] - DECK_DEPTH_M
         s = np.asarray(self.c["s"], float)[rows]
         down = np.tile([0.0, 0.0, -1.0], (len(rows), 1))
@@ -661,7 +654,8 @@ class Decks:
         h = float(self.c["heading"][i])
         across = (left - right) / max(width, 1e-9)
         mid = (left + right) / 2
-        pieces = _box(mid, under, under - PIER_HEADSTOCK[0], h, width - 2 * 0.3, PIER_HEADSTOCK[1])
+        along = np.array([math.cos(h), math.sin(h)])
+        pieces = [decks.box(mid, along, PIER_HEADSTOCK[1], width - 2 * 0.3, under - PIER_HEADSTOCK[0], under)]
         count = 3 if width >= PIER_COLUMNS_WIDE_M else 2
         reach = max(width / 2 - PIER_EDGE_M, 0.5)
         foot_top = under - PIER_HEADSTOCK[0]
@@ -673,7 +667,7 @@ class Decks:
             g = np.asarray(ground(*_ring(centre, radius + 0.3, 8).T), float)
             low = min(low, float(np.nanmin(g)) if np.isfinite(g).any() else low)
             if foot_top - low > 0.3:
-                pieces.append(_column(centre, radius, low - PIER_BURY_M, foot_top))
+                pieces.append(decks.prism(centre, radius, low - PIER_BURY_M, foot_top))
         return pieces
 
     def records(self, rb: mesh.Ribbon) -> list[dict]:
@@ -706,18 +700,19 @@ class Decks:
 
 
 # -- mesh pieces -------------------------------------------------------------------------------------------------------
-# A piece is (positions (n, 3) easting, northing, height; normals (n, 3) in the same axes; uv (n, 2); triangles), its
-# triangles wound so each face's normal points the way its vertices' normals do.
+# The generic style's pieces are `core.decks`'s (the barrier, rail, posts, headstocks and columns the bridges over the
+# route have); these are the shapes only the route's own deck has (its fascia, underside and abutments' faces), as
+# `decks.Piece`s, each triangle wound so it faces the way its vertices' normals point.
 
-def _oriented(pos, nrm, uv, tri):
+def _oriented(pos, nrm, uv, tri) -> decks.Piece:
     p0, p1, p2 = pos[tri[:, 0]], pos[tri[:, 1]], pos[tri[:, 2]]
     flip = (np.cross(p1 - p0, p2 - p0) * nrm[tri].mean(axis=1)).sum(axis=1) < 0
     tri = tri.copy()
     tri[flip] = tri[flip][:, [0, 2, 1]]
-    return pos, nrm, uv, tri
+    return decks.Piece(pos, nrm, uv, np.asarray(tri, np.int64))
 
 
-def _face(a: np.ndarray, b: np.ndarray, normal: np.ndarray, s: np.ndarray, heights) -> tuple:
+def _face(a: np.ndarray, b: np.ndarray, normal: np.ndarray, s: np.ndarray, heights) -> decks.Piece:
     """A strip along the bridge between two lines of points (n, 3), each pair a row, facing `normal` (n, 3). Its
     texture runs along the bridge by `s`, and across it by `heights` (each line's heights) or by its width."""
     n = len(a)
@@ -735,86 +730,9 @@ def _face(a: np.ndarray, b: np.ndarray, normal: np.ndarray, s: np.ndarray, heigh
     return _oriented(pos, nrm, uv, tri)
 
 
-def _quad(corners: np.ndarray, normal: np.ndarray) -> tuple:
-    pos = np.asarray(corners, float)
-    nrm = np.tile(np.asarray(normal, float), (4, 1))
-    edge = np.hypot(*(pos[1, :2] - pos[0, :2]))
-    uv = np.array([[0.0, pos[0, 2]], [edge, pos[1, 2]], [edge, pos[2, 2]], [0.0, pos[3, 2]]]) / CONCRETE_TILE_M
-    return _oriented(pos, nrm, uv, np.array([[0, 1, 2], [0, 2, 3]], np.int64))
-
-
-def _box(centre: np.ndarray, top: float, bottom: float, heading: float, across: float, along: float,
-         ends: bool = True) -> list:
-    """A box's four sides and (with `ends`) its top and bottom, standing on `centre` (easting, northing), `across` the
-    road and `along` it."""
-    t = np.array([math.cos(heading), math.sin(heading)])
-    x = np.array([-t[1], t[0]])
-    c = np.asarray(centre, float)
-    out = []
-    for d, w, off, half in ((t, x, along / 2, across / 2), (-t, x, along / 2, across / 2),
-                            (x, t, across / 2, along / 2), (-x, t, across / 2, along / 2)):
-        p, q = c + d * off - w * half, c + d * off + w * half
-        corners = np.array([[*p, bottom], [*q, bottom], [*q, top], [*p, top]])
-        out.append(_quad(corners, np.array([*d, 0.0])))
-    if not ends:
-        return out
-    ring = np.array([c + t * along / 2 + x * across / 2, c - t * along / 2 + x * across / 2,
-                     c - t * along / 2 - x * across / 2, c + t * along / 2 - x * across / 2])
-    out.append(_quad(np.column_stack([ring, np.full(4, top)]), np.array([0.0, 0.0, 1.0])))
-    out.append(_quad(np.column_stack([ring, np.full(4, bottom)]), np.array([0.0, 0.0, -1.0])))
-    return out
-
-
 def _ring(centre: np.ndarray, radius: float, sides: int) -> np.ndarray:
     a = np.linspace(0.0, 2 * math.pi, sides, endpoint=False)
     return np.asarray(centre, float) + radius * np.column_stack([np.cos(a), np.sin(a)])
-
-
-def _column(centre: np.ndarray, radius: float, bottom: float, top: float) -> tuple:
-    """A round column's sides, PIER_SIDES flat sides with smooth normals, open at both ends (buried and capped)."""
-    a = np.linspace(0.0, 2 * math.pi, PIER_SIDES + 1)
-    rim = np.column_stack([np.cos(a), np.sin(a)])
-    xy = np.asarray(centre, float) + radius * rim
-    pos = np.vstack([np.column_stack([xy, np.full(len(a), bottom)]), np.column_stack([xy, np.full(len(a), top)])])
-    nrm = np.vstack([np.column_stack([rim, np.zeros(len(a))])] * 2)
-    u = a * radius / CONCRETE_TILE_M
-    uv = np.column_stack([np.concatenate([u, u]), np.concatenate([np.full(len(a), bottom), np.full(len(a), top)])
-                          / CONCRETE_TILE_M])
-    m = len(a)
-    i = np.arange(m - 1)
-    tri = np.concatenate([np.column_stack([i, i + 1, m + i + 1]), np.column_stack([i, m + i + 1, m + i])])
-    return _oriented(pos, nrm, uv, tri.astype(np.int64))
-
-
-def _pack(name: str, material: str, pieces: list, frame: LocalFrame) -> list[Mesh]:
-    """Pieces in meshes under the vertex limit: `name`, then `name_1` and so on, in AC axes."""
-    from mapcreator.core.scene import MAX_VERTICES
-
-    out, batch, held = [], [], 0
-
-    def flush():
-        if not batch:
-            return
-        pos = np.vstack([p for p, _, _, _ in batch])
-        nrm = np.vstack([q for _, q, _, _ in batch])
-        uv = np.vstack([u for _, _, u, _ in batch])
-        starts = np.cumsum([0] + [len(p) for p, _, _, _ in batch[:-1]])
-        tri = np.vstack([t + k for (_, _, _, t), k in zip(batch, starts)])
-        ac = frame.to_ac(pos[:, 0], pos[:, 1], pos[:, 2])
-        ac_n = np.column_stack([nrm[:, 0], nrm[:, 2], Z_SIGN * nrm[:, 1]])
-        ac_n /= np.maximum(np.linalg.norm(ac_n, axis=1, keepdims=True), 1e-12)
-        suffix = f"_{len(out)}" if out else ""
-        out.append(Mesh(name + suffix, material, ac.astype(np.float32), ac_n.astype(np.float32),
-                        uv.astype(np.float32), tri.astype(np.int64)))
-
-    for piece in pieces:
-        if held + len(piece[0]) > MAX_VERTICES:
-            flush()
-            batch, held = [], 0
-        batch.append(piece)
-        held += len(piece[0])
-    flush()
-    return out
 
 
 def _kerb_mesh(name: str, rb: mesh.Ribbon, side: str, r0: int, r1: int, frame: LocalFrame) -> Mesh:
