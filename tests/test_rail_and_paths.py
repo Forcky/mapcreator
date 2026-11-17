@@ -52,6 +52,9 @@ def test_a_swept_deck_and_a_box_are_closed_solids_facing_outwards():
     _closed_and_outward(deck)
     _closed_and_outward(decks.box(np.array([5.0, 5.0]), np.array([1.0, 1.0]), 1.0, 3.0, 0.0, 4.0))
     _closed_and_outward(decks.ballast(line, np.full(4, 10.0)))
+    _closed_and_outward(decks.prism(np.array([3.0, 4.0]), decks.COLUMN_R, 0.0, 6.0))
+    wall = decks.collider_prism(np.array([3.0, 4.0]), decks.COLUMN_R, 0.0, 3.0)
+    assert len(wall.tri) == 2 * 2 * decks.COLUMN_SIDES and (np.abs(wall.nrm[wall.tri[:, 0], 2]) < 1e-9).all()
     # Mitred at the bends, so the deck keeps its width round them.
     assert np.ptp(decks.offset(line, 1.15)[:, 1] - decks.offset(line, -1.15)[:, 1]) < 2.4
 
@@ -289,7 +292,10 @@ def test_a_footbridge_on_embankments_is_drawn_with_abutments_where_the_ground_me
     over = np.abs(v[:, 2]) <= HALF
     assert (v[over, 1] - ROAD_Z >= rail_and_paths.CLEARANCE_M).all()
     assert built.stats == {"crossings": 1, "drawn": 1, "left_out": 0, "footbridges": 1, "piers": 1}
-    assert built.materials == {rail_and_paths.CONCRETE, rail_and_paths.STEEL}
+    # Stage 2b's concrete, its darker underside and the guard rails' steel: one style for every bridge over the route.
+    assert built.materials == {"bridge_concrete", "bridge_soffit", "rail"}
+    soffit = names["FOOTBRIDGE_0_SOFFIT"]
+    assert (soffit.normals[:, 1] < -0.99).all()  # only the faces looking down
 
 
 def test_a_footbridge_the_dem_cannot_place_is_left_out_unless_the_road_is_signed_for_its_clearance():

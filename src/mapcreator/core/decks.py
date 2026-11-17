@@ -12,8 +12,10 @@ wound so it faces outwards (`kn5.py`: front faces wind counter-clockwise, seen f
 headstocks, abutments) are short sweeps with end caps (`box`). Colliders (`collider_box`) are the four vertical faces
 of a box, in both windings like the guard rails' (`roadside._strip`), and `renderable=False`.
 
-Nothing here knows where a structure stands or what it carries: `core.rail_and_paths` decides that. The pieces are
-the ones a road overpass (stage 2b) and the route's own bridge (stage 1) need too.
+Nothing here knows where a structure stands or what it carries: `core.rail_and_paths` decides that. The style's
+numbers and materials are stage 2b's (`core.crossing_roads`, which draws a road's bridge over the route), so every
+bridge over the route has the same barrier, rail, columns and concrete; its road deck is built there, with its own
+cross-section. These pieces are generic, for the route's own bridge (stage 1) too.
 """
 
 from __future__ import annotations
@@ -22,18 +24,22 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from mapcreator.core import crossing_roads as style
 from mapcreator.core.scene import MAX_VERTICES, LocalFrame, Mesh
 
 UV_M = 2.0  # one texture repeat every this many metres, along and across
 
-# The generic style's parts, in metres.
-# The parapet: a concrete barrier 0.35 m wide and 0.8 m high, and one steel rail, 0.1 m square, its top 1.1 m up, on
-# posts every 2.5 m (as stage 2b's decks have it: `core.crossing_roads`, estimates from common practice).
-BARRIER_PROFILE = ((0.0, 0.0), (0.35, 0.0), (0.32, 0.25), (0.22, 0.8), (0.0, 0.8))  # (inwards, up), outer face 0
-BARRIER_RAIL = (0.10, 0.10)  # the one steel rail on top: width, height
-BARRIER_RAIL_ABOVE_M = 0.2  # its underside above the barrier's top, on posts
-BARRIER_POST_M = 2.5
-BARRIER_POST_W = 0.08
+# The generic style's parts, in metres, as stage 2b's decks have them (`core.crossing_roads`): a concrete barrier
+# 0.35 m wide and 0.8 m high, and one steel rail 0.1 m square, its top 1.1 m up, on posts every 2.5 m; columns of
+# eight sides under a headstock.
+BARRIER_PROFILE = ((0.0, 0.0), (style.PARAPET_W, 0.0), (style.PARAPET_W, style.PARAPET_H),
+                   (0.0, style.PARAPET_H))  # (inwards, up), its outer face flush with the deck's edge
+BARRIER_RAIL = (style.RAIL_SIZE, style.RAIL_SIZE)  # the one steel rail on top: width, height
+BARRIER_RAIL_ABOVE_M = style.RAIL_TOP - style.RAIL_SIZE - style.PARAPET_H  # its underside above the barrier's top
+BARRIER_POST_M = style.RAIL_POST_M
+BARRIER_POST_W = style.POST_SIZE
+COLUMN_R = style.PIER_R
+COLUMN_SIDES = style.PIER_SIDES
 RAILING_H = 1.3  # a footbridge's railing: Austroads asks for 1.3-1.4 m where cyclists ride (estimate)
 RAILING_BARS = (0.1, 0.65, 1.3)  # rails at these heights
 RAILING_BAR_W = 0.05
@@ -174,6 +180,54 @@ def collider_box(centre: np.ndarray, heading: np.ndarray, length: float, width: 
     return Piece(np.concatenate(pos), np.concatenate(nrm), np.concatenate(uv), np.concatenate(tri).astype(np.int64))
 
 
+def prism(centre: np.ndarray, radius: float, z0: float, z1: float, sides: int = COLUMN_SIDES) -> Piece:
+    """A round column (a prism of `sides` sides) on plan point `centre`, from height z0 to z1, closed at both ends."""
+    theta = np.arange(sides) * 2 * np.pi / sides
+    ring = np.asarray(centre, float) + radius * np.column_stack([np.cos(theta), np.sin(theta)])
+    # A vertical sweep is a horizontal one turned up: build it as faces directly.
+    pos, nrm, uv, tri, count = [], [], [], [], 0
+    for i in range(sides):
+        p0, p1 = ring[i], ring[(i + 1) % sides]
+        out = _unit(np.array([(p1 - p0)[1], -(p1 - p0)[0]]))
+        if np.dot(out, (p0 + p1) / 2 - centre) < 0:
+            out = -out
+        quad = np.array([[*p0, z0], [*p1, z0], [*p1, z1], [*p0, z1]])
+        front = np.array([[0, 1, 2], [0, 2, 3]])
+        if _quad_sign(quad[0], quad[1], quad[2], np.array([*out, 0.0])) < 0:
+            front = front[:, [0, 2, 1]]
+        pos.append(quad)
+        nrm.append(np.tile([*out, 0.0], (4, 1)))
+        uv.append(np.array([[i, z0], [i + 1, z0], [i + 1, z1], [i, z1]], float) / UV_M)
+        tri.append(front + count)
+        count += 4
+    for z, up in ((z1, 1.0), (z0, -1.0)):
+        cap = np.column_stack([ring, np.full(sides, z)])
+        fan = np.column_stack([np.zeros(sides - 2, int), np.arange(1, sides - 1), np.arange(2, sides)])
+        if _quad_sign(cap[0], cap[1], cap[2], np.array([0.0, 0.0, up])) < 0:
+            fan = fan[:, [0, 2, 1]]
+        pos.append(cap)
+        nrm.append(np.tile([0.0, 0.0, up], (sides, 1)))
+        uv.append(ring / UV_M)
+        tri.append(fan + count)
+        count += sides
+    return Piece(np.concatenate(pos), np.concatenate(nrm), np.concatenate(uv), np.concatenate(tri).astype(np.int64))
+
+
+def collider_prism(centre: np.ndarray, radius: float, z0: float, z1: float, sides: int = COLUMN_SIDES) -> Piece:
+    """The sides of a round column, in both windings, for an invisible wall round it (as stage 2b's piers have)."""
+    p = prism(centre, radius, z0, z1, sides)
+    keep = np.abs(p.nrm[p.tri[:, 0], 2]) < 0.5  # the sides, not the caps
+    tri = p.tri[keep]
+    return Piece(p.pos, p.nrm, p.uv, np.concatenate([tri, tri[:, [0, 2, 1]]]))
+
+
+def underside(piece: Piece) -> tuple[Piece, Piece]:
+    """A piece split into its faces looking down (a deck's underside, for the darker soffit material) and the rest."""
+    down = piece.nrm[piece.tri[:, 0], 2] < -0.99
+    return (Piece(piece.pos, piece.nrm, piece.uv, piece.tri[~down]),
+            Piece(piece.pos, piece.nrm, piece.uv, piece.tri[down]))
+
+
 def offset(line: np.ndarray, by: float) -> np.ndarray:
     """A plan line moved `by` metres to its left (negative: right), mitred at the corners."""
     _, left = frames(line)
@@ -207,7 +261,7 @@ def barrier(line: np.ndarray, top: np.ndarray, width: float) -> tuple[list[Piece
         concrete.append(sweep(line, top, prof))
         bar_w, bar_h = BARRIER_RAIL
         top_h = BARRIER_PROFILE[-1][1]
-        mid = side * (width / 2 - BARRIER_PROFILE[3][0] / 2)
+        mid = side * (width / 2 - style.PARAPET_W / 2)  # centred on the barrier's top
         z0 = top_h + BARRIER_RAIL_ABOVE_M
         steel.append(sweep(line, top, ((mid - bar_w / 2, z0), (mid + bar_w / 2, z0), (mid + bar_w / 2, z0 + bar_h),
                                        (mid - bar_w / 2, z0 + bar_h))))
@@ -261,6 +315,12 @@ def running_rails(line: np.ndarray, rail_base: np.ndarray, gauge_m: float) -> li
     return out
 
 
+def _compact(piece: Piece) -> Piece:
+    """A piece with only the vertices its triangles use."""
+    used, local = np.unique(piece.tri, return_inverse=True)
+    return Piece(piece.pos[used], piece.nrm[used], piece.uv[used], local.reshape(piece.tri.shape).astype(np.int64))
+
+
 def merge(pieces: list[Piece]) -> Piece:
     """Pieces as one, their triangles renumbered."""
     pieces = [p for p in pieces if len(p.tri)]
@@ -288,6 +348,7 @@ def meshes(name: str, material: str, pieces: list[Piece], frame: LocalFrame, *, 
     for piece in pieces:
         if not len(piece.tri):
             continue
+        piece = _compact(piece)
         if held + len(piece.pos) > MAX_VERTICES:
             flush()
             batch, held = [], 0

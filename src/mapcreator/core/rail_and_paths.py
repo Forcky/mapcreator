@@ -51,6 +51,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import shapely
 
+from mapcreator.core import crossing_roads as style
 from mapcreator.core import crossings as crossings_core
 from mapcreator.core import decks, section
 from mapcreator.core.centreline import cumulative
@@ -84,22 +85,19 @@ STANDARD_GAUGE_M = 1.435
 
 @dataclass(frozen=True)
 class Spec:
-    """A kind of structure over the route: its deck's width and depth, its longest span, and its piers."""
+    """A kind of structure over the route: its deck's depth, its longest span, its piers' columns, and its ramps."""
 
     kind: str  # "footbridge" or "railbridge"
     depth_m: float
     max_span_m: float
-    columns: int  # columns per pier
-    column_m: float  # each column's side
-    headstock: tuple[float, float]  # (along the deck, depth under it)
+    columns: int  # columns per pier, each stage 2b's (`crossing_roads.PIER_R`, eight-sided), under its headstock
     ramp_grade: float  # beyond a level deck set by a signed clearance, it falls at this grade to its ends' ground
 
 
 # A footbridge's ramps at 1:14, the steepest an accessible ramp may be (AS 1428.1); a railway at 1 in 40 (estimate).
-FOOTBRIDGE = Spec("footbridge", depth_m=0.9, max_span_m=35.0, columns=1, column_m=0.6, headstock=(0.7, 0.6),
-                  ramp_grade=1 / 14)
-RAILBRIDGE = Spec("railbridge", depth_m=1.4, max_span_m=30.0, columns=2, column_m=0.9, headstock=(1.0, 1.0),
-                  ramp_grade=1 / 40)
+FOOTBRIDGE = Spec("footbridge", depth_m=0.9, max_span_m=35.0, columns=1, ramp_grade=1 / 14)
+RAILBRIDGE = Spec("railbridge", depth_m=1.4, max_span_m=30.0, columns=2, ramp_grade=1 / 40)
+HEADSTOCK = style.HEADSTOCK  # a pier's beam under the deck: along it, deep
 LEVEL_MARGIN_M = 2.0  # a deck set by a signed clearance is level this far beyond the road under it
 RAIL_DECK_M = 5.2  # a single track's deck between its barriers' outer faces (estimate)
 # A path's walking width by class where it has no `width` tag (estimate).
@@ -111,12 +109,15 @@ CONCRETE_PATH = frozenset({"concrete", "paving_stones", "sett", "concrete:plates
 UNSEALED_PATH = frozenset({"unpaved", "gravel", "fine_gravel", "compacted", "dirt", "earth", "ground", "grass", "mud",
                            "sand", "woodchips", "pebblestone", "rock"})
 
-# Materials, all visual, and their textures (`core.textures`): the concrete is the roundabouts' kerb texture, as the
-# crossing roads' decks have it (stage 2b); the ballast its own; the steel is the guard rails' `rail`.
-CONCRETE = "bridge_concrete"
+# Materials, all visual, and their textures (`core.textures`): the concrete and its darker underside are stage 2b's
+# (`crossing_roads.CONCRETE`, `SOFFIT`: the roundabouts' kerb texture, with their own KN5 values); the ballast has
+# its own texture; the steel is the guard rails' `rail`.
+CONCRETE = style.CONCRETE
+SOFFIT = style.SOFFIT
 BALLAST = "ballast"
-STEEL = "rail"
-TEXTURES = {CONCRETE: "kerb", BALLAST: "ballast", "path_asphalt": "asphalt", "path_ground": "ground"}
+STEEL = style.RAIL_MATERIAL
+TEXTURES = {CONCRETE: style.CONCRETE_TEXTURE, SOFFIT: style.CONCRETE_TEXTURE, BALLAST: "ballast",
+            "path_asphalt": "asphalt", "path_ground": "ground"}
 
 
 # -- what crosses: the route stage ----------------------------------------------------------------------------
@@ -552,7 +553,7 @@ def _over(cr: dict, route: _Route, frame, dem_sample, ground, road, footprint, o
     g1 = np.asarray(ground(*_points_at(deck_line, xs1).T), float)
     contact = np.isfinite(g1) & (g1 >= underside(xs1) - ABUT_REACH_M)
     abut_out = _keep_out(roads, route, deck_line, ABUT_LENGTH_M / 2)
-    pier_out = _keep_out(roads, route, deck_line, spec.headstock[0] / 2)
+    pier_out = _keep_out(roads, route, deck_line, HEADSTOCK[0] / 2)
     supports, piers = [], []
     for a, b in _gaps(xs1, contact):
         supports += [a, b]
@@ -566,7 +567,8 @@ def _over(cr: dict, route: _Route, frame, dem_sample, ground, road, footprint, o
     name = f"{prefix}_{cr['id']}"
     line = decks.stations(deck_line, STEP_M)
     line_top = top(cumulative(line))
-    concrete = [decks.deck(line, line_top, width, spec.depth_m)]
+    sides, soffit = decks.underside(decks.deck(line, line_top, width, spec.depth_m))
+    concrete = [sides]
     steel: list[decks.Piece] = []
     stone: list[decks.Piece] = []
     if kind == "railway":
@@ -584,12 +586,14 @@ def _over(cr: dict, route: _Route, frame, dem_sample, ground, road, footprint, o
         u = float(underside(x))
         g = _ground_under(ground, p, h, ABUT_LENGTH_M, width + ABUT_SPILL_M)
         g = g if np.isfinite(g) else u - ABUT_REACH_M
-        concrete.append(decks.box(p, h, ABUT_LENGTH_M, width + ABUT_SPILL_M, min(g, u - ABUT_REACH_M) - 1.0, u))
+        concrete.append(decks.box(p, h, ABUT_LENGTH_M, width + ABUT_SPILL_M,
+                                  min(g, u - ABUT_REACH_M) - style.WALL_EMBED_M, u))
         if u - g > 0.3:
             abut_walls.append(decks.collider_box(p, h, ABUT_LENGTH_M, width + ABUT_SPILL_M, g - 0.3,
                                                  min(u, g + COLLIDER_H)))
     n_piers = 0
-    hs_along, hs_depth = spec.headstock
+    hs_along, hs_depth = HEADSTOCK
+    r = decks.COLUMN_R
     for x in piers:
         p, h = _point_at(deck_line, x), _heading_at(deck_line, x)
         u = float(underside(x))
@@ -598,12 +602,13 @@ def _over(cr: dict, route: _Route, frame, dem_sample, ground, road, footprint, o
             continue  # the ground is (nearly) up to the deck here: no pier needed
         concrete.append(decks.box(p, h, hs_along, width + 0.4, u - hs_depth, u))
         side = np.array([-h[1], h[0]])
-        offsets = [0.0] if spec.columns == 1 else [-(width / 2 - spec.column_m), width / 2 - spec.column_m]
+        offsets = [0.0] if spec.columns == 1 else [-(width / 2 - 2 * r), width / 2 - 2 * r]
         for o in offsets:
             q = p + side * o
-            concrete.append(decks.box(q, h, spec.column_m, spec.column_m, g - 0.5, u - hs_depth))
-            pier_walls.append(decks.collider_box(q, h, spec.column_m, spec.column_m, g - 0.3,
-                                                 min(g + COLLIDER_H, u - hs_depth)))
+            concrete.append(decks.prism(q, r, g - style.PIER_EMBED_M, u - hs_depth))
+            # As stage 2b's piers: from a metre below the ground to 3 m above it (no higher than the headstock).
+            pier_walls.append(decks.collider_prism(q, r, g + style.PIER_COLLIDER[0],
+                                                   min(g + style.PIER_COLLIDER[1], u - hs_depth)))
         n_piers += 1
 
     approach_m = 0.0
@@ -613,7 +618,8 @@ def _over(cr: dict, route: _Route, frame, dem_sample, ground, road, footprint, o
             approach_m += _strip(kind, tags, np.asarray(line_xy, float), ground, footprint, strips)
 
     out.meshes += decks.meshes(f"{name}_DECK", CONCRETE, concrete, frame)
-    out.materials.add(CONCRETE)
+    out.meshes += decks.meshes(f"{name}_SOFFIT", SOFFIT, [soffit], frame)
+    out.materials |= {CONCRETE, SOFFIT}
     if steel:
         out.meshes += decks.meshes(f"{name}_STEEL", STEEL, steel, frame)
         out.materials.add(STEEL)

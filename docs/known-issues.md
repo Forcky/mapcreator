@@ -318,7 +318,7 @@ A roundabout the route drives is drawn whole: the rest of its ring, a kerbed gra
   - **The deck's depth is a guess** (0.9 m for a footbridge, 1.4 m for a rail bridge). Where the DEM does place a rail bridge it agrees with the signs: the East Tamar Highway's two Bell Bay Line bridges clear the road by 4.8 m and 6.0 m from the DEM, signed 4.9 m and 5.2 m.
   - A footbridge's ramps and stairs aren't drawn: a deck that ends in the air ends at an abutment wall down to the ground, and the path goes on from its foot. A spiral ramp mapped as part of the bridge way is drawn as a ramp falling at 1:14.
   - Before the route's own bridges get open decks (stage 1), a path or railway under one runs in under its embankment and stops at the skirt.
-  - Not drawn: sidewalks beside a road bridge over the route are separate footbridges beside its deck until the two are merged; tunnels (a railway in a tunnel under the route is skipped); trees under a deck aren't trimmed to its underside.
+  - Not drawn: sidewalks beside a road bridge over the route are separate footbridges beside its deck (stage 2b's), not merged into it; tunnels (a railway in a tunnel under the route is skipped); trees under a deck aren't trimmed to its underside.
   - **To judge in game:** the decks from the driver's seat and from the grid, the piers' colliders, the ballast and rails, the approaches meeting the ground, the paths under the route's bridges, and the frame rate.
 - **The validator warns** (it never fails a build) where a crest or sag would pull more than 0.5 g at the AI's planned speed.
 

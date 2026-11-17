@@ -393,9 +393,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             # The terrain's materials: `terrain` alone, or with a vegetation map those of its ground classes.
             **{c.material: Material(c.material, texture=c.texture) for c in grass.CLASSES if c.material in used},
             "rail": Material("rail", texture="steel"),
-            # The bridges' concrete and ballast, and the paths' surfaces (`core.rail_and_paths`).
+            # The footbridges' and rail bridges' ballast and the paths' surfaces (`core.rail_and_paths`); their
+            # concrete is the crossing roads' bridges' (above), and their steel the guard rails'.
             **{name: Material(name, texture=rail_and_paths.TEXTURES[name])
-               for name in sorted(lines_built.materials - {"rail"})},
+               for name in sorted(lines_built.materials - {"rail"} - set(crossing_roads.KN5_PROPERTIES))},
             **({"water": Material("water", texture="water")} if water else {}),
             # The furniture's materials (plain, reflectors, the boards' faces) all draw on the one atlas.
             **{name: Material(name, furniture.MATERIAL) for name in sorted({m.material for m in furn})},
