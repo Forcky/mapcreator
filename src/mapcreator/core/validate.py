@@ -31,6 +31,7 @@ from scipy.spatial import cKDTree
 
 from mapcreator import cpus
 from mapcreator.core import ai_line, kn5, racing_line
+from mapcreator.core.crossing_roads import ABUTMENT_MESH, CLEARANCE_M, DECK_DEPTH_M, DECK_MESH, PIER_MESH
 from mapcreator.core.package import ROAD_KEYS, SURFACE_KEYS, surface_keys
 from mapcreator.core.power import POWER_COLLIDER
 from mapcreator.core.scenery import TRUNK_MESH
@@ -41,7 +42,8 @@ KNOWN_DUMMY = re.compile(r"^AC_(PIT_\d+|START_\d+|HOTLAP_START_\d+|AB_(START|FIN
 SPAWN = re.compile(r"^AC_(PIT|START|HOTLAP_START)_\d+$")
 GRID_CLEARANCE_M = 3.5  # grid spots closer than this would put two cars in one place (a pair stands 4 m apart)
 TRUNK_SPAWN_CLEARANCE_M = 3.0  # a tree or pole collider nearer a spawn than this could be inside or touching the car
-SCENERY_COLLIDERS = (("tree", TRUNK_MESH), ("power", POWER_COLLIDER))  # invisible walls the scenery stage adds
+SCENERY_COLLIDERS = (("tree", TRUNK_MESH), ("power", POWER_COLLIDER),  # invisible walls the scenery stage adds
+                     ("pier", PIER_MESH), ("abutment", ABUTMENT_MESH))  # and a bridge over the route's (mesh stage)
 SPAWN_HEIGHT = (0.15, 0.5)
 AI_HEIGHT = (0.3, 0.5)
 # A gate must reach past both road edges; any span is fine as long as it does. This floor only catches
@@ -72,6 +74,14 @@ class JunctionCheck:
     mouth: shapely.Geometry  # its carriageway beside the road, out to MOUTH_BAND_M beyond the edge
     road: shapely.Geometry  # its carriageway out to its end (100 m)
     stub: StubCheck | None = None  # its stub, if it has one
+
+
+@dataclass(frozen=True)
+class CrossingCheck:
+    """The roads crossing the route drawn (`core.crossing_roads`), as the checks see them, in AC x/z: each piece of
+    road, checked as a stub's ribbon is (drawn, no hole round it, no ground over it), and how many decks."""
+    roads: tuple  # ((label, StubCheck), ...)
+    decks: int = 0
 
 
 @dataclass(frozen=True)
@@ -777,8 +787,54 @@ def junction_checks(rep: Report, label: str, data: dict, dummies: dict, junction
 
 
 def is_mainline_road(name: str) -> bool:
-    """The route's own road (1ROAD_### or 1GRAVEL_###), not a side road's stub (1ROAD_J###)."""
-    return is_road_mesh(name) and "_J" not in name
+    """The route's own road (1ROAD_### or 1GRAVEL_###), not a side road's stub (1ROAD_J###) or a road crossing it
+    (1ROAD_X###)."""
+    return is_road_mesh(name) and "_J" not in name and "_X" not in name
+
+
+CROSSING_CLEAR_M = CLEARANCE_M + DECK_DEPTH_M  # a crossing road under the route's road is this far below it or more
+
+
+def crossing_checks(rep: Report, label: str, data: dict, crossing: CrossingCheck | None) -> None:
+    """Roads crossing the route (`core.crossing_roads`). Each bridge over the route clears its road by CLEARANCE_M
+    everywhere over it (a failure: the plan never draws one lower). Each road drawn under the route's bridge or beyond
+    a bridge over it is drawn, has no hole round it and no ground over it, as `stub_failures` judges stubs, and none
+    stands over or under the route's road within CROSSING_CLEAR_M: warnings, since they're out of reach, and the mesh
+    stage has already left out any that overlaps the route's ground."""
+    if crossing is None:
+        return
+    nodes = [n for n in data["nodes"] if n["class"] == 2]
+    route = RoadSurface([n for n in nodes if is_mainline_road(n["name"])])
+    decks = [n for n in nodes if n["name"].startswith(DECK_MESH)]
+    if decks:
+        xyz = np.concatenate([n["vertices"]["pos"] for n in decks]).astype(float)
+        over = xyz[route.covers(xyz[:, [0, 2]])]
+        gaps = [p[1] - h for p in over if (h := route.height(p[0], p[2])) is not None]
+        low = min(gaps) if gaps else np.inf
+        rep.check(low >= CLEARANCE_M - 0.05, f"{label}: {crossing.decks} bridge{'s' if crossing.decks != 1 else ''} "
+                  f"over the route clear its road by {CLEARANCE_M} m or more"
+                  + (f" ({low:.2f} m at the lowest)" if np.isfinite(low) else ""))
+    if not crossing.roads:
+        return
+    found = stub_failures(data, list(crossing.roads))
+    for fault, what in STUB_FAULTS.items():
+        if fault == "seam":
+            continue
+        bad = [name for name, faults in found.items() if fault in faults]
+        if bad:
+            rep.warnings.append(f"{label}: roads crossing the route not {what}: {'; '.join(bad[:5])}")
+        else:
+            rep.passed.append(f"{label}: {len(crossing.roads)} pieces of road crossing the route {what}")
+    xr = [n for n in nodes if is_road_mesh(n["name"]) and "_X" in n["name"]]
+    if xr:
+        xyz = np.concatenate([n["vertices"]["pos"] for n in xr]).astype(float)
+        near = xyz[route.covers(xyz[:, [0, 2]])]
+        clash = [p for p in near if (h := route.height(p[0], p[2])) is not None and abs(h - p[1]) < CROSSING_CLEAR_M]
+        if clash:
+            rep.warnings.append(f"{label}: {len(clash)} vertices of the roads crossing the route stand over or under "
+                                f"its road within {CROSSING_CLEAR_M:.1f} m")
+        else:
+            rep.passed.append(f"{label}: roads crossing the route clear of its road")
 
 
 def _xz(nodes: list[dict]) -> np.ndarray:
@@ -855,11 +911,12 @@ def _dressing(rep: Report, ok: bool, what: str) -> None:
 def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
                  road_radius: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
                  junctions: list[JunctionCheck] | None = None,
-                 roundabouts: list[RoundaboutCheck] | None = None) -> Report:
+                 roundabouts: list[RoundaboutCheck] | None = None, crossing: CrossingCheck | None = None) -> Report:
     """`road_radius`: by layout label ("main", "forward", "reverse"), the centreline's radius every metre over the
     layout's AI line, as (AC x/z points, radii). The validate stage passes it from the profile, so a bend is judged
     as main's 1 m centreline line judged it. `junctions`: the side roads' junctions, for `junction_checks`, a
-    roundabout's exits among them; `roundabouts`: the rings drawn whole, for `roundabout_checks`."""
+    roundabout's exits among them; `roundabouts`: the rings drawn whole, for `roundabout_checks`; `crossing`: the
+    roads crossing the route drawn, and the bridges over it, for `crossing_checks`."""
     rep = Report()
     tid = track_dir.name
     kn5_materials: set[str] = set()
@@ -915,6 +972,7 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
             closure_checks(rep, label, merged, all_dummies, junctions or [], meshes=lay == layouts[0])
             if lay == layouts[0]:
                 roundabout_checks(rep, label, merged, roundabouts or [])
+                crossing_checks(rep, label, merged, crossing)
     for rel in ("ATTRIBUTION.txt", "centreline.geojson", "extension/ext_config.ini"):
         rep.check((track_dir / rel).exists(), f"{rel} present")
     if (track_dir / "extension" / "ext_config.ini").exists() and kn5_materials:

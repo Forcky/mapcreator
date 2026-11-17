@@ -13,6 +13,8 @@ import numpy as np
 
 from mapcreator.config import Settings
 from mapcreator.core import centreline as cl
+from mapcreator.core import crossing_roads as crossing_roads_core
+from mapcreator.core import dem_age
 from mapcreator.core import profile as pf
 from mapcreator.core import roundabouts as rb_core
 from mapcreator.core import section as sec
@@ -28,6 +30,8 @@ STAGE = "03_section"
 STUBS = "stubs.json"
 # The roundabouts the route drives: the rest of each ring, its island and its closed exits (`core.roundabouts`).
 ROUNDABOUTS = "roundabouts.json"
+# The roads crossing the route drawn: under its bridges, and over it on their own (`core.crossing_roads`).
+CROSSING_ROADS = "crossing_roads.json"
 
 
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
@@ -103,6 +107,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             stub_summary["in_clusters"] = in_clusters
     else:
         (work.stage(STAGE) / STUBS).unlink(missing_ok=True)  # no junctions, or built without them
+    cross_summary = _crossing_roads(work, job, region, c, section, dem)
     sources: dict[str, float] = {}
     inherited: dict[str, float] = {}
     for r, run, m in zip(per_run, runs, lengths):
@@ -126,7 +131,36 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "surface_changes": int(np.count_nonzero(np.diff(unsealed.astype(np.int8)))),
         "styles_m": {name: round(float(ds[style[:-1] == k].sum()), 1) for k, name in enumerate(sec.STYLES)
                      if (style[:-1] == k).any()},
-    } | ({"junction_stubs": stub_summary} if stub_summary is not None else {})       | ({"roundabouts": ring_summary} if ring_summary is not None else {})
+    } | ({"junction_stubs": stub_summary} if stub_summary is not None else {})       | ({"roundabouts": ring_summary} if ring_summary is not None else {}) | (
+        {"crossing_roads": cross_summary} if cross_summary is not None else {})
+
+
+def _crossing_roads(work: WorkDir, job: Job, region, c, section: dict, dem) -> dict | None:
+    """Plan the roads crossing the route to draw (`core.crossing_roads`), whatever the job's junctions option: they
+    aren't side roads. Writes crossing_roads.json, or removes a stale one when there's nothing to draw or say."""
+    path = work.stage(STAGE) / CROSSING_ROADS
+    found = route_stage.crossings(work)
+    if not found:
+        path.unlink(missing_ok=True)
+        return None
+    route_xy = np.load(work.root / route_stage.STAGE / "route.npz")["xy"]
+    # The profile stage's verdicts on the bridges (`core.dem_age`): one the elevation data doesn't hold isn't drawn.
+    ages = work.root / profile_stage.STAGE / dem_age.FILE
+    doc = crossing_roads_core.plan(found, c, section, dem.sample, width_factor=job.width.factor,
+                                   route_length_m=float(cl.cumulative(route_xy)[-1]),
+                                   dem_ages=work.read_json(profile_stage.STAGE, dem_age.FILE) if ages.exists() else None)
+    if not (doc["roads"] or doc["decks"] or doc["skipped"]):
+        path.unlink(missing_ok=True)
+        return None
+    work.write_json(STAGE, CROSSING_ROADS, {"version": doc.pop("version"), "crs": f"EPSG:{region.epsg}", **doc})
+    return crossing_roads_core.summary(doc)
+
+
+def crossing_roads(work: WorkDir) -> dict | None:
+    """The roads crossing the route the section stage planned to draw, and those left out (`core.crossing_roads`), as
+    crossing_roads.json holds them: None where there are none."""
+    path = work.root / STAGE / CROSSING_ROADS
+    return work.read_json(STAGE, CROSSING_ROADS) if path.exists() else None
 
 
 def roundabouts(work: WorkDir, job: Job) -> list[dict]:

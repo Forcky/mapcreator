@@ -311,8 +311,35 @@ A roundabout the route drives is drawn whole: the rest of its ring, a kerbed gra
   - Where the DEM puts a bridge's road less than 4.6 m above the road it crosses, the profile stage says so in the build's summary and the validate report: "the elevation data predates this bridge", or "is too coarse to show" it off LiDAR (`core/dem_age.py`; `docs/ac-format.md`, "Bridges the elevation data doesn't hold"). Both roads are still built at the DEM's levels.
   - The fix is newer survey data. Land Tasmania has flown 50 LiDAR projects since the statewide DEM (Kingborough 2022 covers both Kingston interchanges), but they're only delivered through ELVIS orders, and their licence isn't stated (`docs/data-sources.md`, "Newer LiDAR surveys").
   - Not caught: a cutting caught half-dug where the bridge itself still fits (the Kingston Bypass under Summerleas Road: 6.1 m apart, with a 7.9 m mound beside it that the hump fix bridges), and bridges over the route that aren't tagged as bridges.
-- **Bridges are embankments at deck height** (no deck, parapets or piers yet; the roads under them aren't drawn). Since 11 Nov each tagged bridge whose deck stands 1.5 m or more above the DEM's ground gets a guard rail and collider on both sides, on any DEM, and its camber is crown only (`roadside.bridge_mask`, `section.off_ground_factor`). Before, rails came only from the DEM on LiDAR ground: on the Lyell Highway example 8 of its 9 such bridges had none, among them the 168 m Bradshaw Bridge over a 45.6 m drop at its start. Now all 9 have rails (158 m of rail on that track before, 1,155 m after).
+- **Bridges are embankments at deck height** (no deck, parapets or piers yet; the roads under them stop short of the embankment either side: "Roads crossing the route" below). Since 11 Nov each tagged bridge whose deck stands 1.5 m or more above the DEM's ground gets a guard rail and collider on both sides, on any DEM, and its camber is crown only (`roadside.bridge_mask`, `section.off_ground_factor`). Before, rails came only from the DEM on LiDAR ground: on the Lyell Highway example 8 of its 9 such bridges had none, among them the 168 m Bradshaw Bridge over a 45.6 m drop at its start. Now all 9 have rails (158 m of rail on that track before, 1,155 m after).
 - **The validator warns** (it never fails a build) where a crest or sag would pull more than 0.5 g at the AI's planned speed.
+
+## Roads crossing the route
+
+The roads crossing under the route's bridges and the bridges over it, with their approaches (`core/crossing_roads.py`; `docs/ac-format.md`, "Roads crossing the route"), built side by side with the route's own open decks (stage 1) and the rest of the flyovers work, to be tried in game together.
+
+- **To check in game** (CSP 0.2.11; by day, and at night with headlights): `kingston_bypass_southbound` (Summerleas Road's bridge at about 0.49 km, Spring Farm Road's at about 1.84 km), `slip_lane_channel_highway` (Spring Farm Road's at about 1.92 km), `summerleas_road` (the bypass's carriageways under its bridge at about 2.0 km), `huon_highway_eastbound` (nothing drawn: its warning):
+  - driving under each bridge at speed: the deck reads as a bridge (barrier, rail, fascia, darker underside, its shadow on the road), the piers and abutments stand where they look right, nothing pokes through the deck, and no hole shows in the ground under it or beside its approaches;
+  - collision where the eye sees it: run into a pier and into an abutment's face (each should stop the car), and check nothing stops a car under the deck where nothing is drawn;
+  - the approaches: each joins the deck's end with no step or gap, sits on its embankment, and the terrain meets it cleanly;
+  - from the route's bridge on `summerleas_road`: the two bypass carriageways in the cutting below, either side of today's embankment, and how they read with stage 1's open deck once it's in;
+  - the concrete (`kerb` texture) and the underside's darker values, by day and at night; whether the rail's posts shimmer at a distance;
+  - the frame rate near a bridge (each is about 2,000 vertices and 6 meshes).
+- **Under today's embankment:** until the route's own bridge is an open deck (stage 1), a road under it stops 1 m short of the route's ground either side. On a skewed crossing that's well short: the bypass's carriageways under Summerleas Road (56°) end 6.5-7.6 m from the route's road edge, where the earth bank's skirt and their own corners meet. Once stage 1 takes the span out of the terrain's footprint, the road carries on under the deck in one piece with no change here (the build clips against `mesh.terrain_region`'s footprint, which is what stage 1 changes).
+- **Roads running side by side** keep the major one: the Kingston Bypass's on-ramp runs 3 m beside its northbound carriageway under Summerleas Road's bridge, so it isn't drawn (the build's warnings say why). A ramp merging into a carriageway would need the two drawn as one surface with a gore: stage 3's work.
+- **Piers don't know the other roads under the deck.** They keep clear of the route's road (1.5 m, 3 m near the grid), but the route's other carriageway, a ramp or a path under the same bridge isn't drawn on the route's build, so a pier can stand where one runs. On the Kingston Bypass (southbound) Summerleas Road's pier stands in the median, which is about right.
+- **Abutments and piers are placed by rule** (a pier every 30 m or less of span; the abutment's face where the ground comes within 2 m of the underside), not from the bridge's real structure; `bridge:structure` and `man_made=bridge` outlines aren't read yet. A deck's width is the road's tags plus 1 m footways, so a bridge carrying paths beside the road (Summerleas Road's has a footway and a cycleway on their own bridges 4 m either side) is narrower than the real one.
+- **The deck's top comes from the DEM at the bridge's ends.** Where the bare earth kept the approach fill that's right; where the DEM is older than the bridge, the profile stage's verdict (`core/dem_age.py`) leaves it out. Newer LiDAR could give better heights there (`docs/data-sources.md`, "Newer LiDAR surveys").
+- **A deck that clears the route by less than 4.6 m is left out whole,** with its approaches. On the regression tracks every deck the elevation data holds clears it: 5.0 to 6.3 m.
+- **No lights or reflective tape** under a deck or on its piers in v1; the ground under it isn't darkened (our vertices have no colour), only its underside is.
+- **Cost** (laptop builds, made-up WorldCover trees; mesh-stage meshes and vertices, and the KN5, main against this branch). A 50 m deck with one pier is about 2,200 vertices in 6 meshes; its two 40 m approaches about 380; the rest is the terrain's extra points round them.
+
+  | Track | Drawn | Meshes | Vertices | KN5 |
+  |---|---|---|---|---|
+  | `kingston_bypass_southbound` | 2 decks, 4 approaches | 52 → 68 | 68,172 → 74,085 | 10.2 → 10.5 MB |
+  | `slip_lane_channel_highway` | 1 deck, 2 approaches | 63 → 71 | 63,063 → 66,054 | 7.9 → 8.1 MB a layout |
+  | `summerleas_road` | 2 roads under its bridge, 4 pieces (2 decks and the on-ramp left out) | 90 → 93 | 97,756 → 99,068 | 11.6 → 11.7 MB |
+  | `huon_highway_eastbound` | nothing (the loop under it left out) | 37 → 37 | 45,311, byte for byte | 5.4 MB |
 
 ## Tunnels
 

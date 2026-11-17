@@ -13,6 +13,7 @@ from scipy.spatial import cKDTree
 
 from mapcreator.config import Settings
 from mapcreator.core import ai_line, dem_age, junctions, scenery, stubs, validate
+from mapcreator.core import crossing_roads as crossing_core
 from mapcreator.core import mesh as base_mesh
 from mapcreator.core import roundabouts as rb_core
 from mapcreator.core.layout import AI_END_SHORT_M, RoadModel, layouts_for
@@ -136,6 +137,34 @@ def roundabout_checks(job: Job, work: WorkDir) -> tuple[list[validate.Roundabout
     return out, juncs
 
 
+def crossing_check(work: WorkDir) -> validate.CrossingCheck | None:
+    """The roads crossing the route as the mesh stage drew them (`core.crossing_roads`), in AC x/z, for the validator:
+    each piece of road as a stub's ribbon (its paved strip and points along its centreline), and how many decks. None
+    where there are none."""
+    path = work.root / mesh_stage.STAGE / mesh_stage.CROSSING_ROADS
+    if not path.exists():
+        return None
+    doc = work.read_json(mesh_stage.STAGE, mesh_stage.CROSSING_ROADS)
+    if not doc["roads"] and not doc["decks"]:
+        return None
+    frame = Scene.load(work.root / mesh_stage.STAGE).frame
+
+    def ac(p):
+        p = np.asarray(p, float).reshape(-1, 2)
+        return frame.to_ac(p[:, 0], p[:, 1], np.zeros(len(p)))[:, [0, 2]]
+
+    roads = []
+    for r in doc["roads"]:
+        xy = np.asarray(r["rows"]["xy"], float)
+        for piece in r["pieces"]:
+            a, b = piece["rows"]
+            # Its whole ribbon, skirts and all, so the ground round them is checked for holes too.
+            ground = shapely.Polygon(ac(piece["outline"])).buffer(0)
+            label = f"{crossing_core.describe(r)} ({'under the route' if r['kind'] == 'under' else 'beyond its bridge'})"
+            roads.append((label, validate.StubCheck(ground, ac(xy[a + 1:b]), np.zeros((0, 2, 2)))))
+    return validate.CrossingCheck(tuple(roads), len(doc["decks"]))
+
+
 def _stub_check(st: dict, c, sec, frame) -> validate.StubCheck:
     """A stub as the validator sees it (`validate.stub_check`), from the centreline's and cross-section's arrays."""
     return validate.stub_check(st, c["s"], c["xy"], c["heading"], sec["half_left"], sec["half_right"], frame)
@@ -172,23 +201,36 @@ def junction_checks(job: Job, work: WorkDir) -> list[validate.JunctionCheck]:
     return out
 
 
-def _dem_age_warnings(work: WorkDir) -> list[str]:
+def _dem_age_warnings(work: WorkDir, covered: set | None = None) -> list[str]:
     """The profile stage's warnings for bridges the DEM doesn't hold (`core.dem_age`); none from a profile stage
-    run before it judged them."""
+    run before it judged them. Bridges at the `covered` crossings are left to the crossing roads' own warnings, which
+    say the same and what was left out (`crossing_roads.dem_covered`)."""
     path = work.root / profile_stage.STAGE / dem_age.FILE
-    return list(work.read_json(profile_stage.STAGE, dem_age.FILE).get("warnings") or []) if path.exists() else []
+    if not path.exists():
+        return []
+    doc = work.read_json(profile_stage.STAGE, dem_age.FILE)
+    if not covered:
+        return list(doc.get("warnings") or [])
+    bridges = [dem_age.Bridge(**b) for b in doc.get("bridges") or [] if not set(b.get("crossings") or []) & covered]
+    return dem_age.Report(bridges, doc.get("not_bridges", 0), doc.get("unmatched", 0)).warnings()
 
 
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     ring_checks, ring_exits = roundabout_checks(job, work)
     rep = validate.track_folder(work.root / track_stage.STAGE / job.track_id, allow_tight_bends=job.allow_tight_bends,
                                 road_radius=road_radius(job, work), junctions=junction_checks(job, work) + ring_exits,
-                                roundabouts=ring_checks)
+                                roundabouts=ring_checks, crossing=crossing_check(work))
     rings = _roundabouts(job, work)
     if rings:
         rep.warnings.append(f"The route passes {len(rings)} roundabout{'s' if len(rings) != 1 else ''} "
                             f"not drawn whole ({', '.join(rings)}): the route's own arc is built, as before.")
-    rep.warnings.extend(_dem_age_warnings(work))
+    # Roads crossing the route (`core.crossing_roads`): those drawn, and each one left out with the reason. A bridge
+    # left out because the elevation data doesn't hold it is warned of once, saying so.
+    plan = section_stage.crossing_roads(work)
+    rep.warnings.extend(_dem_age_warnings(work, crossing_core.dem_covered(plan)))
+    built_path = work.root / mesh_stage.STAGE / mesh_stage.CROSSING_ROADS
+    rep.warnings += crossing_core.warnings(
+        plan, work.read_json(mesh_stage.STAGE, mesh_stage.CROSSING_ROADS) if plan and built_path.exists() else None)
     work.write_json(STAGE, "report.json", {"ok": rep.ok, "passed": rep.passed, "failed": rep.failed,
                                            "route_failed": rep.route_failed, "warnings": rep.warnings})
     if rep.failed:

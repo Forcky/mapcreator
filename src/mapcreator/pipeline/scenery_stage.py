@@ -33,6 +33,7 @@ import shapely
 from mapcreator.config import Settings
 from mapcreator.core import mesh as base_mesh
 from mapcreator.core import junctions, power, reach, scenery, species, sprites, stubs, treefx
+from mapcreator.core import crossing_roads
 from mapcreator.core import roundabouts as rb_core
 from mapcreator.core.scene import Material, Scene
 from mapcreator.job import Job
@@ -72,11 +73,15 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     # Roundabouts the route drives (`core.roundabouts`): the same off the rest of each ring, its exits' stubs and its
     # island (all of a small one; on a big one, its edge), from the section stage's plan.
     rings = section_stage.roundabouts(work, job)
-    cleared: dict | None = {} if mouths or rings else None
+    # Roads crossing the route (`core.crossing_roads`): the same off each road drawn under the route's bridges or
+    # beyond a bridge over it, and from under each of those bridges.
+    crossing = section_stage.crossing_roads(work)
+    crossing = crossing if crossing and (crossing["roads"] or crossing["decks"]) else None
+    cleared: dict | None = {} if mouths or rings or crossing else None
 
     def side_roads_zone(beyond_m: float):
-        parts = [g for g in (junctions.zone(mouths, c["s"], xy, beyond_m), rb_core.zone(rings, beyond_m))
-                 if g is not None]
+        parts = [g for g in (junctions.zone(mouths, c["s"], xy, beyond_m), rb_core.zone(rings, beyond_m),
+                             crossing_roads.zone(crossing, beyond_m)) if g is not None]
         return shapely.unary_union(parts) if parts else None
 
     dem = region.elevation(settings)
@@ -99,7 +104,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     # Trees stay out of every footprint chosen, even one a side road takes out, so the trees elsewhere don't change.
     built = shapely.unary_union([b.buffer(3.0) for b in footprints]) if footprints else None
     keep_buildings = None
-    if (mouths or rings) and footprints:
+    if (mouths or rings or crossing) and footprints:
         side_roads = side_roads_zone(scenery.BUILDING_CLEAR_M)
         keep_buildings = ~shapely.intersects(side_roads, footprints)
         cleared["buildings"] = int((~keep_buildings).sum())
@@ -159,7 +164,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     ok = np.isfinite(ground)
     trees, ground = trees.subset(ok), ground[ok]
     keep_trees = None
-    if mouths or rings:
+    if mouths or rings or crossing:
         side_roads = side_roads_zone(base_mesh.VERGE_M + scenery.CLEAR_OF_VERGE_M)
         shapely.prepare(side_roads)
         keep_trees = ~shapely.contains_xy(side_roads, trees.xy[:, 0], trees.xy[:, 1])
