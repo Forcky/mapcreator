@@ -98,6 +98,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         stub_summary = {"stubs": len(plan["stubs"]), "skipped": {}}
         for sk in plan["skipped"]:
             stub_summary["skipped"][sk["reason"]] = stub_summary["skipped"].get(sk["reason"], 0) + 1
+        in_clusters = sum(st.get("cluster") is not None for st in plan["stubs"])
+        if in_clusters:  # drawn with others as one patch (`stubs._merge`)
+            stub_summary["in_clusters"] = in_clusters
     else:
         (work.stage(STAGE) / STUBS).unlink(missing_ok=True)  # no junctions, or built without them
     sources: dict[str, float] = {}

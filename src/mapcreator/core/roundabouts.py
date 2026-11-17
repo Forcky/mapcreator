@@ -491,7 +491,7 @@ def _plan_ring(ring: dict, m: stubs._Mainline, c, section, dem_sample, width_fac
         planned = None
         for scale in EXIT_FLARE_SCALES:
             attempt = stubs.plan(exits, ring_c, ring_sec, dem_sample, width_factor=width_factor, layouts=(),
-                                 flare_scale=scale, avoid=keep_off)
+                                 flare_scale=scale, avoid=keep_off, clusters=False)
             if planned is None or len(attempt["stubs"]) > len(planned["stubs"]):
                 planned = attempt
         rec["exits"] = planned["stubs"]

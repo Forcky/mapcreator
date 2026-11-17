@@ -106,6 +106,29 @@ def test_a_line_in_a_skewed_throat_spans_the_paved_outline_off_centre():
     assert lo <= lat.min() - stub_closures.VERGE_SPAN_M + 0.05 and hi >= lat.max() + stub_closures.VERGE_SPAN_M - 0.05
 
 
+@pytest.mark.parametrize("pair", [((300.0, 90.0), (311.0, 90.0)), ((300.0, 70.0), (300.0, 100.0))])
+def test_each_side_road_in_a_cluster_is_closed_across_its_own_share_of_the_throat(pair):
+    # Two side roads drawn as one cluster (`stubs._merge`): 11 m apart, and leaving one node 30 degrees apart.
+    js = [junction(*pair[0], jid=0, closure="major", highway="tertiary"), junction(*pair[1], jid=1)]
+    plan, p = placed(js)
+    assert len(plan) == 2 and plan[0]["cluster"] == plan[1]["cluster"] and len(p.records) == 2
+    lines = []
+    for rec, st in zip(sorted(p.records, key=lambda r: r["junction"]), sorted(plan, key=lambda s: s["junction"])):
+        for name in ("tape", "obstacle"):
+            el = rec["elements"][name]
+            e, n, _, hd = stubs.pose(st)(el["d_m"])
+            nl = np.array([-math.sin(hd), math.cos(hd)])
+            lo, hi = el["offset_m"] - el["width_m"] / 2, el["offset_m"] + el["width_m"] / 2
+            lines.append((rec["junction"], name, shapely.LineString([(e, n) + lo * nl, (e, n) + hi * nl])))
+    # No line of props reaches across the other side road's carriageway.
+    for jid, name, line in lines:
+        other = next(s for s in plan if s["junction"] != jid)
+        xy, hd = np.asarray(other["rows"]["xy"]), np.asarray(other["rows"]["heading"])
+        nrm = np.column_stack([-np.sin(hd), np.cos(hd)]) * other["width_m"] / 2
+        road = shapely.Polygon(np.vstack([xy + nrm, (xy - nrm)[::-1]])).buffer(0)
+        assert line.intersection(road).length < 0.05, (jid, name)
+
+
 # -- the obstacle and the overshoot rule ---------------------------------------------------------------------------
 
 def test_minor_obstacles_are_boards_or_bales_about_half_each_and_fixed_per_junction():

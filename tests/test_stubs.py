@@ -1,7 +1,8 @@
 """Side-road stubs: the plan (where a stub starts, its width, look and heights, its flares sized by the angle, the
 mouth, overlaps and timing gates), the meshes (the stub's ribbon, the throat joined to the road's edge and the stub's
 first row without a crack, the flares' verges, the road's verge cut and its edge line broken across the mouth), the
-terrain fitted round them, the placement functions, validation, and `junctions: none`."""
+terrain fitted round them, clusters (side roads whose mouths overlap drawn as one patch), the placement functions,
+validation, and `junctions: none`."""
 
 import json
 import math
@@ -145,16 +146,77 @@ def test_pose_surface_and_ground_for_the_closures():
     assert stubs.ground_height(st, 37.0, w + 6.0, flat(3.0)) == 3.0  # beyond the verge: the ground
 
 
-def test_a_stub_overlapping_another_on_the_same_side_tries_smaller_flares_then_is_left_out():
+def test_a_stub_overlapping_another_on_the_same_side_tries_smaller_flares_then_a_cluster_then_is_left_out():
     near = [junction(300.0, 90.0, jid=0, highway="tertiary", closure="major"), junction(318.0, 90.0, jid=1)]
     c, sec = road()
     p = stubs.plan(near, c, sec, flat())
     assert [s["junction"] for s in p["stubs"]] == [0, 1]  # 18 m apart: both fit, with smaller flares between
     assert p["stubs"][1]["flares"]["upstream"]["radius_m"] < stubs.FLARE_RADIUS_M
-    on_top = [junction(300.0, 90.0, jid=0, highway="tertiary", closure="major"), junction(306.0, 80.0, jid=1)]
+    assert not any("cluster" in s for s in p["stubs"])  # each on its own, as before clusters
+    # 3 m apart, 5 degrees between them: their ribbons would run over each other for 40 m, too far to start them
+    # further in, so they can't be a cluster either.
+    on_top = [junction(300.0, 90.0, jid=0, highway="tertiary", closure="major"), junction(303.0, 85.0, jid=1)]
     p = stubs.plan(on_top, c, sec, flat())
     assert [s["junction"] for s in p["stubs"]] == [0]  # the major road is kept
     assert p["skipped"] == [{"junction": 1, "name": "Side Road 1", "reason": "overlaps"}]
+    # One way arm of a road that leaves 8 m from the other and joins it 30 m out: `joins`.
+    arm = {**junction(308.0, 90.0, jid=1), "line": [[308.0, 0.0], [306.0, 15.0], [300.5, 30.0], [300.0, 100.0]]}
+    p = stubs.plan([on_top[0], arm], c, sec, flat())
+    assert p["skipped"] == [{"junction": 1, "name": "Side Road 1", "reason": "joins"}]
+
+
+# -- clusters -----------------------------------------------------------------------------------------------------------
+
+def body(st):
+    """A stub's ribbon from its first row, road and verges, as stubs.json has it."""
+    r = st["rows"]
+    k = int(st["ribbon_from_m"])
+    xy, hd = np.asarray(r["xy"], float)[k:], np.asarray(r["heading"], float)[k:]
+    n = np.column_stack([-np.sin(hd), np.cos(hd)]) * (st["width_m"] / 2 + mesh.VERGE_M)
+    return shapely.Polygon(np.vstack([xy + n, (xy - n)[::-1]])).buffer(0)
+
+
+def test_side_roads_whose_mouths_overlap_on_the_same_side_are_drawn_as_one_cluster():
+    c, sec = road()
+    pair = [junction(300.0, 90.0, jid=0, highway="tertiary", closure="major"), junction(311.0, 90.0, jid=1)]
+    p = stubs.plan(pair, c, sec, flat())
+    a, b = p["stubs"]
+    assert p["skipped"] == [] and a["cluster"] == b["cluster"] == 0  # one cluster, the major road leading
+    # Their mouths share the road's rows; each keeps its own full-size flares, ribbon and record.
+    assert a["mouth"]["rows"][0] < b["mouth"]["rows"][0] < a["mouth"]["rows"][1] < b["mouth"]["rows"][1]
+    assert min(f["radius_m"] for s in (a, b) for f in s["flares"].values()) > stubs.FLARE_RADIUS_M - 0.5
+    assert body(a).intersection(body(b)).area < 0.01
+    # Their outlines share out the throat between them: each holds its own centreline, not the other's.
+    oa, ob = (shapely.Polygon(s["outline"]) for s in (a, b))
+    assert oa.intersection(ob).area < 0.05
+    for o, s, other in ((oa, a, b), (ob, b, a)):
+        assert o.buffer(0.05).contains(shapely.MultiPoint(s["rows"]["xy"]))
+        assert not o.intersects(shapely.MultiPoint(other["rows"]["xy"]))
+    # Without clusters (a roundabout's exits), the second is left out as before.
+    p = stubs.plan(pair, c, sec, flat(), clusters=False)
+    assert [s["junction"] for s in p["stubs"]] == [0] and p["skipped"][0]["reason"] == "overlaps"
+    assert "cluster" not in p["stubs"][0]
+
+
+def test_side_roads_leaving_one_node_start_their_ribbons_further_in_until_they_clear_each_other():
+    c, sec = road()
+    fork = [junction(300.0, 70.0, jid=0, highway="tertiary", closure="major"), junction(300.0, 100.0, jid=1)]
+    alone = {j["id"]: plan_one(j)[1]["ribbon_from_m"] for j in fork}
+    p = stubs.plan(fork, c, sec, flat())
+    a, b = p["stubs"]
+    assert a["cluster"] == b["cluster"] == 0
+    assert a["ribbon_from_m"] > alone[0] and b["ribbon_from_m"] >= alone[1]
+    assert a["ribbon_from_m"] - alone[0] <= stubs.CLUSTER_PUSH_M
+    # Where they start, their ribbons (road and verges) clear each other and each other's outline.
+    assert body(a).intersection(body(b)).area < 0.01
+    for s, other in ((a, b), (b, a)):
+        assert body(s).intersection(shapely.Polygon(other["outline"])).area < 0.01
+    # The throat reaches out along each carriageway to its ribbon, so each one's flare carries on along its edge.
+    first = int(a["ribbon_from_m"])
+    assert all(np.asarray(f["points"])[-1, :2] == pytest.approx(
+        np.asarray(a["rows"]["xy"][first]) + (1 if f["stub_side"] == "left" else -1) * a["width_m"] / 2 * np.array(
+            [-np.sin(a["rows"]["heading"][first]), np.cos(a["rows"]["heading"][first])]), abs=0.02)
+        for f in a["flares"].values())
 
 
 def test_a_stub_is_cut_short_before_another_part_of_the_route():
@@ -347,6 +409,99 @@ def test_ribbon_skirt_caps_hold_the_skirt_short_and_leave_the_verge_alone():
         HALF + mesh.VERGE_M + 0.5)
 
 
+CLUSTERS = {
+    "apart": [junction(300.0, 90.0, jid=0, highway="tertiary", closure="major"), junction(311.0, 90.0, jid=1)],
+    "one_node": [junction(300.0, 70.0, jid=0, highway="tertiary", closure="major"), junction(300.0, 100.0, jid=1)],
+    "skewed": [junction(300.0, -60.0, jid=0, highway="tertiary", closure="major"), junction(306.0, -110.0, jid=1)],
+}
+
+
+def paved_area(plan):
+    return shapely.union_all([shapely.Polygon(st["outline"]).buffer(0) for st in plan])
+
+
+@pytest.mark.parametrize("name", CLUSTERS)
+def test_a_cluster_s_throat_joins_the_road_s_edge_and_each_stub_without_a_crack_or_an_overlap(name):
+    c, sec, plan, rb, b = built(CLUSTERS[name])
+    assert len(plan) == 2 and plan[0]["cluster"] == plan[1]["cluster"] and b.stats["clusters"] == 1
+    side = junctions.SIDE_CODE[plan[0]["side"]]
+    lo, hi = min(st["mouth"]["rows"][0] for st in plan), max(st["mouth"]["rows"][1] for st in plan)
+    # The road's verge is cut and its edge line broken across the whole of the merged mouth, and nowhere else.
+    assert b.cut[side][lo:hi].all() and b.cut[side].sum() == hi - lo
+    assert b.edge_break[side][lo + 1:hi].all() and b.edge_break[side].sum() == hi - lo - 1
+    # One throat shares the road's edge vertices across it, and each ribbon's first row, exactly.
+    col = rb.road_cols.start if side == "L" else rb.road_cols.stop - 1
+    stub_road = triangles(b.meshes, "1ROAD_J")
+    verts = {tuple(v) for v in stub_road.reshape(-1, 3).astype(np.float32).tolist()}
+    edge = FRAME.to_ac(rb.e[lo:hi + 1, col], rb.n[lo:hi + 1, col], rb.h[lo:hi + 1, col]).astype(np.float32)
+    assert all(tuple(v) in verts for v in edge.tolist())
+    for sb in b.footprint.ribbons:
+        rc = sb.road_cols
+        row = FRAME.to_ac(sb.e[0, rc], sb.n[0, rc], sb.h[0, rc]).astype(np.float32)
+        assert sum(tuple(v) in verts for v in row.tolist()) == rc.stop - rc.start
+    # Every point of the paved outlines and a metre either side of the road's edge is road, exactly once.
+    road_meshes = mesh.ribbon_meshes(rb, c["s"], FRAME, cut=b.cut, edge_break=b.edge_break) + b.meshes
+    paved = paved_area(plan)
+    minx, miny, maxx, maxy = paved.bounds
+    xs, ys = np.meshgrid(np.arange(minx + 0.013, maxx, 0.37), np.arange(min(miny, -HALF) + 0.217, max(maxy, HALF), 0.37))
+    pts = np.column_stack([xs.ravel(), ys.ravel()])
+    inside = shapely.contains_xy(paved.buffer(-0.02), pts[:, 0], pts[:, 1]) | (np.abs(pts[:, 1]) < HALF - 0.05)
+    assert (coverage(triangles(road_meshes, "1ROAD"), ac_xz(pts[inside])) == 1).all()
+
+
+def test_only_a_cluster_s_outer_flares_have_mown_verges_and_the_ground_between_its_side_roads_is_terrain():
+    c, sec, plan, rb, b = built(CLUSTERS["apart"], dem_h=GROUND - 0.4)
+    lo, hi = min(st["mouth"]["rows"][0] for st in plan), max(st["mouth"]["rows"][1] for st in plan)
+    # A flare's verge starts on the road's verge vertex at each end of the merged mouth, and there are two.
+    grass = triangles(b.meshes, "1GRASS_J").reshape(-1, 3).astype(np.float32)
+    vg = {tuple(v) for v in grass.tolist()}
+    col = rb.road_cols.start - 1
+    for row in (lo, hi):
+        assert tuple(FRAME.to_ac(rb.e[row, col], rb.n[row, col], rb.h[row, col]).astype(np.float32).tolist()) in vg
+    assert len(b.footprint.patches) == 3  # the merged throat and the two outer flares' verges
+    # Between the two side roads the terrain reaches the inner flares' edges, sharing their points.
+    meshes = (mesh.ribbon_meshes(rb, c["s"], FRAME, cut=b.cut, edge_break=b.edge_break) + b.meshes
+              + mesh.terrain_meshes(rb, 150.0, flat(GROUND - 0.4), FRAME, extra=b.footprint))
+    gore = b.footprint.edges[-1]
+    assert len(gore[0]) > 5 and (np.asarray(gore[0])[:, 0] > 302.0).all() and (np.asarray(gore[0])[:, 0] < 309.0).all()
+    tv = {tuple(v) for v in triangles(meshes, "1GRASS_T").reshape(-1, 3).astype(np.float32).tolist()}
+    pts = FRAME.to_ac(gore[0][:, 0], gore[0][:, 1], gore[1]).astype(np.float32)
+    assert all(tuple(v) in tv for v in pts.tolist())
+
+
+@pytest.mark.parametrize("skirt", [True, False])
+@pytest.mark.parametrize("name", CLUSTERS)
+def test_the_terrain_fits_round_a_cluster_with_no_gap_and_nothing_over_it(name, skirt):
+    c, sec, plan, rb, b = built(CLUSTERS[name], dem_h=GROUND - 0.4, skirt=skirt)
+    meshes = (mesh.ribbon_meshes(rb, c["s"], FRAME, skirt=skirt, cut=b.cut, edge_break=b.edge_break) + b.meshes
+              + mesh.terrain_meshes(rb, 150.0, flat(GROUND - 0.4), FRAME, fold_skirt=not skirt, extra=b.footprint))
+    paved = paved_area(plan)
+    # Off the rows and the ribbons' columns, so no point falls on an edge two triangles share.
+    around = validate._grid_in(paved.buffer(3.0), 0.43) + [0.0131, 0.0173]
+    assert (coverage(triangles(meshes), ac_xz(around)) >= 1).all()  # no hole round it, or between its side roads
+    on_stub = validate._grid_in(paved.buffer(-0.1), 0.61) + [0.0131, 0.0173]
+    assert (coverage(triangles(meshes, "1GRASS"), ac_xz(on_stub)) == 0).all()  # no ground under or over its road
+    assert stubs.faults(plan, meshes, [], c, sec, FRAME) == {}
+
+
+def test_a_cluster_that_won_t_make_one_patch_is_drawn_as_its_lead_and_the_checks_leave_out_the_rest(monkeypatch):
+    def refuse(legs, rb):
+        raise stubs._NoCluster("not one piece")
+
+    monkeypatch.setattr(stubs, "_cluster_throat", refuse)
+    c, sec, plan, rb, b = built(CLUSTERS["apart"], dem_h=GROUND - 0.4)
+    assert "clusters" not in b.stats and len(b.footprint.ribbons) == 1
+    ground = (mesh.ribbon_meshes(rb, c["s"], FRAME, cut=b.cut, edge_break=b.edge_break) + b.meshes
+              + mesh.terrain_meshes(rb, 150.0, flat(GROUND - 0.4), FRAME, extra=b.footprint))
+    found = stubs.faults(plan, ground, [], c, sec, FRAME)
+    assert list(found) == [1] and "not_drawn" in found[1]
+    # Built again without it (`settle`), the lead is a stub on its own, and sound.
+    b = stubs.build(plan[:1], rb, c["s"], FRAME, flat(GROUND - 0.4), skirt=True, main_xy=c["xy"])
+    ground = (mesh.ribbon_meshes(rb, c["s"], FRAME, cut=b.cut, edge_break=b.edge_break) + b.meshes
+              + mesh.terrain_meshes(rb, 150.0, flat(GROUND - 0.4), FRAME, extra=b.footprint))
+    assert stubs.faults(plan[:1], ground, [], c, sec, FRAME) == {}
+
+
 def test_side_caps_keep_each_skirt_nearer_its_own_centreline():
     xy = np.column_stack([np.arange(10.0), np.zeros(10)])
     nrm = np.tile([0.0, 1.0], (10, 1))
@@ -392,6 +547,19 @@ def test_the_validator_passes_joined_stubs_and_warns_of_a_gap_or_ground_over_one
     rep = validate.Report()
     validate.stub_checks(rep, "main", kn5_nodes(lifted + extra_ground), [check])
     assert rep.failed == [] and any("no ground above" in w for w in rep.warnings)
+
+
+@pytest.mark.parametrize("name", CLUSTERS)
+def test_the_validator_passes_a_cluster_s_stubs(name):
+    c, sec, plan, rb, b = built(CLUSTERS[name], dem_h=GROUND - 0.4)
+    meshes = (mesh.ribbon_meshes(rb, c["s"], FRAME, cut=b.cut, edge_break=b.edge_break) + b.meshes
+              + mesh.terrain_meshes(rb, 150.0, flat(GROUND - 0.4), FRAME, extra=b.footprint))
+    box = shapely.box(0, 0, 1, 1)
+    checks = [validate.JunctionCheck(st["name"], box, box, stub_check(st, c, sec)) for st in plan]
+    rep = validate.Report()
+    validate.stub_checks(rep, "main", kn5_nodes(meshes), checks)
+    assert rep.failed == [] and rep.warnings == [] and len(rep.passed) == 4
+    assert all("2 side-road stubs" in line for line in rep.passed)
 
 
 # -- a stub cut short, and leaving out a faulty stub as built ----------------------------------------------------------
