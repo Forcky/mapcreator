@@ -394,15 +394,9 @@ def test_a_bridge_s_approaches_join_the_terrain_with_no_hole_and_nothing_over_th
     faults = validate.stub_failures(validate.mesh_nodes(meshes), checks_for(p, b))
     assert all(not f for f in faults.values()), faults
     assert holes(meshes, (500.0, 0.0), 70.0) == 0
-    # The first row's road vertices are terrain points too (a stub's meet its throat there), and points along every
-    # outline edge longer than a metre.
-    firsts = b.edges[0::2]
-    assert len(firsts) == 2 and all(len(pts) == 5 for pts, _ in firsts)
-    for (pts, _), r in zip(b.edges[1::2], b.ribbons):
-        ring = mesh._outline(r)[0]
-        gaps = np.hypot(*np.diff(np.vstack([ring, pts]), axis=0).T)
-        assert len(pts) and shapely.LinearRing(ring).distance(shapely.MultiPoint(pts)) < 1e-6
-        assert gaps.min() > 0
+    # The first row's road vertices are terrain points too (a stub's meet its throat there). Nothing else is added
+    # along the outline: the terrain keeps every outline edge as it is (`mesh._constrain`).
+    assert len(b.edges) == 2 and all(len(pts) == 5 for pts, _ in b.edges)
 
 
 def test_the_footprint_keeps_the_stubs_and_rings_pieces_and_adds_the_crossing_roads():

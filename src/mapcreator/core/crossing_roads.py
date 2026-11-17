@@ -87,11 +87,7 @@ WALL_EMBED_M = 0.3  # walls and colliders reach this far below the ground
 PIER_EMBED_M = 0.5
 PIER_COLLIDER = (-1.0, 3.0)  # a pier's collider, from its ground, as a tree trunk's (`scenery.TRUNK_COLLIDER`)
 MIN_ROWS = 6  # a piece of crossing road with fewer rows (10 m) isn't drawn
-CLEAR_M = 1.0  # between a crossing road's ground and the route's, a stub's, or another crossing road's
-# The terrain's triangulation isn't constrained, so a boundary edge it must keep can be cut by a triangle reaching
-# across to another piece close by, and a hole left where that triangle is dropped. Points along a crossing road's
-# outline at most this far apart (on its edges, so its ribbon's own triangles meet them) keep every edge short.
-OUTLINE_STEP_M = 1.0
+CLEAR_M = 0.5  # between a crossing road's ground and the route's, a stub's, or another crossing road's, as a stub's
 WINDOW_M = 400.0  # crossing roads' meshes are packed by material per this much of the route, as the stubs' are
 MATCH_M = 50.0  # a crossing is found on the smoothed centreline within this of where its route distance falls
 CLASS_RANK = {"motorway": 0, "trunk": 1, "primary": 2, "secondary": 3, "tertiary": 4, "unclassified": 5,
@@ -778,7 +774,6 @@ def build(doc: dict, taken: shapely.Geometry, frame: LocalFrame, ground_sample, 
             ribbons.append(rb)
             rc = rb.road_cols
             edges.append((np.column_stack([rb.e[0, rc], rb.n[0, rc]]), rb.h[0, rc].copy()))
-            edges.append(_densified(outline, mesh._outline(rb)[1]))
             pieces.append({**_piece(r, a, b), "outline": _r2(outline)})
             window = int(float(r["station_m"]) // WINDOW_M)
             tile = textures.GRAVEL_TILE_M if r["surface"] == sec.UNSEALED else textures.ROAD_TILE_M
@@ -808,23 +803,6 @@ def build(doc: dict, taken: shapely.Geometry, frame: LocalFrame, ground_sample, 
              "vertices": int(sum(len(m.positions) for m in meshes)),
              "length_m": round(sum(p["length_m"] for p in pieces), 1)}
     return Built(meshes, ribbons, edges, pieces, left_out, stats)
-
-
-def _densified(ring: np.ndarray, heights: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Points along a closed outline's edges longer than OUTLINE_STEP_M, splitting each evenly, with heights straight
-    along it: the outline's own vertices aren't repeated."""
-    a, b = ring, np.roll(ring, -1, axis=0)
-    ha, hb = heights, np.roll(heights, -1)
-    length = np.hypot(*(b - a).T)
-    pts, hts = [], []
-    for k in np.flatnonzero(length > OUTLINE_STEP_M):
-        n = int(math.ceil(length[k] / OUTLINE_STEP_M))
-        f = np.arange(1, n)[:, None] / n
-        pts.append(a[k] + (b[k] - a[k]) * f)
-        hts.append(ha[k] + (hb[k] - ha[k]) * f[:, 0])
-    if not pts:
-        return np.zeros((0, 2)), np.zeros(0)
-    return np.vstack(pts), np.concatenate(hts)
 
 
 def _piece(r: dict, a: int, b: int) -> dict:

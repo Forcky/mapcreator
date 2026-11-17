@@ -150,3 +150,15 @@ def test_terrain_no_outline_edge_crosses_is_left_as_delaunay_made_it():
     others = np.array([[-20.0, -20.0], [24.0, -20.0], [24.0, 24.0], [-20.0, 24.0]])
     pts, plain, (pts2, _, tri) = _triangulate(ring, others, footprint, corridor)
     assert len(pts2) == len(pts) and np.array_equal(tri, plain)
+
+
+def test_should_geos_fail_the_terrain_is_left_as_delaunay_made_it(monkeypatch):
+    def fail(geometry):
+        raise shapely.errors.GEOSException("TopologyException")
+
+    monkeypatch.setattr(shapely, "constrained_delaunay_triangles", fail)
+    ring = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 4.0], [0.0, 4.0]])
+    others = np.array([[5.0, -1.0], [-20.0, -20.0], [30.0, -20.0], [30.0, 24.0], [-20.0, 24.0]])
+    corridor = shapely.box(-20.0, -20.0, 30.0, 24.0)
+    pts, plain, (pts2, _, tri) = _triangulate(ring, others, shapely.Polygon(ring), corridor)
+    assert len(pts2) == len(pts) and np.array_equal(tri, plain)

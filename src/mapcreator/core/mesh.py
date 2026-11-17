@@ -667,8 +667,17 @@ def _constrain(pts: np.ndarray, hts: np.ndarray, tri: np.ndarray, keep: np.ndarr
 
     So every triangle the outline passes through is taken out, and the ground they covered, less the footprint, is
     triangulated again over its own outline (shapely's constrained Delaunay triangulation): no new points, except
-    where two pieces' outlines cross, at heights interpolated along the outline (`_outline_heights`). Returns the points
-    and heights, any new ones after the others, and the triangles."""
+    where two pieces' outlines cross, at the mean of the two edges' heights there (`_outline_heights`). Returns the
+    points and heights, any new ones after the others, and the triangles. Should GEOS fail on the geometry, the
+    triangles are left as Delaunay made them, and the validator's hole check (`validate.ground_holes`) has the last
+    word."""
+    try:
+        return _constrained(pts, hts, tri, keep, corridor, footprint)
+    except shapely.errors.GEOSException:
+        return pts, hts, tri[keep]
+
+
+def _constrained(pts, hts, tri, keep, corridor, footprint):
     seg = _outline_segments(footprint)
     if not len(seg) or not len(tri):
         return pts, hts, tri[keep]
