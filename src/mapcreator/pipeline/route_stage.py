@@ -17,6 +17,7 @@ from mapcreator.core import centreline
 from mapcreator.core import crossings as crossings_core
 from mapcreator.core import junctions as junctions_core
 from mapcreator.core import rail_and_paths
+from mapcreator.core import ramps as ramps_core
 from mapcreator.core.centreline import cumulative
 from mapcreator.job import Job, Junctions
 from mapcreator.pipeline.workdir import WorkDir
@@ -33,6 +34,8 @@ JUNCTIONS = "junctions.json"
 CROSSINGS = "crossings.json"
 # The railways and paths crossing over or under the route (`core.rail_and_paths`; the format is in docs/ac-format.md).
 CROSSING_LINES = "crossing_lines.json"
+# The ramps leaving or joining the route at a slip angle (`core.ramps`; the format is in docs/ac-format.md).
+RAMPS = "ramps.json"
 
 
 class RouteTooLong(osm_graph.RouteError):
@@ -288,8 +291,13 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         found = junctions_core.find(g, route.xy, to_lonlat=region.to_lonlat())
         work.write_json(STAGE, JUNCTIONS, {"version": found.pop("version"), "crs": f"EPSG:{region.epsg}", **found})
         summary |= {"junctions": len(found["junctions"]), "roundabouts": len(found["roundabouts"])}
+        found_ramps = ramps_core.find(g, route.xy, to_lonlat=region.to_lonlat())
+        work.write_json(STAGE, RAMPS, {"version": found_ramps.pop("version"), "crs": f"EPSG:{region.epsg}",
+                                       **found_ramps})
+        summary |= {"ramps": len(found_ramps["ramps"])}
     else:
         (work.stage(STAGE) / JUNCTIONS).unlink(missing_ok=True)  # built without them, as before they were found
+        (work.stage(STAGE) / RAMPS).unlink(missing_ok=True)
     return summary
 
 
@@ -386,6 +394,15 @@ def junctions(work: WorkDir, job: Job) -> list[dict]:
     if job.junctions != Junctions.CLOSED or not path.exists():
         return []
     return work.read_json(STAGE, JUNCTIONS)["junctions"]
+
+
+def ramps(work: WorkDir, job: Job) -> list[dict]:
+    """The slip ramps the route stage found (`core.ramps`), as ramps.json lists them: none for a job built without
+    junctions, or a route stage run before ramps were found."""
+    path = work.root / STAGE / RAMPS
+    if job.junctions != Junctions.CLOSED or not path.exists():
+        return []
+    return work.read_json(STAGE, RAMPS)["ramps"]
 
 
 def roundabouts(work: WorkDir, job: Job) -> list[dict]:

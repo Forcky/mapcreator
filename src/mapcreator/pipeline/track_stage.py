@@ -13,6 +13,7 @@ import numpy as np
 from mapcreator import __version__, buildinfo, cpus
 from mapcreator.config import Settings
 from mapcreator.core import bridges as bridges_core
+from mapcreator.core import ramps as ramps_core
 from mapcreator.core import roundabouts as rb_core
 from mapcreator.core import (ai_line, closures, furniture, grass, grassfx, junctions, kn5, package, stubs, textures,
                              treefx, validate)
@@ -206,6 +207,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     rings = mesh_stage.built_roundabouts(work, job)
     # On a bridge the kerb strip is drivable: a gate there reaches past it (`core.bridges`).
     decks = mesh_stage.built_bridges(work)
+    # Nor along a slip ramp's taper, gore and nose island (`core.ramps`).
+    ramps = mesh_stage.built_ramps(work, job)
     for lay in layouts:
         road = RoadModel.from_arrays(c["s"], c["xy"], c["z"], c["heading"], c["curvature"], c["grade"],
                                      sec["half_left"], sec["half_right"], sec["slope_left"], sec["slope_right"],
@@ -213,6 +216,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         avoid = junctions.layout_intervals(mouths, c["s"], lay.reverse)
         if rings:
             avoid = sorted(avoid + rb_core.layout_intervals(rings, c["s"], lay.reverse))
+        if ramps:
+            avoid = sorted(avoid + ramps_core.layout_intervals(ramps, c["s"], lay.reverse))
         wider = [(a, b, bridges_core.KERB_M) for a, b in bridges_core.layout_intervals(decks, c["s"], lay.reverse)]
         dummies = logic_dummies(road, scene.frame, avoid, wider)
         gates = dict(zip(("start", "finish"), gate_distances(road, avoid)))
@@ -303,7 +308,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     osm_note = osm_roads.selection_note(route_stage.osm_selection(work, settings), build=buildinfo.version(),
                                         source_url=settings.source_url)
     _write_attribution(track_dir, attributions, title, power_geojson=power_geo.exists(), osm_note=osm_note,
-                       side_roads=bool(plan), rings=bool(rings))
+                       side_roads=bool(plan) or bool(ramps), rings=bool(rings))
     water_file = work.root / mesh_stage.STAGE / "water.json"
     water_type = json.loads(water_file.read_text(encoding="utf-8")).get("type") if water_file.exists() else None
     summary["tree_fx_trees"] = tree_list[1] if tree_list else 0
@@ -325,7 +330,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         tree_surfaces=[*ground, "grass"] if "grass" in mat_index else ground,
         retro_materials=retro_materials(scenes, mats)),
         encoding="ascii")
-    _write_centreline(track_dir, job, c, sec, region, lonlat, attributions, plan, rings)
+    _write_centreline(track_dir, job, c, sec, region, lonlat, attributions, plan, rings, ramps)
 
     zip_path = out_root / f"{job.track_id}.zip"
     # Level 3: the same size as the default 6 on a KN5 (83%), in a quarter of the time (1.9 s against 7.2 s
@@ -436,10 +441,11 @@ def _write_attribution(track_dir, attributions, title: str, *, power_geojson: bo
     _write_text(track_dir / "ATTRIBUTION.txt", "\r\n".join(lines), encoding="utf-8")
 
 
-def _write_centreline(track_dir, job: Job, c, sec, region, lonlat, attributions, side_roads=(), rings=()) -> None:
-    """The route's centreline (ODbL), each side road's stub (`core.stubs`) and each roundabout's ring and exits
-    (`core.roundabouts`) as features of their own: OSM-derived geometry the track is built from, as `power.geojson`
-    ships the power lines."""
+def _write_centreline(track_dir, job: Job, c, sec, region, lonlat, attributions, side_roads=(), rings=(),
+                      ramps=()) -> None:
+    """The route's centreline (ODbL), each side road's stub (`core.stubs`), each roundabout's ring and exits
+    (`core.roundabouts`) and each slip ramp (`core.ramps`) as features of their own: OSM-derived geometry the track is
+    built from, as `power.geojson` ships the power lines."""
     step = 5
     idx = np.arange(0, len(c["s"]), step)
     lon, lat = lonlat.transform(c["xy"][idx, 0], c["xy"][idx, 1])
@@ -488,6 +494,19 @@ def _write_centreline(track_dir, job: Job, c, sec, region, lonlat, attributions,
                            "station_m": st["station_m"], "side": st["side"], "width_m": round(st["width_m"], 2),
                            "surface_class": st["surface"], "length_m": st["length_m"], "license": "ODbL-1.0",
                            **({"leaves": st["parent"]} if st.get("parent") else {})},
+        })
+    for r in ramps:  # from 20 m before its nose to its stub's end
+        xy = np.asarray(r["rows"]["xy"], float)
+        z = np.asarray(r["rows"]["z"], float)
+        lon, lat = lonlat.transform(xy[:, 0], xy[:, 1])
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "LineString",
+                         "coordinates": [[round(float(a), 7), round(float(b), 7), round(float(h), 2)]
+                                         for a, b, h in zip(lon, lat, z)]},
+            "properties": {"kind": "ramp", "name": r["name"], "highway": r["highway"], "ramp": r["kind"],
+                           "station_m": r["station_m"], "side": r["side"], "width_m": round(r["width_m"], 2),
+                           "surface_class": r["surface"], "length_m": r["length_m"], "license": "ODbL-1.0"},
         })
     _write_text(track_dir / "centreline.geojson",
                 json.dumps({"type": "FeatureCollection", "features": features}), encoding="utf-8")

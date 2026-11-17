@@ -211,6 +211,9 @@ def _vertex_normals(pos: np.ndarray, tri: np.ndarray) -> np.ndarray:
         np.add.at(vn, tri[:, k], fn)
     vn /= np.maximum(np.linalg.norm(vn, axis=1, keepdims=True), 1e-12)
     vn[~np.isfinite(vn).all(axis=1)] = (0.0, 1.0, 0.0)
+    # A vertex whose only triangles have no area (three points in a line, which the terrain's triangulation can leave
+    # along a densified edge) has no normal at all: up, as the ground's.
+    vn[np.linalg.norm(vn, axis=1) < 0.5] = (0.0, 1.0, 0.0)
     return vn
 
 

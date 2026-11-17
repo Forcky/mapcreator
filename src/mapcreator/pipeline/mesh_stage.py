@@ -33,6 +33,7 @@ from mapcreator.config import Settings
 from mapcreator.core import bridges as bridges_core
 from mapcreator.core import furniture, grass, junctions, mesh, police_car, reach, roadside, stub_closures, stubs
 from mapcreator.core import crossing_roads, rail_and_paths
+from mapcreator.core import ramps as ramps_core
 from mapcreator.core import roundabouts as rb_core
 from mapcreator.core import water as water_core
 from mapcreator.core.layout import layouts_for
@@ -63,6 +64,8 @@ RAIL_AND_PATHS = "rail_and_paths.json"
 # The route's own bridges as built (`core.bridges`; the format is in docs/ac-format.md). The track and validate stages
 # read this one.
 BRIDGES = "bridges.json"
+# The slip ramps as built: the section stage's plan less any left out here (`ramps_core.settle`).
+RAMPS = "ramps.json"
 
 log = logging.getLogger(__name__)
 
@@ -145,20 +148,32 @@ def built_bridges(work: WorkDir) -> list[dict]:
     return work.read_json(STAGE, BRIDGES)["bridges"] if path.exists() else []
 
 
+def built_ramps(work: WorkDir, job: Job) -> list[dict]:
+    """The slip ramps as the mesh stage built them (`RAMPS`): the section stage's plan, less any it left out. The
+    section stage's plan where the mesh stage hasn't run."""
+    plan = section_stage.ramps(work, job)
+    path = work.root / STAGE / RAMPS
+    if not plan or not path.exists():
+        return plan
+    return work.read_json(STAGE, RAMPS)["ramps"]
+
+
 def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(), crossing=None, crossed=None,
-                     decks=None):
+                     decks=None, ramps=(), ramp_out=None):
     """The road's ribbon, the stubs (`stubs.build`) and roundabouts (`rb_core.build`), water, and the road, verge, stub,
     ring and terrain meshes for `plan` and `rings`. `crossing`: the roads crossing the route to draw
     (`core.crossing_roads`), kept off the ground the rest takes; what was drawn goes in `crossed["built"]`. `decks`
-    (`bridges.Decks`): the route's own bridges."""
+    (`bridges.Decks`): the route's own bridges. `ramps`: the slip ramps (`ramps_core.build`), built before the
+    crossing roads, which keep off them too; what was built goes in `ramp_out["built"]`."""
     ring_pts = rb_core.centres(rings) if rings else None
-    # The road's skirt is held short of the roads crossing it as well (`core.crossing_roads`), as of a stub's.
+    # The road's skirt is held short of the roads crossing it as well (`core.crossing_roads`), as of a stub's, and of
+    # the slip ramps (`core.ramps`).
     cross_pts = crossing_roads.centres(crossing)
     if rings:
-        caps = stubs.mainline_caps(plan, c["xy"], c["heading"],
-                                   extra=ring_pts if cross_pts is None else np.vstack([ring_pts, cross_pts]))
-    elif cross_pts is not None:
-        caps = stubs.mainline_caps(plan, c["xy"], c["heading"], extra=cross_pts)
+        caps = stubs.mainline_caps(plan, c["xy"], c["heading"], extra=ramps_core.with_centres(
+            ring_pts if cross_pts is None else np.vstack([ring_pts, cross_pts]), ramps))
+    elif cross_pts is not None or ramps:
+        caps = stubs.mainline_caps(plan, c["xy"], c["heading"], extra=ramps_core.with_centres(cross_pts, ramps))
     else:
         caps = stubs.mainline_caps(plan, c["xy"], c["heading"]) if plan else (None, None)
     # Bridges: the kerb strip in place of the verge, and 1:2 batters on fills for the skirt.
@@ -166,6 +181,7 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(),
                            sec["slope_left"], sec["slope_right"], decks.embanked(dem.sample) if decks else dem.sample,
                            skirt_cap_l=caps[0], skirt_cap_r=caps[1], **(decks.verges() if decks else {}))
     main_xy = np.vstack([c["xy"], ring_pts]) if rings else c["xy"]
+    main_xy = ramps_core.with_centres(main_xy, ramps)
     built = (stubs.build(plan, rb, c["s"], frame, dem.sample, skirt=gmap is None, main_xy=main_xy)
              if plan else None)
     extra = built.footprint if built is not None else None
@@ -181,6 +197,14 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(),
     if decks:  # open decks leave the terrain's footprint (so a road under one runs on under it), and their
         # abutments' faces join it
         extra = decks.footprint(rb, extra)
+    ramp_built = None
+    if ramps:
+        stub_pts = [stubs._centre(st) for st in plan] + ([ring_pts] if rings else [])
+        ramp_built = ramps_core.build(ramps, rb, c["s"], frame, dem.sample, skirt=gmap is None,
+                                      others=np.vstack([c["xy"]] + stub_pts))
+        extra = ramps_core.footprint(extra, ramp_built, len(c["s"]))
+    if ramp_out is not None:
+        ramp_out["built"] = ramp_built
     cross_built = None
     if crossing and crossing["roads"]:
         # Roads crossing the route (`core.crossing_roads`): each its own ribbon, clear of the ground taken already.
@@ -202,20 +226,19 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(),
     style = sec["style"] if "style" in sec else np.zeros(len(c["s"]), dtype=np.int8)
     deck_kw = {"kerb": decks.kerb()} if decks else {}
     # With ground classes the skirt goes with the terrain beside it, so only the 2 m verge is mown grass.
-    if ring_built is not None:
-        meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None,
-                                    cut=decks.cut(cut) if decks else cut, edge_break=edge_break, **deck_kw)
-        meshes += (built.meshes if built is not None else []) + ring_built.meshes
-    elif built is None:
-        meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None,
-                                    **({"cut": decks.cut(None), **deck_kw} if decks else {}))
+    if ring_built is None:
+        cut, edge_break = (built.cut, built.edge_break) if built is not None else (None, None)
+    cut, edge_break = ramps_core.road_cut(cut, edge_break, ramp_built)
+    if decks:
+        meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None, cut=decks.cut(cut),
+                                    edge_break=edge_break, **deck_kw)
     else:
-        meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None,
-                                    cut=decks.cut(built.cut) if decks else built.cut, edge_break=built.edge_break,
-                                    **deck_kw)
-        meshes += built.meshes
+        meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None, cut=cut,
+                                    edge_break=edge_break)
+    meshes += (built.meshes if built is not None else []) + (ring_built.meshes if ring_built is not None else [])
     if cross_built is not None:
         meshes += cross_built.meshes
+    meshes += ramp_built.meshes if ramp_built is not None else []
     if gmap is None:
         meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, ground, frame, extra=extra)
     else:
@@ -223,8 +246,7 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(),
                                       classes=grass.MESHES, fold_skirt=True, extra=extra)
     meshes += water_core.meshes(water, frame)
     if decks:
-        road_cut = cut if ring_built is not None else (built.cut if built is not None else None)
-        deck_meshes, decks.stats = decks.meshes(rb, frame, ground, cut=road_cut)
+        deck_meshes, decks.stats = decks.meshes(rb, frame, ground, cut=cut)
         meshes += deck_meshes
     if rings:
         return rb, (built, ring_built), water, meshes
@@ -232,12 +254,12 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(),
 
 
 def _rail_and_paths(work: WorkDir, c, sec, frame: LocalFrame, dem, meshes, rb, built, cross_built=None,
-                    extra=None) -> rail_and_paths.Built:
+                    extra=None, ramps=()) -> rail_and_paths.Built:
     """Footbridges and rail bridges over the route, and paths and railways under its own bridges
-    (`core.rail_and_paths`), on the ground and road just built, off the route's ribbon, its stubs' and the crossing
-    roads' (`cross_built`); and `RAIL_AND_PATHS`, what was drawn or left out. `extra`: the terrain's footprint as
-    built (`mesh.Footprint`), with the route's open decks out of it (`core.bridges`), so a path or railway under one
-    runs on under it; without it, the stubs' alone."""
+    (`core.rail_and_paths`), on the ground and road just built, off the route's ribbon, its stubs', the crossing
+    roads' (`cross_built`) and the slip ramps' (`ramps`); and `RAIL_AND_PATHS`, what was drawn or left out. `extra`:
+    the terrain's footprint as built (`mesh.Footprint`), with the route's open decks out of it (`core.bridges`), so a
+    path or railway under one runs on under it; without it, the stubs' alone."""
     (work.stage(STAGE) / RAIL_AND_PATHS).unlink(missing_ok=True)
     found = route_stage.crossing_lines(work)
     if not found:
@@ -257,6 +279,8 @@ def _rail_and_paths(work: WorkDir, c, sec, frame: LocalFrame, dem, meshes, rb, b
     if cross_built is not None and cross_built.pieces:
         footprint = shapely.unary_union([footprint] + [shapely.Polygon(pc["outline"]).buffer(0)
                                                        for pc in cross_built.pieces if len(pc["outline"]) >= 3])
+    if ramps:
+        footprint = shapely.union(footprint, ramps_core.ground(ramps))
     out = rail_and_paths.build(found, c, sec, frame, dem.sample, ground, road, footprint)
     work.write_json(STAGE, RAIL_AND_PATHS, {"version": rail_and_paths.FORMAT_VERSION, "structures": out.records})
     return out
@@ -300,6 +324,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     # The route's own bridges (`core.bridges`), kept clear of side roads' mouths and roundabouts as planned.
     runs = work.read_json(route_stage.STAGE, "runs.json")
     planned_mouths = _mouths(found, plan, section_stage.roundabouts(work, job), c, sec)
+    ramp_plan = section_stage.ramps(work, job)
+    if ramp_plan:  # and of the slip ramps' tapers, gores and nose islands (`core.ramps`)
+        planned_mouths = ramps_core.with_masks(planned_mouths, ramp_plan, c["s"])
     bridge_plan = bridges_core.plan(c, mouths=planned_mouths, names=[r["tags"].get("name") for r in runs])
     decks = bridges_core.Decks(bridge_plan, c, sec, planned_mouths)
     decks = decks if decks else None  # nothing to build: no bridge, and no fill to batter
@@ -310,21 +337,32 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     crossing = section_stage.crossing_roads(work)
     ground_dem = crossing_roads.GroundUnderDecks(dem, crossing["decks"]) if crossing and crossing["decks"] else dem
     crossed: dict = {}
+    # Slip ramps (`core.ramps`): built with the stubs and closed with them, under the same cap on police cars; each
+    # checked on the meshes just built as a stub is, and one that fails left out (`ramps_core.settle`).
+    ramp_state = {"ramps": ramp_plan, "built": None}
 
     def build(stubs_now):
+        ramps_now = ramp_state["ramps"]
         rb, built, water, ground_meshes = _road_and_ground(stubs_now, c, sec, frame, ground_dem, gmap, settings, region,
-                                                           crossing=crossing, crossed=crossed, decks=decks)
+                                                           crossing=crossing, crossed=crossed, decks=decks,
+                                                           ramps=ramps_now, ramp_out=ramp_state)
         closed = None
-        if stubs_now:
+        if stubs_now or ramps_now:
             # Each stub closed off the stage, and police cars at some of the major closures (`core.stub_closures`),
             # standing on the ground just built.
-            top = stub_closures.TopSurface(ground_meshes, frame, stub_closures.areas(stubs_now))
-            closed = stub_closures.place(stubs_now, found, c, sec, frame, top, jurisdiction=jurisdiction,
-                                         reverses=reverses)
+            every = stubs_now + ramps_now
+            top = stub_closures.TopSurface(ground_meshes, frame, stub_closures.areas(every))
+            closed = stub_closures.place(every, found + ramps_core.junctions_for(ramps_now), c, sec, frame, top,
+                                         jurisdiction=jurisdiction, reverses=reverses)
         return rb, built, water, ground_meshes, closed
 
+    def all_faults(stubs_now, result, extra=()):
+        """`stubs.faults` with the ramps' checks alongside: their closures count as on a stub, their faults theirs."""
+        return stubs.faults(stubs_now, result[3], result[4].meshes if result[4] is not None else [], c, sec, frame,
+                            extra=list(extra) + ramps_core.checks(ramp_state["ramps"], c, sec, frame))
+
     def check(stubs_now, result):
-        return stubs.faults(stubs_now, result[3], result[4].meshes if result[4] is not None else [], c, sec, frame)
+        return ramps_core.without_ramps(all_faults(stubs_now, result))
 
     planned = bool(plan)
     rings = section_stage.roundabouts(work, job)
@@ -334,27 +372,38 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         # their exits closed with the side roads; a ring that fails is left out whole (`rb_core.settle`).
         def build_rings(state):
             stubs_now, rings_now = state
+            ramps_now = ramp_state["ramps"]
             rb, pair, water, ground_meshes = _road_and_ground(stubs_now, c, sec, frame, ground_dem, gmap, settings,
                                                               region, rings=rings_now, crossing=crossing,
-                                                              crossed=crossed, decks=decks)
+                                                              crossed=crossed, decks=decks, ramps=ramps_now,
+                                                              ramp_out=ramp_state)
             closed = None
-            every = stubs_now + rb_core.exit_stubs(rings_now)
+            every = stubs_now + rb_core.exit_stubs(rings_now) + ramps_now
             if every:
                 top = stub_closures.TopSurface(ground_meshes, frame, stub_closures.areas(every))
-                closed = stub_closures.place(every, found + rb_core.exit_junctions(rings_now), c, sec, frame, top,
+                closed = stub_closures.place(every, found + rb_core.exit_junctions(rings_now)
+                                             + ramps_core.junctions_for(ramps_now), c, sec, frame, top,
                                              jurisdiction=jurisdiction, reverses=reverses,
                                              parents=rb_core.parents(rings_now), extra_road=rb_core.paved(rings_now))
             return rb, pair if isinstance(pair, tuple) else (pair, None), water, ground_meshes, closed
 
         def check_rings(state, result):
             stubs_now, rings_now = state
-            return stubs.faults(stubs_now, result[3], result[4].meshes if result[4] is not None else [], c, sec,
-                                frame, extra=rb_core.checks(rings_now, c, sec, frame))
+            return ramps_core.without_ramps(all_faults(stubs_now, result, rb_core.checks(rings_now, c, sec, frame)))
 
-        plan, rings, (rb, (built, ring_built), water, meshes, closed), dropped, dropped_rings = rb_core.settle(
-            (plan, rings), build_rings, check_rings, STUB_REBUILDS, log)
+        def ramp_faults_rings(ramps_now, out):
+            return ramps_core.faults_of(all_faults(out[0], out[2], rb_core.checks(out[1], c, sec, frame)),
+                                        ramp_state["built"])
+
+        plan, rings, (rb, (built, ring_built), water, meshes, closed), dropped, dropped_rings = ramps_core.settle(
+            ramp_state, lambda: rb_core.settle((plan, rings), build_rings, check_rings, STUB_REBUILDS, log),
+            ramp_faults_rings, STUB_REBUILDS, log)
     else:
-        plan, (rb, built, water, meshes, closed), dropped = stubs.settle(plan, build, check, STUB_REBUILDS, log)
+        def ramp_faults(ramps_now, out):
+            return ramps_core.faults_of(all_faults(out[0], out[1]), ramp_state["built"])
+
+        plan, (rb, built, water, meshes, closed), dropped = ramps_core.settle(
+            ramp_state, lambda: stubs.settle(plan, build, check, STUB_REBUILDS, log), ramp_faults, STUB_REBUILDS, log)
     bridge_faults = bridges_core.faults(decks.records(rb), meshes, frame) if decks and decks.spans else {}
     if bridge_faults:
         # An open deck that fails its checks is built on the ground, with its parapets; the stubs and rings as settled.
@@ -364,6 +413,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             rb, (built, ring_built), water, meshes, closed = build_rings((plan, rings))
         else:
             rb, built, water, meshes, closed = build(plan)
+    ramps_now, ramp_built = ramp_state["ramps"], ramp_state["built"]
     (out / BRIDGES).unlink(missing_ok=True)
     if decks and decks.bridges:
         work.write_json(STAGE, BRIDGES, {"version": bridges_core.FORMAT_VERSION, "crs": f"EPSG:{region.epsg}",
@@ -373,6 +423,12 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         doc = work.read_json(section_stage.STAGE, section_stage.STUBS)
         work.write_json(STAGE, STUBS, {**doc, "stubs": plan,
                                        "skipped": sorted(doc["skipped"] + dropped, key=lambda d: d["junction"])})
+    (out / RAMPS).unlink(missing_ok=True)
+    if ramp_plan:
+        doc = work.read_json(section_stage.STAGE, section_stage.RAMPS)
+        work.write_json(STAGE, RAMPS, {**doc, "ramps": ramps_now,
+                                       "skipped": sorted(doc["skipped"] + ramp_state.get("dropped", []),
+                                                         key=lambda d: d["junction"])})
     (out / ROUNDABOUTS).unlink(missing_ok=True)
     if section_stage.roundabouts(work, job):
         doc = work.read_json(section_stage.STAGE, section_stage.ROUNDABOUTS)
@@ -385,7 +441,15 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     if rings:
         ring_masks = rb_core.masks(rings, c["s"])
         mouths = ring_masks if mouths is None else {k: mouths[k] | ring_masks[k] for k in "LR"}
+    if ramps_now:  # nor along a slip ramp's taper, gore and nose island (`ramps_core.masks`)
+        ramp_masks = ramps_core.masks(ramps_now, c["s"])
+        mouths = ramp_masks if mouths is None else {k: mouths[k] | ramp_masks[k] for k in "LR"}
     junction_stats = {"found": len(found)} if found else None
+    if ramp_plan:
+        junction_stats = junction_stats or {}
+        junction_stats["ramps"] = ramp_built.stats if ramp_built is not None and ramps_now else {"ramps": 0}
+        if ramp_state.get("dropped"):
+            junction_stats["ramps_left_out"] = len({d["junction"] for d in ramp_state["dropped"]})
     if rings:
         junction_stats = junction_stats or {}
         junction_stats["roundabouts"] = ring_built.stats if ring_built is not None else {"rings": 0}
@@ -438,7 +502,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     meshes += roadside.end_walls(c["s"], c["xy"], c["z"], c["heading"], dem.sample, frame)
     # Railways and paths crossing the route (`core.rail_and_paths`), on the ground and road built above.
     lines_built = _rail_and_paths(work, c, sec, frame, dem, meshes, rb, built, crossed.get("built"),
-                                  extra=crossed.get("footprint"))
+                                  extra=crossed.get("footprint"), ramps=ramps_now)
     meshes += lines_built.meshes
     # The closures placed and checked above, last, as before.
     (out / CLOSURES).unlink(missing_ok=True)

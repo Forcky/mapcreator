@@ -270,6 +270,37 @@ A roundabout the route drives is drawn whole: the rest of its ring, a kerbed gra
   - The KN5 grows a little more than its vertices on Sugarloaf Road: the kerb brings its own material and texture (256 x 256, DXT1 with mips, about 43 KB).
   - Frame rate: a ring adds about seven meshes and fewer vertices than 2 km of trees. In game at Kingston (11 Nov, the first build, against main): −0.3% over the track (90%: −0.6% to +0.0%), −1.1% round the first ring; no measurable cost.
 
+## Slip ramps
+
+A ramp that leaves or joins the route under 15° is drawn as a widened taper, a painted gore, a grassed nose island and 60 m of ramp, closed with the major kit (`docs/ac-format.md`, "Slip ramps"). Every example with no slip ramp builds byte for byte as before (sixteen of them), and the AI line is main's on those with ramps.
+
+- **To check in game** (`kingston_bypass_southbound`: the off-ramp from about 0.11 km, the on-ramp about 0.39-0.48 km, its nose at 0.41 km; `huon_highway_eastbound`: the off-ramp from about 0.40 km, its nose at 0.58 km), both layouts:
+  - **the seams:** drive slowly along the road's edge across the taper and the gore, across the gore onto the ramp, over the nose onto the island and back, and across the ramp's first full row at the nose. No bump, no gap, no flicker;
+  - **the look of the taper:** the road's edge line breaks where the taper starts and carries on along its outer edge; whether a taper with no continuity line reads right from the road is to judge (a real one has a dashed line along the through lane);
+  - **the paint:** the chevrons point towards approaching traffic (towards the split on the off-ramps, towards the nose on the bypass's on-ramp), and their spacing (12 m at 80 km/h) looks right. From 100 m out, and at night, check the bars for shimmer: they sample the road texture's 8-pixel edge line, so at a distance the mipmaps may grey them;
+  - **the nose island:** flush with the roads at the nose, falling to the ground beyond; the ground in the wedge between the two roads' skirts past it;
+  - **the Huon Highway's long gore:** the ramp runs beside the road for about 140 m before its nose, so its gore is long and narrow. Whether that matches the road (OSM may draw the deceleration lane as the link) is to judge;
+  - **driving onto a ramp:** the taper and gore are paved and drivable, and the ramp is closed past the nose: tape, barrier boards and a police car where one fits (one each on the bypass and the Huon Highway). At 20 and 60 km/h the car stops at the police car;
+  - **the AI:** its line is byte for byte main's (the road's half widths don't change), so it keeps to the through lane past every taper;
+  - **guide posts:** none stand along the taper, gore and island, and the ones either side read naturally; no timing gate moves;
+  - **the other ramp tracks**, a drive-by each: `footbridge_brooker_highway` (an on-ramp, its nose at about 0.23 km, bars 24 m apart on a motorway link), `rail_under_bass_highway` (ramps at about 0.17-0.27, 0.65-0.81 and 1.27-1.35 km) and `rail_under_brooker_highway` (off-ramps from about 0.15 and 0.79 km); the Brooker Highway's first ramp parts fast, so its gore is only 10 m long.
+- **Only links.** Shallow forks of other classes (the Channel Highway's forks and carriageway splits at Kingston, `skew` or `angle` today) still get nothing; whether they get a gore too is its own question. `ramps.find(select=)` and `ramps.plan` take any line, so that change would reuse this code.
+- **The taper comes from the mapped line.** Where OSM starts the link at the painted nose rather than the taper's start, the drawn taper starts later and is steeper than the real one; a 1 in 15 taper is drawn only where the ramp's edge is off the road from its first metre.
+- **The island and the paint are generic:** no kerb, raised island or crash cushion at the nose, and no exit signs.
+- **Cost** (laptop builds; mesh-stage meshes and vertices, main against this branch; the KN5 is each layout's):
+
+| Track | Ramps drawn | The ramps' own meshes, vertices | Mesh-stage meshes | Vertices | KN5, each layout |
+|---|---|---|---|---|---|
+| `kingston_bypass_southbound` | 2 of 2 | 10, 2,362 | 74 → 90 | 76,691 → 80,103 (+4.4%) | 10.7 → 11.9 MB |
+| `huon_highway_eastbound` | 1 of 1 | 4, 2,905 | 45 → 54 | 48,183 → 51,053 (+6.0%) | 5.6 → 6.8 MB |
+| `footbridge_brooker_highway` | 1 of 1 | 5, 3,143 | 49 → 60 | 47,887 → 51,101 (+6.7%) | 10.3 → 11.7 MB |
+| `rail_under_bass_highway` | 3 of 3 | 15, 4,393 | 121 → 137 | 94,947 → 98,847 (+4.1%) | 9.3 → 10.7 MB |
+| `rail_under_brooker_highway` | 2 of 2 | 10, 2,272 | 64 → 80 | 48,129 → 51,510 (+7.0%) | 9.4 → 10.8 MB |
+
+  - The mesh stage's growth includes each ramp's closure (about 550 vertices) and, on each track, one police car (about 560): none of these tracks had a closure before. So does the KN5's, most of it the closures' atlas (0.35 MB) and the car's texture (0.7 MB).
+  - A ramp's own meshes are about 1,100-3,100 vertices: its 60 m ribbon, its throat with the paint cut in (a long gore has more pieces), and its grass.
+  - Frame rate: a ramp adds five meshes. Nothing to measure apart from the closures', already measured with the side roads'.
+
 ## Power lines
 
 - **Answered in game (4 Nov, Grasstree Hill, with towers then allowed 700 m out):**
