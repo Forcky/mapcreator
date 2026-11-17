@@ -25,6 +25,13 @@ a stub already kept is cut short, or with smaller flares left out, keeping major
 stub whose mouth would leave a timing gate nowhere clear to stand (`layout.gate_distances`) is left out. Each one left
 out is listed under `skipped`, with the reason.
 
+**Clusters** (`_merge`): a stub that doesn't fit beside the others even with smaller flares, because its mouth shares
+the road's rows with kept stubs on its side, is drawn with them as one cluster where each can keep its own ribbon: their
+throats one patch, each its own flares, ribbon, closure and record (`cluster`: its lead stub's junction id). Where two
+ribbons would overlap near their start (two side roads leaving one node), each starts further in. Each one's outline
+is its own share of the merged throat (`_split_outline`). One that still can't be drawn is left out (`overlaps`), or
+(`joins`) where its line runs into a kept stub's road.
+
 **The meshes** (`build`, run by the mesh stage) come from the plan alone, so the mesh and scenery stages, which run
 side by side, see the same stubs:
 - the stub's own ribbon (`mesh.build_ribbon`) from its first full row on: road, verges and skirts like the
@@ -34,7 +41,9 @@ side by side, see the same stubs:
 - a mown verge along each flare, from the mainline's verge to the stub's;
 - the mainline's verge and skirt cut across the mouth, its skirt held short of the stub's where they'd meet (and the
   stub's of the mainline's: each stops where the ground is nearer the other's centreline), and its edge lines broken
-  across the mouth by texture coordinates (`mesh.ribbon_meshes(edge_break=)`).
+  across the mouth by texture coordinates (`mesh.ribbon_meshes(edge_break=)`);
+- a cluster's throats triangulated as one patch over the outline of their union (`_cluster_throat`), with mown verges
+  along its two outer flares only, and the ground between its side roads left to the terrain.
 """
 
 from __future__ import annotations
@@ -234,7 +243,7 @@ def _smoothstep(x):
     return x * x * (3 - 2 * x)
 
 
-@dataclass
+@dataclass(eq=False)
 class _Candidate:
     record: dict
     priority: tuple
@@ -244,11 +253,20 @@ class _Candidate:
     half: float
     first: int  # the ribbon's first row, of the plan's rows
     body: shapely.Geometry | None = None  # its ribbon's road and verges, once kept
+    # How it was drawn, so a stub joining a cluster can be drawn again with its ribbon starting further in.
+    junction: dict | None = None
+    scale: dict[str, float] | None = None
+    centre: np.ndarray | None = None  # every plan row's centreline point (exact), from d = 0
+    flare_points: dict[str, np.ndarray] | None = None  # each flare's points (exact), from the road's edge out
+    keep: int | None = None  # the plan rows it was cut short to (`_clip`), or None
+    cluster: int | None = None  # the cluster it's drawn with (`_merge`): its lead stub's junction id
 
 
 def _candidate(j: dict, m: _Mainline, dem_sample, width_factor: float, scale: dict[str, float] | None = None,
-               ) -> tuple[_Candidate | None, str | None]:
-    """A junction's stub, or why there's none. `scale` shrinks each flare's radius ("upstream", "downstream")."""
+               min_first: int = 0) -> tuple[_Candidate | None, str | None]:
+    """A junction's stub, or why there's none. `scale` shrinks each flare's radius ("upstream", "downstream");
+    `min_first` starts its ribbon this many rows in or more (a stub in a cluster, `_merge`), its throat reaching out
+    along its carriageway to there."""
     scale = scale or {"upstream": 1.0, "downstream": 1.0}
     side = jn.SIDE_CODE[j["side"]]
     at = jn._station(m.xy, m.s, np.asarray(j["xy"], float), float(j["at_m"]))
@@ -342,6 +360,7 @@ def _candidate(j: dict, m: _Mainline, dem_sample, width_factor: float, scale: di
         flares[name] = {"es": cn["es"], "corner": cn["sc"], "row": r_t1, "k": k_t2, "radius": radius,
                         "tangent": tangent, "angle": math.degrees(alpha)}
         first = max(first, k_t2)
+    first = max(first, int(min_first))
     if n_rows - 1 - first < MIN_RIBBON_M:
         return None, "short"
 
@@ -378,7 +397,7 @@ def _candidate(j: dict, m: _Mainline, dem_sample, width_factor: float, scale: di
         # A side road bending hard inside a long flare can leave the flare's straight run across its carriageway:
         # smaller flares follow it more closely. Its points on the mainline's own road are road already.
         if min(scale.values()) > SHRINK ** 2 - 1e-9:
-            return _candidate(j, m, dem_sample, width_factor, {k: v * SHRINK for k, v in scale.items()})
+            return _candidate(j, m, dem_sample, width_factor, {k: v * SHRINK for k, v in scale.items()}, min_first)
         return None, "flare"
 
     # Heights: the mainline's cross-fall carried on, blending into the side road's own profile and crown.
@@ -445,14 +464,16 @@ def _candidate(j: dict, m: _Mainline, dem_sample, width_factor: float, scale: di
         "outline": r2(np.asarray(outline.exterior.coords)[:-1]),
     }
     priority = (0 if j.get("closure") == "major" else 1, -(n_rows - 1), j["id"])
-    return _Candidate(record, priority, throat.buffer(0), rows_xy[first:], rows_n[first:], w, first), None
+    return _Candidate(record, priority, throat.buffer(0), rows_xy[first:], rows_n[first:], w, first,
+                      junction=j, scale=dict(scale), centre=rows_xy,
+                      flare_points={name: f["points"] for name, f in flares.items()}), None
 
 
 def _drawn(j: dict, m: _Mainline, dem_sample, width_factor: float, scale: dict[str, float] | None = None,
-           ) -> tuple[_Candidate | None, str | None]:
+           min_first: int = 0) -> tuple[_Candidate | None, str | None]:
     """`_candidate`, with geometry GEOS can't work with left out as `geometry`: one bad stub, never the build."""
     try:
-        return _candidate(j, m, dem_sample, width_factor, scale)
+        return _candidate(j, m, dem_sample, width_factor, scale, min_first)
     except shapely.errors.GEOSException:
         return None, "geometry"
 
@@ -474,6 +495,9 @@ def _clip(cand: _Candidate, rows: int) -> _Candidate | None:
     rec["length_m"] = float(keep - 1)
     rec["ends"] = "clipped"
     cand.rows_xy, cand.rows_n = cand.rows_xy[:rows], cand.rows_n[:rows]
+    cand.keep = keep
+    if cand.centre is not None:
+        cand.centre = cand.centre[:keep]
     outline = _paved_outline(cand.throat, cand.rows_xy, cand.rows_n, cand.half)  # the exact rows, as the throat's
     if outline is None:
         return None
@@ -481,10 +505,9 @@ def _clip(cand: _Candidate, rows: int) -> _Candidate | None:
     return cand
 
 
-def _fit(cand: _Candidate, m: _Mainline, kept: list[_Candidate]) -> tuple[_Candidate | None, str | None]:
-    """The stub cut short where it would come within a verge of another part of the route, or overlap a stub already
-    kept; None, with the reason, if too little is left, or its mouth shares the road's rows with a kept stub's on
-    the same side, or its throat or its flares' verges overlap a kept stub."""
+def _near_route(cand: _Candidate, m: _Mainline) -> _Candidate | None:
+    """The stub cut short where it would come within a verge of another part of the route; None if too little is
+    left."""
     at = cand.record["station_m"]
     dist, idx = m.tree.query(cand.rows_xy)
     # Another part: much further along the road than in a straight line, as junctions.json judges it.
@@ -492,9 +515,17 @@ def _fit(cand: _Candidate, m: _Mainline, kept: list[_Candidate]) -> tuple[_Candi
     need = np.maximum(m.half["L"][idx], m.half["R"][idx]) + cand.half + 2 * mesh.VERGE_M + CLEAR_M
     close = np.flatnonzero(other & (dist < need))
     if len(close):
-        cand = _clip(cand, int(close[0]) - 2)
-        if cand is None:
-            return None, "near_route"
+        return _clip(cand, int(close[0]) - 2)
+    return cand
+
+
+def _fit(cand: _Candidate, m: _Mainline, kept: list[_Candidate]) -> tuple[_Candidate | None, str | None]:
+    """The stub cut short where it would come within a verge of another part of the route, or overlap a stub already
+    kept; None, with the reason, if too little is left, or its mouth shares the road's rows with a kept stub's on
+    the same side, or its throat or its flares' verges overlap a kept stub."""
+    cand = _near_route(cand, m)
+    if cand is None:
+        return None, "near_route"
     if not kept:
         return cand, None
     a, b = cand.record["mouth"]["rows"]
@@ -515,14 +546,187 @@ def _fit(cand: _Candidate, m: _Mainline, kept: list[_Candidate]) -> tuple[_Candi
     return cand, None
 
 
+# -- clusters: stubs whose mouths share the road's rows, drawn as one patch ------------------------------------------
+
+OVERLAP_M2 = 0.01  # pieces overlapping by less than this (square metres) only touch
+CLUSTER_PUSH_M = 10  # a stub in a cluster starts its ribbon at most this many metres further in than it would alone
+CLUSTER_ROUNDS = 10  # rounds of moving ribbons' starts out before a cluster is given up
+SKIRT_MIN_M = 0.5  # a ribbon's skirt reaches at least this far past its verge (`mesh.build_ribbon`)
+JOINS_FROM_M = 15.0  # a side road left out whose line comes within JOINS_WITHIN_M of a kept stub's centreline past
+JOINS_WITHIN_M = 1.5  # this far along it joins that road (`joins`): two one-way arms of one road, or a link into one
+
+
+def _body_poly(cand: _Candidate) -> shapely.Geometry:
+    return shapely.unary_union(_body(cand)).buffer(0)
+
+
+def _overlapping(quads: np.ndarray, geom: shapely.Geometry) -> np.ndarray:
+    """Whether each of a ribbon's quads (`_body`) overlaps `geom` by more than OVERLAP_M2."""
+    if geom is None or geom.is_empty:
+        return np.zeros(len(quads), bool)
+    return shapely.area(shapely.intersection(quads, geom)) > OVERLAP_M2
+
+
+def _rest(members: list[_Candidate], k: _Candidate) -> shapely.Geometry:
+    """Every other member's ribbon (road and verges) and throat, the throat with SKIRT_MIN_M round it (a ribbon's skirt
+    always reaches that far past its verge): what `k`'s ribbon must keep off."""
+    rest = [o for o in members if o is not k]
+    return shapely.union_all([_body_poly(o) for o in rest] + [o.throat.buffer(SKIRT_MIN_M) for o in rest])
+
+
+def outer_flares(records: list[dict], throat: shapely.Geometry, points) -> list[tuple[int, str]] | None:
+    """A cluster's two outer flares: the upstream flare at the first row of its mouth and the downstream flare at the
+    last, each lying wholly on the merged throat's outline, as (index in `records`, flare name); None if either
+    doesn't. `points(index, name)` gives a flare's points. The others are inner flares, between two side roads."""
+    rows = (min(r["mouth"]["rows"][0] for r in records), max(r["mouth"]["rows"][1] for r in records))
+    inside = throat.buffer(-1e-3)
+    shapely.prepare(inside)
+    out = []
+    for row, name in zip(rows, ("upstream", "downstream")):
+        found = None
+        for i, rec in enumerate(records):
+            if rec["flares"][name]["mainline_row"] != row:
+                continue
+            pts = np.asarray(points(i, name), float)
+            if not shapely.contains_xy(inside, pts[:, 0], pts[:, 1]).any():
+                found = (i, name)
+        if found is None:
+            return None
+        out.append(found)
+    return out
+
+
+def _merge(cand: _Candidate, m: _Mainline, kept: list[_Candidate], redraw, avoid: shapely.Geometry | None = None,
+           ) -> tuple[list[_Candidate], list[_Candidate]] | None:
+    """`cand` drawn as one cluster with the kept stubs on its side whose mouths share the road's rows with its own, and
+    any stubs already drawn with them: their throats one patch, each keeping its own ribbon. Where two ribbons (road and
+    verges) would overlap each other or another's throat near their start (two side roads leaving one node), each
+    starts further in, by up to CLUSTER_PUSH_M, its throat following its carriageway out to there (`redraw(stub,
+    first)` draws a stub again starting at row `first`); `cand` is cut short where its ribbon would reach one further
+    out. None if they still don't fit: a throat over another's ribbon, a merged throat that isn't one piece without a
+    hole, an outer flare (`outer_flares`) that isn't wholly on its outline or whose verge would reach another's ribbon,
+    or anything `_fit` would refuse against the other kept stubs. Otherwise (the cluster's stubs, the kept stubs they
+    replace)."""
+    cand = _near_route(cand, m)
+    if cand is None:
+        return None
+    side = cand.record["side"]
+    a, b = cand.record["mouth"]["rows"]
+    group = [k for k in kept if k.record["side"] == side and a < k.record["mouth"]["rows"][1]
+             and k.record["mouth"]["rows"][0] < b]
+    if not group:
+        return None
+    ids = {k.cluster for k in group if k.cluster is not None}
+    group += [k for k in kept if k.cluster is not None and k.cluster in ids and all(k is not g for g in group)]
+    others = [k for k in kept if all(k is not g for g in group)]
+    members = group + [cand]
+    start = [k.first for k in members]
+    for _ in range(CLUSTER_ROUNDS):
+        moved = False
+        for i, k in enumerate(members):
+            hit = _overlapping(_body(k), _rest(members, k))
+            if not hit[0]:
+                continue
+            n = len(hit) if hit.all() else int(np.argmin(hit))
+            if k.first + n - start[i] > CLUSTER_PUSH_M:
+                return None
+            again = redraw(k, k.first + n)
+            if again is None:
+                return None
+            members[i], moved = again, True
+        if not moved:
+            break
+    else:
+        return None
+    # The new stub cut short where its ribbon would reach another's further out; then nothing may overlap at all.
+    hit = np.flatnonzero(_overlapping(_body(members[-1]), _rest(members, members[-1])))
+    if len(hit):
+        members[-1] = _clip(members[-1], int(hit[0]))
+        if members[-1] is None:
+            return None
+    if any(_overlapping(_body(k), _rest(members, k)).any() for k in members):
+        return None
+    throat = shapely.union_all([k.throat for k in members])
+    if throat.geom_type != "Polygon" or len(throat.interiors):
+        return None
+    outer = outer_flares([k.record for k in members], throat, lambda i, name: members[i].flare_points[name])
+    if outer is None:
+        return None
+    for i, name in outer:  # its mown verge, about VERGE_M wide beyond it, keeps off the other side roads
+        k = members[i]
+        strip = shapely.LineString(k.flare_points[name]).buffer(mesh.VERGE_M).difference(throat)
+        if any(_body_poly(o).intersection(strip).area > OVERLAP_M2 for o in members if o is not k):
+            return None
+    if others:  # against the other kept stubs, as `_fit` judges a stub on its own
+        bodies = shapely.unary_union([o.body for o in others])
+        pieces = shapely.union(bodies, shapely.unary_union([o.throat for o in others]))
+        verges = shapely.union(bodies, shapely.unary_union([o.throat.buffer(mesh.VERGE_M) for o in others]))
+        for i, k in enumerate(members):
+            if k.throat.intersection(pieces).area > OVERLAP_M2 or k.throat.buffer(mesh.VERGE_M).intersects(bodies):
+                return None
+            hit = np.flatnonzero(shapely.intersects(_body(k), verges))
+            if len(hit):
+                if i < len(members) - 1:
+                    return None
+                members[i] = _clip(k, int(hit[0]))
+                if members[i] is None:
+                    return None
+    if avoid is not None and any(k.throat.buffer(mesh.VERGE_M).intersects(avoid) for k in members):
+        return None
+    lead = min(group, key=lambda k: k.priority)
+    cluster = lead.cluster if lead.cluster is not None else int(lead.record["junction"])
+    for k in members:
+        k.cluster = cluster
+        k.record["cluster"] = cluster
+    return members, group
+
+
+def _split_outline(members: list[_Candidate]) -> None:
+    """Each stub's paved outline in a cluster: its throat where it's nearer its own centreline than any other's, and
+    its carriageway, so its closure spans its own side road and not its neighbour's. Kept as it was where that doesn't
+    make one polygon holding its centreline."""
+    sites = np.vstack([k.centre for k in members])
+    owner = np.concatenate([np.full(len(k.centre), i) for i, k in enumerate(members)])
+    extent = shapely.union_all([k.throat for k in members]).envelope.buffer(100.0)
+    cells = shapely.get_parts(shapely.voronoi_polygons(shapely.multipoints(sites), extend_to=extent, ordered=True))
+    if len(cells) != len(sites):
+        return
+    for i, k in enumerate(members):
+        part = k.throat.intersection(shapely.union_all(cells[owner == i]))
+        line = shapely.LineString(k.centre[:k.first + 1]).buffer(0.05)
+        pieces = [g for g in shapely.get_parts(part) if g.geom_type == "Polygon" and g.intersects(line)]
+        if not pieces:
+            continue
+        outline = _paved_outline(shapely.union_all(pieces), k.rows_xy, k.rows_n, k.half)
+        if outline is None:
+            continue
+        rounded = np.round(np.asarray(outline.exterior.coords)[:-1], 2)
+        if shapely.Polygon(rounded).buffer(0.05).contains(shapely.MultiPoint(np.asarray(k.record["rows"]["xy"]))):
+            k.record["outline"] = rounded.tolist()
+
+
+def _joins(j: dict, kept: list[_Candidate]) -> bool:
+    """Whether a side road's line comes within JOINS_WITHIN_M of a kept stub's centreline past its first JOINS_FROM_M:
+    it joins that road."""
+    line = np.asarray(j["line"], float)
+    far = line[cl.cumulative(line) > JOINS_FROM_M]
+    if not len(far) or not kept:
+        return False
+    other = [k for k in kept if k.record["side"] == j["side"] and len(k.centre) > 1]
+    return any(float(shapely.distance(shapely.LineString(k.centre), shapely.points(far)).min()) < JOINS_WITHIN_M
+               for k in other)
+
+
 def plan(junctions: list[dict], c, section, dem_sample, *, width_factor: float = 1.0,
-         layouts: tuple[bool, ...] = (False,), flare_scale: float = 1.0, avoid: shapely.Geometry | None = None) -> dict:
+         layouts: tuple[bool, ...] = (False,), flare_scale: float = 1.0, avoid: shapely.Geometry | None = None,
+         clusters: bool = True) -> dict:
     """The stubs for the junctions junctions.json lists: the content of stubs.json (without `crs`). `c` and
     `section` are the centreline's and cross-section's arrays (`centreline.npz`, `section.npz`), `dem_sample` the
     region's elevation, `layouts` whether each layout is reversed (for the timing gates). `flare_scale` draws every
     flare at that share of its radius first (a roundabout's exits, `core.roundabouts`); `avoid` is ground a stub must
     keep off (a roundabout the route drives): one whose throat or flares' verges reach it is left out (`roundabout`),
-    and one whose ribbon reaches it is cut short before it."""
+    and one whose ribbon reaches it is cut short before it. With `clusters`, a stub that doesn't fit beside the others
+    even with smaller flares is drawn with those it overlaps as one cluster where it can be (`_merge`)."""
     m = _Mainline(c, section)
     cands, skipped = [], []
     for j in junctions:
@@ -537,12 +741,39 @@ def plan(junctions: list[dict], c, section, dem_sample, *, width_factor: float =
     if avoid is not None:
         cands, skipped = _keep_off(cands, avoid, skipped)
     kept: list[_Candidate] = []
+
+    def redraw(k: _Candidate, first: int) -> _Candidate | None:
+        again, _ = _drawn(k.junction, m, dem_sample, width_factor, k.scale, first)
+        if again is not None and k.keep is not None:
+            again = _clip(again, k.keep - again.first)
+        if again is not None:
+            again.cluster = k.cluster
+        return again
+
+    scales = [{"upstream": flare_scale, "downstream": flare_scale}, {"upstream": SHRINK, "downstream": SHRINK}]
     for cand, j in sorted(cands, key=lambda cj: cj[0].priority):
         fitted, reason = _fit(cand, m, kept)
         if reason == "overlaps":  # with smaller flares, it may fit beside the other
             again, _ = _drawn(j, m, dem_sample, width_factor, {"upstream": SHRINK, "downstream": SHRINK})
             if again is not None:
                 fitted, reason = _fit(again, m, kept)
+        if reason == "overlaps" and clusters:  # drawn with those it overlaps, as one patch
+            merged = None
+            for scale in scales:
+                fresh, _ = _drawn(j, m, dem_sample, width_factor, scale)
+                if fresh is not None and avoid is not None:
+                    fresh = next(iter(_keep_off([(fresh, j)], avoid, [])[0]), (None, j))[0]
+                merged = _merge(fresh, m, kept, redraw, avoid) if fresh is not None else None
+                if merged is not None:
+                    break
+            if merged is not None:
+                members, replaced = merged
+                for k in members:
+                    k.body = _body_poly(k)
+                kept = [k for k in kept if all(k is not r for r in replaced)] + members
+                continue
+            if _joins(j, kept):
+                reason = "joins"
         if fitted is None:
             skipped.append({"junction": j["id"], "name": j.get("name"), "reason": reason})
             continue
@@ -559,6 +790,17 @@ def plan(junctions: list[dict], c, section, dem_sample, *, width_factor: float =
         else:
             skipped.append({"junction": k.record["junction"], "name": k.record["name"], "reason": "outline"})
     kept = sound
+    # A cluster left with one stub (the others left out) is a stub on its own; the others share out their outlines.
+    by_cluster: dict[int, list[_Candidate]] = {}
+    for k in kept:
+        if k.cluster is not None:
+            by_cluster.setdefault(k.cluster, []).append(k)
+    for members in by_cluster.values():
+        if len(members) == 1:
+            members[0].cluster = None
+            members[0].record.pop("cluster", None)
+        else:
+            _split_outline(members)
     kept.sort(key=lambda k: (k.record["station_m"], k.record["junction"]))
     return {"version": FORMAT_VERSION,
             "rule": {"flare_radius_m": FLARE_RADIUS_M, "flare_max_m": FLARE_MAX_M,
@@ -780,6 +1022,209 @@ def _tri_wave(x: np.ndarray) -> np.ndarray:
     return 1.0 - np.abs(np.mod(x, 2.0) - 1.0)
 
 
+@dataclass(eq=False)
+class _Leg:
+    """One stub as `build` draws it: its ribbon's meshes, and its throat's pieces before triangulating."""
+
+    st: dict
+    side: str
+    a: int
+    b: int
+    sb: mesh.Ribbon
+    material: str
+    tile: float
+    window: int
+    pieces: list  # its own road, then its left and right verges and skirts: (positions, uvs or None, triangles)
+    flares: dict  # by name: (side of the stub, the road's row, points, heights), from the road's edge out
+    across: np.ndarray  # its ribbon's first row of road vertices (easting, northing, height), in the ring's order
+    ring: np.ndarray  # its throat's outline: the road's edge vertices, the downstream flare, across, the upstream
+    ring_h: np.ndarray
+    inner: np.ndarray  # its own cross-section's points inside the throat, and their heights
+    inner_h: np.ndarray
+    heading: float  # at its first row, for the throat's texture coordinates
+
+
+class _NoCluster(Exception):
+    """A cluster's throats can't be drawn as one patch."""
+
+
+def _leg(st: dict, rb: mesh.Ribbon, dem_sample, skirt: bool, others: np.ndarray) -> _Leg:
+    side = jn.SIDE_CODE[st["side"]]
+    a, b = st["mouth"]["rows"]
+    r = st["rows"]
+    ribbon_rows = _ribbon_rows(st)
+    xy = np.asarray(r["xy"], float)
+    z, zl, zr = (np.asarray(r[key], float) for key in ("z", "z_left", "z_right"))
+    heading, curv = np.asarray(r["heading"], float), np.asarray(r["curvature"], float)
+    half = np.asarray(r["half_m"], float)
+    sel = ribbon_rows
+    cap_l, cap_r = side_caps(xy[sel], cl.normals(heading[sel]), others, REACH_M)
+    sb = mesh.build_ribbon(xy[sel], z[sel], heading[sel], curv[sel], half[sel], half[sel],
+                           (z[sel] - zl[sel]) / half[sel], (z[sel] - zr[sel]) / half[sel], dem_sample,
+                           skirt_cap_l=cap_l, skirt_cap_r=cap_r)
+    material = st["style"]
+    tile = textures.GRAVEL_TILE_M if st["surface"] == sec.UNSEALED else textures.ROAD_TILE_M
+
+    # The stub's own road and verges.
+    rc = sb.road_cols
+    e, n, h = sb.e[:, rc], sb.n[:, rc], sb.h[:, rc]
+    nr, nc = e.shape
+    uv = np.column_stack([np.tile(np.linspace(0, 1, nc), nr), np.repeat(ribbon_rows / tile, nc)])
+    pieces = [(np.column_stack([e.ravel(), n.ravel(), h.ravel()]), uv, mesh._grid_triangles(nr, nc))]
+    left, right = (sb.left_cols, sb.right_cols) if skirt else mesh._verge_strips(sb)
+    for cols in (left, right):
+        e, n, h = sb.e[:, cols], sb.n[:, cols], sb.h[:, cols]
+        nr, nc = e.shape
+        pieces.append((np.column_stack([e.ravel(), n.ravel(), h.ravel()]), None, mesh._grid_triangles(nr, nc)))
+
+    # The throat: the mainline's edge vertices, the flares, the ribbon's first row, and the stub's own
+    # cross-section inside it.
+    edge_col = rb.road_cols.start if side == "L" else rb.road_cols.stop - 1
+    main_edge = np.column_stack([rb.e[a:b + 1, edge_col], rb.n[a:b + 1, edge_col]])
+    main_edge_h = rb.h[a:b + 1, edge_col]
+    flares = {}
+    for name in ("upstream", "downstream"):
+        f = st["flares"][name]
+        es = 1.0 if f["stub_side"] == "left" else -1.0
+        pts = np.asarray(f["points"], float)
+        fxy, fh = pts[:, :2].copy(), pts[:, 2].copy()
+        row = a if name == "upstream" else b
+        fxy[0], fh[0] = (rb.e[row, edge_col], rb.n[row, edge_col]), rb.h[row, edge_col]
+        col = rc.start if es > 0 else rc.stop - 1
+        fxy[-1], fh[-1] = (sb.e[0, col], sb.n[0, col]), sb.h[0, col]
+        fxy, fh = _dedupe(fxy, fh)
+        flares[name] = (es, row, fxy, fh)
+    across = [(sb.e[0, cc], sb.n[0, cc], sb.h[0, cc]) for cc in range(rc.start, rc.stop)]  # stub's left to right
+    if flares["downstream"][0] < 0:
+        across = across[::-1]
+    across = np.array(across)
+    down, up = flares["downstream"], flares["upstream"]
+    ring = np.vstack([main_edge, down[2][1:], across[1:-1, :2], up[2][::-1][:-1]])
+    ring_h = np.concatenate([main_edge_h, down[3][1:], across[1:-1, 2], up[3][::-1][:-1]])
+    first = int(st["ribbon_from_m"])
+    inner, inner_h = [], []
+    poly = shapely.Polygon(ring)
+    shapely.prepare(poly)
+    boundary = poly.exterior
+    for kk in range(1, first):
+        nrm = cl.normals(np.array([heading[kk]]))[0]
+        for t in (1.0, 0.5, 0.0, -0.5, -1.0):
+            p = xy[kk] + nrm * t * half[kk]
+            if poly.contains(shapely.Point(p)) and boundary.distance(shapely.Point(p)) >= STEINER_CLEAR_M:
+                inner.append(p)
+                edge = zl[kk] if t > 0 else zr[kk]
+                inner_h.append(z[kk] + (edge - z[kk]) * abs(t))
+    return _Leg(st, side, a, b, sb, material, tile, int(st["station_m"] // WINDOW_M), pieces, flares, across, ring,
+                ring_h, np.array(inner).reshape(-1, 2), np.asarray(inner_h, float), float(heading[first]))
+
+
+def _throat_uv(pts: np.ndarray, leg: _Leg) -> np.ndarray:
+    """Plain surface: (d, lateral) from the stub's ribbon's first row, the lateral mirrored inside an unmarked band."""
+    u0, u1 = THROAT_U[leg.material]
+    band = (u1 - u0) * TEXTURE_WIDTH_M[leg.material]
+    rc = leg.sb.road_cols
+    o = np.array([leg.sb.e[0, rc.start + 2], leg.sb.n[0, rc.start + 2]])
+    hd = leg.heading
+    along = (pts - o) @ np.array([math.cos(hd), math.sin(hd)]) + int(leg.st["ribbon_from_m"])
+    lateral = (pts - o) @ np.array([-math.sin(hd), math.cos(hd)])
+    return np.column_stack([u0 + (u1 - u0) * _tri_wave(lateral / band), along / leg.tile])
+
+
+def _flare_verge(leg: _Leg, rb: mesh.Ribbon, name: str):
+    """A mown verge along a flare, from the mainline's verge to the stub's: (piece, its outline, its outer edge's
+    points and heights)."""
+    es, row, fxy, fh = leg.flares[name]
+    edge_col = rb.road_cols.start if leg.side == "L" else rb.road_cols.stop - 1
+    verge_col = edge_col - 1 if leg.side == "L" else edge_col + 1
+    rc = leg.sb.road_cols
+    col = (rc.start - 1) if es > 0 else rc.stop
+    outer_main = np.array([rb.e[row, verge_col], rb.n[row, verge_col]])
+    outer_stub = np.array([leg.sb.e[0, col], leg.sb.n[0, col]])
+    w0 = float(np.hypot(*(outer_main - fxy[0])))
+    w1 = float(np.hypot(*(outer_stub - fxy[-1])))
+    tang = np.gradient(fxy, axis=0)
+    tang /= np.maximum(np.hypot(*tang.T), 1e-9)[:, None]
+    perp = np.column_stack([-tang[:, 1], tang[:, 0]])
+    if perp[0] @ (outer_main - fxy[0]) < 0:
+        perp = -perp
+    frac = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(fxy, axis=0).T))])
+    frac /= max(frac[-1], 1e-9)
+    outer = fxy + perp * (w0 + (w1 - w0) * frac)[:, None]
+    outer_h = fh - mesh.VERGE_M * mesh.VERGE_FALL
+    outer[0], outer_h[0] = outer_main, rb.h[row, verge_col]
+    outer[-1], outer_h[-1] = outer_stub, leg.sb.h[0, col]
+    strip_xy = np.stack([fxy, outer], axis=1)  # (points, 2 columns, 2)
+    strip_h = np.stack([fh, outer_h], axis=1)
+    piece = (np.column_stack([strip_xy.reshape(-1, 2), strip_h.ravel()]), None, mesh._grid_triangles(len(fxy), 2))
+    return piece, np.vstack([fxy, outer[::-1]]), (outer, outer_h)
+
+
+def _cluster_throat(legs: list[_Leg], rb: mesh.Ribbon):
+    """A cluster's throats as one patch (the lead stub first in `legs`): the outline of their union, every vertex one
+    of theirs or where two flares cross, with its heights; the cross-section points inside it (where two throats
+    overlap, the earlier stub's); its two outer flares (`outer_flares`, as (index, name)); and which outline points
+    face the ground between two side roads (the inner flares' parts left on the outline). Raises `_NoCluster` if the
+    union isn't one piece without a hole, or loses a vertex the road's edge, a ribbon's first row or an outer flare
+    shares with another mesh."""
+    polys = [shapely.Polygon(leg.ring) for leg in legs]
+    if not all(p.is_valid for p in polys):
+        raise _NoCluster("a throat isn't a simple polygon")
+    union = shapely.union_all(polys)
+    if union.geom_type != "Polygon" or len(union.interiors):
+        raise _NoCluster("the throats don't make one piece")
+    ext = np.asarray(union.exterior.coords)[:-1]
+    known = np.vstack([leg.ring for leg in legs])
+    known_h = np.concatenate([leg.ring_h for leg in legs])
+    dist, idx = cKDTree(known).query(ext)
+    on = dist < 1e-6
+    ring, ring_h = ext.copy(), np.zeros(len(ext))
+    ring[on], ring_h[on] = known[idx[on]], known_h[idx[on]]
+    if (~on).any():  # where two flares cross: its height along each, averaged
+        seg_a, seg_b = known, np.vstack([np.roll(leg.ring, -1, axis=0) for leg in legs])
+        h_a, h_b = known_h, np.concatenate([np.roll(leg.ring_h, -1) for leg in legs])
+        ab = seg_b - seg_a
+        for i in np.flatnonzero(~on):
+            t = np.clip(((ext[i] - seg_a) * ab).sum(axis=1) / np.maximum((ab * ab).sum(axis=1), 1e-12), 0.0, 1.0)
+            near = np.hypot(*(seg_a + ab * t[:, None] - ext[i]).T) < 1e-6
+            if not near.any():
+                raise _NoCluster("an outline point on no throat's edge")
+            ring_h[i] = float((h_a[near] + (h_b[near] - h_a[near]) * t[near]).mean())
+    ring, ring_h = _dedupe(ring, ring_h)
+    if np.hypot(*(ring[0] - ring[-1])) <= 1e-6:
+        ring, ring_h = ring[:-1], ring_h[:-1]
+    keys = [(x, y) for x, y in ring.tolist()]
+    on_ring = set(keys)
+    edge_col = rb.road_cols.start if legs[0].side == "L" else rb.road_cols.stop - 1
+    lo, hi = min(leg.a for leg in legs), max(leg.b for leg in legs)
+    main = {(x, y) for x, y in np.column_stack([rb.e[lo:hi + 1, edge_col], rb.n[lo:hi + 1, edge_col]]).tolist()}
+    across = {(x, y) for leg in legs for x, y in leg.across[:, :2].tolist()}
+    across_inside = {(x, y) for leg in legs for x, y in leg.across[1:-1, :2].tolist()}
+    outer = outer_flares([leg.st for leg in legs], union, lambda i, name: legs[i].flares[name][2])
+    if outer is None:
+        raise _NoCluster("an outer flare isn't on the outline")
+    outer_pts = {(x, y) for i, name in outer for x, y in legs[i].flares[name][2].tolist()}
+    if not (main <= on_ring and across <= on_ring and outer_pts <= on_ring):
+        raise _NoCluster("the outline lost a shared vertex")
+    gore = np.array([key not in main and key not in outer_pts and key not in across_inside for key in keys])
+
+    poly = shapely.Polygon(ring)
+    shapely.prepare(poly)
+    boundary = poly.exterior
+    inner, inner_h, owned = [], [], []
+    for leg, own in zip(legs, polys):
+        for p, h in zip(leg.inner, leg.inner_h):
+            pt = shapely.Point(p)
+            if not poly.contains(pt) or boundary.distance(pt) < STEINER_CLEAR_M or any(o.contains(pt) for o in owned):
+                continue
+            if inner and np.hypot(*(np.asarray(inner) - p).T).min() < STEINER_CLEAR_M:
+                continue
+            inner.append(p)
+            inner_h.append(h)
+        shapely.prepare(own)
+        owned.append(own)
+    return ring, ring_h, np.array(inner).reshape(-1, 2), np.asarray(inner_h, float), outer, gore
+
+
 def build(stubs: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, dem_sample, *, skirt: bool,
           main_xy: np.ndarray, name_tag: str = "") -> Built:
     """The stubs' meshes, the mainline's cut and edge break, and the terrain's footprint, from the plan's stubs.
@@ -787,7 +1232,13 @@ def build(stubs: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
     `rb` is the mainline's ribbon (built with `mainline_caps`), `s` its stations, `main_xy` its centreline points.
     With `skirt` False (ground classes) the stubs' verge meshes are the 2 m verge alone, and their skirts go with the
     terrain, as the mainline's do. `name_tag` goes after the `_J` in their meshes' names (a roundabout's exits, whose
-    road is its ring: `1ROAD_JR0_000`); `main_xy` is every other road's centreline their skirts stop short of."""
+    road is its ring: `1ROAD_JR0_000`); `main_xy` is every other road's centreline their skirts stop short of.
+
+    Stubs with the same `cluster` (`_merge`) are drawn as one patch: each its own ribbon, their throats one
+    triangulation over the outline of their union, a mown verge along the cluster's two outer flares only, and the
+    ground between two of its side roads left to the terrain, which shares the inner flares' points. A cluster whose
+    throats don't make one patch here is drawn as its lead stub alone, the others left undrawn for the checks to find
+    (`faults`: `not_drawn`), so `settle` leaves them out and builds again."""
     rows = len(s)
     cut = {"L": np.zeros(rows - 1, bool), "R": np.zeros(rows - 1, bool)}
     edge_break = {"L": np.zeros(rows, bool), "R": np.zeros(rows, bool)}
@@ -795,125 +1246,66 @@ def build(stubs: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
     grass: dict[int, list] = {}
     ribbons, patches, edges = [], [], []
     centres = [_centre(st) for st in stubs]
-    vertices = 0
-    for k, st in enumerate(stubs):
-        side = jn.SIDE_CODE[st["side"]]
-        a, b = st["mouth"]["rows"]
-        cut[side][a:b] = True
-        edge_break[side][a + 1:b] = True
-        r = st["rows"]
-        ribbon_rows = _ribbon_rows(st)
-        xy = np.asarray(r["xy"], float)
-        z, zl, zr = (np.asarray(r[key], float) for key in ("z", "z_left", "z_right"))
-        heading, curv = np.asarray(r["heading"], float), np.asarray(r["curvature"], float)
-        half = np.asarray(r["half_m"], float)
-        sel = ribbon_rows
-        others = np.vstack([main_xy] + [c for i, c in enumerate(centres) if i != k])
-        cap_l, cap_r = side_caps(xy[sel], cl.normals(heading[sel]), others, REACH_M)
-        sb = mesh.build_ribbon(xy[sel], z[sel], heading[sel], curv[sel], half[sel], half[sel],
-                               (z[sel] - zl[sel]) / half[sel], (z[sel] - zr[sel]) / half[sel], dem_sample,
-                               skirt_cap_l=cap_l, skirt_cap_r=cap_r)
-        ribbons.append(sb)
-        material = st["style"]
-        tile = textures.GRAVEL_TILE_M if st["surface"] == sec.UNSEALED else textures.ROAD_TILE_M
-        window = int(st["station_m"] // WINDOW_M)
+    vertices, merged = 0, 0
+    # A stub's skirt stops short of other stubs' ribbons, and of its cluster's other throats as well: their whole
+    # centrelines.
+    whole = [np.asarray(st["rows"]["xy"], float) if st.get("cluster") is not None else c
+             for st, c in zip(stubs, centres)]
+    legs = [_leg(st, rb, dem_sample, skirt, np.vstack(
+        [main_xy] + [whole[i] if st.get("cluster") is not None and other.get("cluster") == st["cluster"] else c
+                     for i, (other, c) in enumerate(zip(stubs, centres)) if i != k]))
+            for k, st in enumerate(stubs)]
+    groups: dict[tuple, list[_Leg]] = {}
+    for k, leg in enumerate(legs):
+        key = ("cluster", leg.st["cluster"]) if leg.st.get("cluster") is not None else ("own", k)
+        groups.setdefault(key, []).append(leg)
 
-        # The stub's own road and verges.
-        rc = sb.road_cols
-        e, n, h = sb.e[:, rc], sb.n[:, rc], sb.h[:, rc]
-        nr, nc = e.shape
-        uv = np.column_stack([np.tile(np.linspace(0, 1, nc), nr), np.repeat(ribbon_rows / tile, nc)])
-        roads.setdefault((material, window), []).append(
-            (np.column_stack([e.ravel(), n.ravel(), h.ravel()]), uv, mesh._grid_triangles(nr, nc)))
-        left, right = (sb.left_cols, sb.right_cols) if skirt else mesh._verge_strips(sb)
-        for cols in (left, right):
-            e, n, h = sb.e[:, cols], sb.n[:, cols], sb.h[:, cols]
-            nr, nc = e.shape
-            grass.setdefault(window, []).append((np.column_stack([e.ravel(), n.ravel(), h.ravel()]), None,
-                                                 mesh._grid_triangles(nr, nc)))
+    def drawn(leg: _Leg) -> None:
+        cut[leg.side][leg.a:leg.b] = True
+        edge_break[leg.side][leg.a + 1:leg.b] = True
+        ribbons.append(leg.sb)
+        roads.setdefault((leg.material, leg.window), []).append(leg.pieces[0])
+        for piece in leg.pieces[1:]:
+            grass.setdefault(leg.window, []).append(piece)
 
-        # The throat: the mainline's edge vertices, the flares, the ribbon's first row, and the stub's own
-        # cross-section inside it.
-        edge_col = rb.road_cols.start if side == "L" else rb.road_cols.stop - 1
-        verge_col = edge_col - 1 if side == "L" else edge_col + 1
-        main_edge = np.column_stack([rb.e[a:b + 1, edge_col], rb.n[a:b + 1, edge_col]])
-        main_edge_h = rb.h[a:b + 1, edge_col]
-
-        def stub_col(es, verge=False):
-            col = (rc.start if es > 0 else rc.stop - 1)
-            return col + (0 if not verge else (-1 if es > 0 else 1))
-
-        flares = {}
-        for name in ("upstream", "downstream"):
-            f = st["flares"][name]
-            es = 1.0 if f["stub_side"] == "left" else -1.0
-            pts = np.asarray(f["points"], float)
-            fxy, fh = pts[:, :2].copy(), pts[:, 2].copy()
-            row = a if name == "upstream" else b
-            fxy[0], fh[0] = (rb.e[row, edge_col], rb.n[row, edge_col]), rb.h[row, edge_col]
-            col = stub_col(es)
-            fxy[-1], fh[-1] = (sb.e[0, col], sb.n[0, col]), sb.h[0, col]
-            fxy, fh = _dedupe(fxy, fh)
-            flares[name] = (es, row, fxy, fh)
-        across = [(sb.e[0, cc], sb.n[0, cc], sb.h[0, cc]) for cc in range(rc.start, rc.stop)]  # stub's left to right
-        if flares["downstream"][0] < 0:
-            across = across[::-1]
-        across = np.array(across)
-        down, up = flares["downstream"], flares["upstream"]
-        ring = np.vstack([main_edge, down[2][1:], across[1:-1, :2], up[2][::-1][:-1]])
-        ring_h = np.concatenate([main_edge_h, down[3][1:], across[1:-1, 2], up[3][::-1][:-1]])
-        first = int(st["ribbon_from_m"])
-        inner, inner_h = [], []
-        poly = shapely.Polygon(ring)
-        shapely.prepare(poly)
-        boundary = poly.exterior
-        for kk in range(1, first):
-            nrm = cl.normals(np.array([heading[kk]]))[0]
-            for t in (1.0, 0.5, 0.0, -0.5, -1.0):
-                p = xy[kk] + nrm * t * half[kk]
-                if poly.contains(shapely.Point(p)) and boundary.distance(shapely.Point(p)) >= STEINER_CLEAR_M:
-                    inner.append(p)
-                    edge = zl[kk] if t > 0 else zr[kk]
-                    inner_h.append(z[kk] + (edge - z[kk]) * abs(t))
-        inner = np.array(inner).reshape(-1, 2)
+    def throat(lead: _Leg, ring, ring_h, inner, inner_h) -> None:
         tri = _triangulate(ring, inner)
-        pts = np.vstack([ring, inner])
-        hts = np.concatenate([ring_h, np.asarray(inner_h, float)])
-        # Plain surface: (d, lateral) from the ribbon's first row, the lateral mirrored inside an unmarked band.
-        u0, u1 = THROAT_U[material]
-        band = (u1 - u0) * TEXTURE_WIDTH_M[material]
-        o = np.array([sb.e[0, rc.start + 2], sb.n[0, rc.start + 2]])
-        hd = float(heading[first])
-        along = (pts - o) @ np.array([math.cos(hd), math.sin(hd)]) + first
-        lateral = (pts - o) @ np.array([-math.sin(hd), math.cos(hd)])
-        uv = np.column_stack([u0 + (u1 - u0) * _tri_wave(lateral / band), along / tile])
-        roads.setdefault((material, window), []).append((np.column_stack([pts, hts]), uv, tri))
+        pts = np.vstack([ring, inner]) if len(inner) else ring
+        hts = np.concatenate([ring_h, inner_h])
+        roads.setdefault((lead.material, lead.window), []).append(
+            (np.column_stack([pts, hts]), _throat_uv(pts, lead), tri))
         patches.append(ring)
 
-        # A mown verge along each flare, from the mainline's verge to the stub's.
-        for es, row, fxy, fh in (up, down):
-            outer_main = np.array([rb.e[row, verge_col], rb.n[row, verge_col]])
-            col = stub_col(es, verge=True)
-            outer_stub = np.array([sb.e[0, col], sb.n[0, col]])
-            w0 = float(np.hypot(*(outer_main - fxy[0])))
-            w1 = float(np.hypot(*(outer_stub - fxy[-1])))
-            tang = np.gradient(fxy, axis=0)
-            tang /= np.maximum(np.hypot(*tang.T), 1e-9)[:, None]
-            perp = np.column_stack([-tang[:, 1], tang[:, 0]])
-            if perp[0] @ (outer_main - fxy[0]) < 0:
-                perp = -perp
-            frac = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(fxy, axis=0).T))])
-            frac /= max(frac[-1], 1e-9)
-            outer = fxy + perp * (w0 + (w1 - w0) * frac)[:, None]
-            outer_h = fh - mesh.VERGE_M * mesh.VERGE_FALL
-            outer[0], outer_h[0] = outer_main, rb.h[row, verge_col]
-            outer[-1], outer_h[-1] = outer_stub, sb.h[0, col]
-            strip_xy = np.stack([fxy, outer], axis=1)  # (points, 2 columns, 2)
-            strip_h = np.stack([fh, outer_h], axis=1)
-            grass.setdefault(window, []).append((np.column_stack([strip_xy.reshape(-1, 2), strip_h.ravel()]), None,
-                                                 mesh._grid_triangles(len(fxy), 2)))
-            patches.append(np.vstack([fxy, outer[::-1]]))
-            edges.append((outer, outer_h))
+    def verge(leg: _Leg, name: str) -> None:
+        piece, patch, edge = _flare_verge(leg, rb, name)
+        grass.setdefault(leg.window, []).append(piece)
+        patches.append(patch)
+        edges.append(edge)
+
+    for (_, key), group in groups.items():
+        if len(group) > 1:
+            lead = next((leg for leg in group if leg.st["junction"] == key), group[0])
+            group = [lead] + [leg for leg in group if leg is not lead]
+            try:
+                ring, ring_h, inner, inner_h, outer, gore = _cluster_throat(group, rb)
+                _triangulate(ring, inner)
+            except (_NoCluster, ValueError, shapely.errors.GEOSException):
+                group = [lead]  # the others aren't drawn, and the checks leave them out
+            else:
+                for leg in group:
+                    drawn(leg)
+                throat(lead, ring, ring_h, inner, inner_h)
+                for i, name in outer:
+                    verge(group[i], name)
+                if gore.any():
+                    edges.append((ring[gore], ring_h[gore]))
+                merged += 1
+                continue
+        (leg,) = group
+        drawn(leg)
+        throat(leg, leg.ring, leg.ring_h, leg.inner, leg.inner_h)
+        for name in ("upstream", "downstream"):
+            verge(leg, name)
 
     meshes: list[Mesh] = []
     letter = {"road": "", "road_plain": "N", "gravel": "", "gravel_narrow": "N"}
@@ -929,6 +1321,8 @@ def build(stubs: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
     stats = {"stubs": len(stubs), "meshes": len(meshes), "vertices": vertices,
              "triangles": int(sum(len(msh.triangles) for msh in meshes)),
              "length_m": round(sum(st["length_m"] - st["ribbon_from_m"] for st in stubs), 1)}
+    if merged:
+        stats["clusters"] = merged
     return Built(meshes, cut, edge_break, mesh.Footprint(cut, ribbons, patches, edges), stats)
 
 

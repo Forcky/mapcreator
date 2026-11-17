@@ -29,6 +29,9 @@ paved outline along the line square across it (`span`), and a metre more onto ea
 8 m for a 6 m road; not just the stub's own width, or cars would go round on the flare. A line never reaches nearer
 than LINE_CLEAR_M to the road's edge. A span off centre (a flare on one side) moves the props' centre with it, through
 the pose `closures.place` takes. Feet stand on the built ground (`TopSurface`: the road, stub and grass meshes).
+In a cluster (side roads drawn as one patch, `stubs._merge`) a stub's outline is its own share of the merged throat,
+and no line of props reaches onto another of the cluster's carriageways: each stops short of them, and where two side
+roads leave one node and share their first metres, the origin moves in until the tape's line is clear of the other.
 
 **A car** stands in its closure's vehicle slot (`closures.Slot`): behind the boards, right of the middle, nose out and
 turned in. It keeps the slot's distance in and heading; across the stub it stays within the span where it stands, so a
@@ -204,6 +207,7 @@ class _Stub:
     road: shapely.Geometry  # the carriageway near it
     pose: object  # stubs.pose
     half: float
+    mates: shapely.Geometry | None = None  # the other side roads' carriageways in its cluster (`stubs._merge`)
 
     def frame_at(self, d: float) -> tuple[np.ndarray, np.ndarray, float]:
         e, n, _, hd = self.pose(d)
@@ -228,11 +232,14 @@ class _Stub:
 
     def span(self, d: float, clear: float = LINE_CLEAR_M) -> tuple[float, float, bool]:
         """Where a line of props `d` in reaches: the outline's extent and VERGE_SPAN_M more each side, less any part
-        within `clear` of the road's edge (stakes included). Returns (lo, hi, whole): whole is False where the road
-        cut it short."""
+        within `clear` of the road's edge (stakes included), and stopping short of another side road in its cluster
+        (stakes included). Returns (lo, hi, whole): whole is False where the road cut it short."""
         lo, hi = self.cross(d)
         lo, hi = lo - VERGE_SPAN_M, hi + VERGE_SPAN_M
         stake = closures.STAKE_OUT_M + closures.STAKE_W
+        if self.mates is not None and self.on_mates(d, lo - stake, hi + stake):
+            lo, hi = self.off_mates(d, lo - stake, hi + stake)
+            lo, hi = min(lo + stake, -1e-3), max(hi - stake, 1e-3)
         if self.road.is_empty or self.clearance(d, lo - stake, hi + stake) >= clear:
             return lo, hi, True
         p, nl, _ = self.frame_at(d)
@@ -245,15 +252,34 @@ class _Stub:
         return float(min(lat.min() + stake, -closures.MIN_WIDTH_M / 2)), \
             float(max(lat.max() - stake, closures.MIN_WIDTH_M / 2)), False
 
+    def on_mates(self, d: float, lo: float, hi: float) -> bool:
+        """Whether the line `d` in from `lo` to `hi` (lateral offsets) crosses another side road in its cluster."""
+        p, nl, _ = self.frame_at(d)
+        return shapely.LineString([p + lo * nl, p + hi * nl]).intersection(self.mates).length > 1e-3
+
+    def off_mates(self, d: float, lo: float, hi: float) -> tuple[float, float]:
+        """The part of the line `d` in from `lo` to `hi` (lateral offsets) off the other side roads in its cluster: the
+        piece holding its centreline; as given where its centreline is on one."""
+        p, nl, _ = self.frame_at(d)
+        seg = shapely.LineString([p + lo * nl, p + hi * nl])
+        pieces = [g for g in shapely.get_parts(seg.difference(self.mates)) if g.distance(shapely.Point(p)) < 0.02]
+        if not pieces:
+            return lo, hi
+        lat = (np.asarray(pieces[0].coords) - p) @ nl
+        return float(lat.min()), float(lat.max())
+
     def origin(self) -> float:
-        """The closure's origin: the first d (ORIGIN_STEP_M apart) where the tape keeps TAPE_CLEAR_M from the road."""
+        """The closure's origin: the first d (ORIGIN_STEP_M apart) where the tape keeps TAPE_CLEAR_M from the road, and
+        the outline's extent there, stake to stake, keeps off the other side roads in its cluster (two leaving one node
+        share their first metres)."""
         stake = closures.STAKE_OUT_M + closures.STAKE_W
         last = float(self.record["length_m"]) - closures.TAPE_M - 1.0
         d0 = 0.0
         while d0 <= last:
-            lo, hi = self.cross(d0 + closures.TAPE_M)
-            if self.clearance(d0 + closures.TAPE_M, lo - VERGE_SPAN_M - stake, hi + VERGE_SPAN_M + stake) \
-                    >= TAPE_CLEAR_M:
+            d = d0 + closures.TAPE_M
+            lo, hi = self.cross(d)
+            if self.clearance(d, lo - VERGE_SPAN_M - stake, hi + VERGE_SPAN_M + stake) >= TAPE_CLEAR_M and (
+                    self.mates is None or not self.on_mates(d, lo - stake, hi + stake)):
                 return d0
             d0 += ORIGIN_STEP_M
         return 0.0
@@ -372,11 +398,20 @@ def place(stubs: list[dict], junctions: list[dict], c, section, frame: LocalFram
 
     kits, records, closure_meshes, candidates = [], [], [], []
     clear = SOLID_CLEAR_M + SOLID_SLACK_M
+    carriageways = {id(rec): _carriageway(rec) for rec in stubs if rec.get("cluster") is not None}
+
+    def mates_of(rec):
+        if rec.get("cluster") is None:
+            return None
+        others = [g for other in stubs if other is not rec and other.get("cluster") == rec["cluster"]
+                  and (g := carriageways.get(id(other))) is not None]
+        return shapely.union_all(others) if others else None
+
     for k, rec in enumerate(sorted(stubs, key=lambda r: (r["station_m"], r["junction"]))):
         j = by_id.get(rec["junction"], {"id": rec["junction"]})
         outline = shapely.Polygon(rec["outline"]).buffer(0)
         st = _Stub(rec, outline, road_for(rec, np.asarray(outline.centroid.coords[0])),
-                   stubs_core.pose(rec), float(rec["rows"]["half_m"][0]))
+                   stubs_core.pose(rec), float(rec["rows"]["half_m"][0]), mates_of(rec))
         level = rec.get("closure") if rec.get("closure") in closures.LEVELS else "minor"
         overshoot = is_overshoot(j, rec, s, heading, reverses) if "angle_deg" in j else False
         origin = st.origin()
@@ -474,6 +509,14 @@ def place(stubs: list[dict], junctions: list[dict], c, section, frame: LocalFram
              "triangles": int(sum(len(m.triangles) for m in visual)),
              "collider_vertices": int(sum(len(m.positions) for m in solid))}
     return Placement(meshes, materials, textures, records, stats)
+
+
+def _carriageway(rec: dict) -> shapely.Geometry:
+    """A stub's carriageway, from the road's edge line to its end."""
+    r = rec["rows"]
+    xy, hd, half = np.asarray(r["xy"], float), np.asarray(r["heading"], float), np.asarray(r["half_m"], float)
+    nrm = np.column_stack([-np.sin(hd), np.cos(hd)]) * half[:, None]
+    return shapely.Polygon(np.vstack([xy + nrm, (xy - nrm)[::-1]])).buffer(0)
 
 
 def areas(stubs: list[dict], margin: float = 10.0) -> list[tuple[float, float, float, float]]:
