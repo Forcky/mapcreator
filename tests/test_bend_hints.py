@@ -339,7 +339,7 @@ def test_a_bend_hint_stops_at_the_finish():
 class LevelRoad:
     """A stand-in for the road's triangles: level everywhere, so no banking."""
 
-    def height(self, x, z):
+    def height(self, x, z, below=None, within=None):
         return 0.0
 
 

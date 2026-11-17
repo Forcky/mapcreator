@@ -825,7 +825,7 @@ def footprint(extra: mesh.Footprint | None, built: Built, rows: int) -> mesh.Foo
         extra.cut, list(extra.ribbons) + built.ribbons, list(extra.patches), list(extra.edges) + built.edges,
         ribbon_cuts=list(extra.ribbon_cuts) + [None] * k if extra.ribbon_cuts is not None else None,
         open_last=list(extra.open_last) + [False] * k if extra.open_last is not None else None,
-        interior=extra.interior)
+        interior=extra.interior, spans=extra.spans)
 
 
 def as_built(doc: dict, built: Built) -> dict:

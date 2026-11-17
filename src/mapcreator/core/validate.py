@@ -98,6 +98,23 @@ class RoundaboutCheck:
     bare: shapely.Geometry | None = None  # its island, or a big island's edge: no tree or pole collider stands there
 
 
+@dataclass(frozen=True)
+class BridgeCheck:
+    """One of the route's own bridges (`core.bridges`), as the checks see it, in AC axes."""
+    label: str
+    parapets: tuple  # ((side, (n, 2) x/z points along the parapet's face, one a row), ...)
+    deck: shapely.Geometry | None = None  # an open deck's plan, less its ends (x/z)
+    underside: tuple[np.ndarray, np.ndarray] | None = None  # points along the open deck (x/z) and its underside's y
+
+
+BRIDGE_COLLIDER = "1WALL_BRIDGE_"  # the parapets' colliders (`core.bridges.COLLIDER_PREFIX`)
+BRIDGE_COLLIDER_GAP_M = 0.05  # every row of a parapet's face has a collider vertex this close
+BRIDGE_GROUND_CLEAR_M = 0.45  # no ground nearer an open deck's underside than this (the ground is kept 0.5 m below)
+BRIDGE_SAMPLE_M = 1.0
+# What `bridge_failures` finds wrong with a bridge, and how the report says it.
+BRIDGE_FAULTS = {"collider_gap": "a collider along each parapet's face with no gap",
+                 "ground_above": f"no ground within {BRIDGE_GROUND_CLEAR_M:.2f} m of an open deck's underside"}
+
 SEAM_STEP_M = 0.05  # where a stub's road meets the mainline's or its own, no step bigger than this
 STUB_GROUND_CLEAR_M = 0.02  # no ground (verge, skirt or terrain) more than this above a stub's road
 STUB_GROUND_REACH_M = 3.0  # the ground round a stub, its verges and a metre more, must have no hole
@@ -376,8 +393,9 @@ def _banking(line: ai_line.AiLine, road: RoadSurface, where: np.ndarray) -> np.n
     left = np.column_stack([along[:, 1], -along[:, 0]]) / np.maximum(np.hypot(*along.T), 1e-9)[:, None]
     half = (line.extra[:, 5] + line.extra[:, 6]) / 2 - BANKING_INSET_M
     for i in np.flatnonzero(where & (half > 0)):
-        up = road.height(*(middle[i] + left[i] * half[i]))
-        down = road.height(*(middle[i] - left[i] * half[i]))
+        top = float(line.pos[i, 1]) + 1.0  # the road under the line, not one under the route's bridge
+        up = road.height(*(middle[i] + left[i] * half[i]), below=top)
+        down = road.height(*(middle[i] - left[i] * half[i]), below=top)
         if up is not None and down is not None:
             out[i] = (up - down) / (2 * half[i])
     return out
@@ -401,7 +419,9 @@ def is_road_mesh(name: str) -> bool:
 
 
 class RoadSurface:
-    """Height of the road (1ROAD and 1GRAVEL meshes) under arbitrary X/Z points."""
+    """Height of the road (1ROAD and 1GRAVEL meshes) under arbitrary X/Z points. Where two road surfaces overlap in plan
+    (a road drawn under the route's bridge, `core.crossing_roads`, and the deck, `core.bridges`), `height` takes the
+    one closest below a given height, or the highest."""
 
     def __init__(self, nodes: list[dict]):
         tris = []
@@ -412,10 +432,13 @@ class RoadSurface:
         self.tri = np.concatenate(tris) if tris else np.zeros((0, 3, 3))
         self.tree = cKDTree(self.tri.mean(axis=1)[:, [0, 2]]) if len(self.tri) else None
 
-    def height(self, x: float, z: float) -> float | None:
+    def height(self, x: float, z: float, below: float | None = None, within: float | None = None) -> float | None:
+        """The road's height at x/z: the highest surface there, or with `below` the highest at or under that height
+        (5 cm of slack), and with `within` too no lower than `below - within`; None where there's none."""
         if self.tree is None:
             return None
         _, idx = self.tree.query([x, z], k=min(16, len(self.tri)))
+        found = []
         for i in np.atleast_1d(idx):
             a, b, c = self.tri[i][:, [0, 2]]
             v0, v1, v2 = c - a, b - a, np.array([x, z]) - a
@@ -426,8 +449,10 @@ class RoadSurface:
             v = (v0[0] * v2[1] - v2[0] * v0[1]) / den
             if u >= -1e-6 and v >= -1e-6 and u + v <= 1 + 1e-6:
                 ya, yb, yc = self.tri[i][:, 1]
-                return float(ya + u * (yc - ya) + v * (yb - ya))
-        return None
+                found.append(float(ya + u * (yc - ya) + v * (yb - ya)))
+        if below is not None:
+            found = [h for h in found if h <= below + 0.05 and (within is None or h >= below - within)]
+        return max(found) if found else None
 
     def covers(self, xz: np.ndarray, batch: int = 8192) -> np.ndarray:
         """Whether each X/Z point is over the road: `height` for many points at once."""
@@ -506,7 +531,7 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
     road = RoadSurface(data["nodes"])
     for name in sorted(n for n in dummies if SPAWN.match(n)):
         x, y, z = dummies[name]["matrix"][3, :3]
-        h = road.height(x, z)
+        h = road.height(x, z, below=y + 1.0)  # the road under it, not one under the route's bridge
         ok = h is not None and SPAWN_HEIGHT[0] <= y - h <= SPAWN_HEIGHT[1]
         rep.check(ok, f"{label}: {name} sits {('%.2f m' % (y - h)) if h is not None else 'off the road'} above the road")
     starts = np.array([d["matrix"][3, :3] for n, d in sorted(dummies.items()) if re.fullmatch(r"AC_START_\d+", n)])
@@ -536,8 +561,10 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
         pl, pr = left["matrix"][3, :3], right["matrix"][3, :3]
         span = float(np.linalg.norm(pl - pr))
         mid = (pl + pr) / 2
-        spans = (span >= MIN_GATE_M and road.height(mid[0], mid[2]) is not None
-                 and road.height(pl[0], pl[2]) is None and road.height(pr[0], pr[2]) is None)
+        # Each end off the road at its own level: a road drawn under the route's bridge, far below, doesn't count.
+        spans = (span >= MIN_GATE_M and road.height(mid[0], mid[2], below=mid[1] + 1.0, within=2.0) is not None
+                 and road.height(pl[0], pl[2], below=pl[1] + 1.0, within=2.0) is None
+                 and road.height(pr[0], pr[2], below=pr[1] + 1.0, within=2.0) is None)
         rep.check(spans, f"{label}: {gate} gate spans the road ({span:.1f} m, ends beyond both edges)")
 
     try:
@@ -548,7 +575,9 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
     rep.check(True, f"{label}: fast_lane.ai v7 reads back ({len(line.pos)} points)")
     rep.check(bool(np.all(np.diff(line.length) > 0)), f"{label}: AI distances strictly increase")
     sample = line.pos[:: max(len(line.pos) // 200, 1)]
-    lift = [p[1] - h for p in sample if (h := road.height(p[0], p[2])) is not None]
+    # Against the road under each point (anything within a metre above it counts too, so a line under the road
+    # still fails), not a road drawn under the route's bridge.
+    lift = [p[1] - h for p in sample if (h := road.height(p[0], p[2], below=p[1] + 1.0)) is not None]
     rep.check(len(lift) > 0.9 * len(sample) and AI_HEIGHT[0] <= min(lift) and max(lift) <= AI_HEIGHT[1],
               f"{label}: AI line {min(lift):.2f}-{max(lift):.2f} m above the road" if lift else f"{label}: AI line off the road")
     _middle, middle_radius = road_middle(line)
@@ -793,6 +822,68 @@ def stub_failures(data: dict, stubs: list[tuple[object, StubCheck]]) -> dict[obj
     return out
 
 
+def bridge_failures(data: dict, bridges: list[tuple[object, BridgeCheck]]) -> dict[object, list[str]]:
+    """What's wrong with each of the route's own bridges, by its key: `BRIDGE_FAULTS`' keys, none if it's sound. Every
+    row of each parapet's face has a collider vertex on it (`collider_gap`), and over an open deck's plan no ground
+    (verge, skirt or terrain) stands within BRIDGE_GROUND_CLEAR_M of its underside (`ground_above`)."""
+    if not bridges:
+        return {}
+    walls = [nd["vertices"]["pos"][:, [0, 2]].astype(float) for nd in data["nodes"]
+             if nd["class"] == 2 and nd["name"].startswith(BRIDGE_COLLIDER)]
+    wall_tree = cKDTree(np.vstack(walls)) if walls else None
+    decks = [b.deck for _, b in bridges if b.deck is not None]
+    ground = None
+    if decks:
+        boxes = np.array([d.bounds for d in decks])
+        tris = []
+        for nd in data["nodes"]:
+            if nd["class"] != 2 or not (nd["name"][:1].isdigit() and "GRASS" in nd["name"]):
+                continue
+            tri = nd["vertices"]["pos"].astype(float)[nd["indices"].reshape(-1, 3)]
+            lo, hi = tri[:, :, [0, 2]].min(axis=1), tri[:, :, [0, 2]].max(axis=1)
+            near = ((lo[:, None, 0] <= boxes[None, :, 2]) & (hi[:, None, 0] >= boxes[None, :, 0])
+                    & (lo[:, None, 1] <= boxes[None, :, 3]) & (hi[:, None, 1] >= boxes[None, :, 1])).any(axis=1)
+            tris.append(tri[near])
+        ground = _Cover(np.concatenate(tris) if tris else np.zeros((0, 3, 3)))
+    out: dict[object, list[str]] = {}
+    for key, b in bridges:
+        faults = []
+        for _side, face in b.parapets:
+            gap = (wall_tree.query(face, workers=cpus.count())[0] if wall_tree is not None
+                   else np.full(len(face), np.inf))
+            if (gap > BRIDGE_COLLIDER_GAP_M).any():
+                faults.append("collider_gap")
+                break
+        if b.deck is not None and b.underside is not None and ground is not None:
+            pts = _grid_in(b.deck, BRIDGE_SAMPLE_M)
+            if len(pts):
+                along, under = b.underside
+                _, i = cKDTree(along).query(pts)
+                top = ground.top(pts)
+                if (np.isfinite(top) & (top > under[i] - BRIDGE_GROUND_CLEAR_M)).any():
+                    faults.append("ground_above")
+        out[key] = faults
+    return out
+
+
+def bridge_checks(rep: Report, label: str, data: dict, bridges: list[BridgeCheck]) -> None:
+    """The route's own bridges (`core.bridges`), as `bridge_failures` judges them: a warning listing them, then the
+    checks. A failed check is a warning, not a failure: the mesh stage builds any open deck that fails them on the
+    ground, so a fault found here is one the two disagree on."""
+    if not bridges:
+        return
+    open_decks = sum(b.deck is not None for b in bridges)
+    rep.warnings.append(f"{len(bridges)} bridge{'s' if len(bridges) != 1 else ''} with parapets on the route, "
+                        f"{open_decks} of them open decks over the ground: " + "; ".join(b.label for b in bridges))
+    found = bridge_failures(data, [(b.label, b) for b in bridges])
+    for fault, what in BRIDGE_FAULTS.items():
+        bad = [name for name, faults in found.items() if fault in faults]
+        if bad:
+            rep.warnings.append(f"{label}: bridges without {what}: {'; '.join(bad[:5])}")
+        else:
+            rep.passed.append(f"{label}: {len(bridges)} bridges with {what}")
+
+
 def stub_checks(rep: Report, label: str, data: dict, junctions: list[JunctionCheck]) -> None:
     """Side roads' stubs (`core.stubs`), as `stub_failures` judges them. Warnings, not failures: the mesh stage has
     already left out every stub that fails these on its own meshes (`core.stubs.faults`), so a fault found here
@@ -1001,12 +1092,14 @@ def _dressing(rep: Report, ok: bool, what: str) -> None:
 def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
                  road_radius: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
                  junctions: list[JunctionCheck] | None = None,
-                 roundabouts: list[RoundaboutCheck] | None = None, crossing: CrossingCheck | None = None) -> Report:
+                 roundabouts: list[RoundaboutCheck] | None = None, crossing: CrossingCheck | None = None,
+                 bridges: list[BridgeCheck] | None = None) -> Report:
     """`road_radius`: by layout label ("main", "forward", "reverse"), the centreline's radius every metre over the
     layout's AI line, as (AC x/z points, radii). The validate stage passes it from the profile, so a bend is judged
     as main's 1 m centreline line judged it. `junctions`: the side roads' junctions, for `junction_checks`, a
     roundabout's exits among them; `roundabouts`: the rings drawn whole, for `roundabout_checks`; `crossing`: the
-    roads crossing the route drawn, and the bridges over it, for `crossing_checks`."""
+    roads crossing the route drawn, and the bridges over it, for `crossing_checks`; `bridges`: the route's own
+    bridges, for `bridge_checks`."""
     rep = Report()
     tid = track_dir.name
     kn5_materials: set[str] = set()
@@ -1064,6 +1157,7 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
                 roundabout_checks(rep, label, merged, roundabouts or [])
                 crossing_checks(rep, label, merged, crossing)
                 ground_checks(rep, label, merged)
+                bridge_checks(rep, label, merged, bridges or [])
     for rel in ("ATTRIBUTION.txt", "centreline.geojson", "extension/ext_config.ini"):
         rep.check((track_dir / rel).exists(), f"{rel} present")
     if (track_dir / "extension" / "ext_config.ini").exists() and kn5_materials:

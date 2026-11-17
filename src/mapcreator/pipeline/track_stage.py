@@ -12,6 +12,7 @@ import numpy as np
 
 from mapcreator import __version__, buildinfo, cpus
 from mapcreator.config import Settings
+from mapcreator.core import bridges as bridges_core
 from mapcreator.core import roundabouts as rb_core
 from mapcreator.core import (ai_line, closures, furniture, grass, grassfx, junctions, kn5, package, stubs, textures,
                              treefx, validate)
@@ -203,6 +204,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
                               sec["half_right"], stubs=stubs.by_junction(plan))
     # Nor in a roundabout the route drives, between its ring's two ends (`core.roundabouts`).
     rings = mesh_stage.built_roundabouts(work, job)
+    # On a bridge the kerb strip is drivable: a gate there reaches past it (`core.bridges`).
+    decks = mesh_stage.built_bridges(work)
     for lay in layouts:
         road = RoadModel.from_arrays(c["s"], c["xy"], c["z"], c["heading"], c["curvature"], c["grade"],
                                      sec["half_left"], sec["half_right"], sec["slope_left"], sec["slope_right"],
@@ -210,7 +213,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         avoid = junctions.layout_intervals(mouths, c["s"], lay.reverse)
         if rings:
             avoid = sorted(avoid + rb_core.layout_intervals(rings, c["s"], lay.reverse))
-        dummies = logic_dummies(road, scene.frame, avoid)
+        wider = [(a, b, bridges_core.KERB_M) for a, b in bridges_core.layout_intervals(decks, c["s"], lay.reverse)]
+        dummies = logic_dummies(road, scene.frame, avoid, wider)
         gates = dict(zip(("start", "finish"), gate_distances(road, avoid)))
         moved = {k: round(d - usual, 1) for (k, d), usual in zip(gates.items(), (GATE_FROM_END_M,
                                                                                  finish_distance(road.length)))

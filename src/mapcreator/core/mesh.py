@@ -129,22 +129,30 @@ def _side_limits(curvature: np.ndarray, full_m: float, step: float, cap_left=Non
 
 
 def build_ribbon(xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, dem_sample, *,
-                 skirt_cap_l=None, skirt_cap_r=None) -> Ribbon:
+                 skirt_cap_l=None, skirt_cap_r=None, verge_l=None, verge_r=None) -> Ribbon:
     """`skirt_cap_l`/`skirt_cap_r`, per station: how far from the centreline the skirt may reach on that side, where
     it shares the ground with something beside the road (a side road's stub, `core.stubs`). The skirt then stops
     there, but always reaches 0.5 m past the verge, and the verge keeps its width. Without them the ribbon is built
-    as it always was."""
+    as it always was.
+    `verge_l`/`verge_r`: (width, rise) per station, where the width is finite: the verge's outer edge stands that far
+    beyond the road's edge (never further than the verge would anyway) and that much above it (a bridge's kerb strip,
+    `core.bridges`). The skirt's columns stay where they were."""
     nrm = np.column_stack([-np.sin(heading), np.cos(heading)])  # left
     step = float(np.median(np.hypot(*np.diff(xy, axis=0).T))) if len(xy) > 1 else 1.0
     full = VERGE_M + SKIRT_STEPS_M[-1]
     cap_l, cap_r = _neighbour_limits(np.asarray(xy, dtype=float), nrm, max(half_l.max(), half_r.max()) + full)
     lim_l, lim_r = _side_limits(curvature, half_l.max() + full, step, cap_l, cap_r)
 
-    def side(half, slope, lim, skirt_cap):
+    def side(half, slope, lim, skirt_cap, override):
         edge_h = z - slope * half
         verge_h = edge_h - VERGE_M * VERGE_FALL
         reach = np.clip(lim - half, VERGE_M + 0.5, full)  # how far past the road edge we may go
         verge = VERGE_M * np.minimum(1.0, reach / full)
+        if override is not None:
+            width, rise = (np.asarray(a, dtype=float) for a in override)
+            use = np.isfinite(width)
+            verge = np.where(use, np.minimum(np.where(use, width, 0.0), verge), verge)
+            verge_h = np.where(use, edge_h + np.where(use, rise, 0.0), verge_h)
         offs = [half + verge]
         hs = [verge_h]
         if skirt_cap is None:
@@ -159,8 +167,8 @@ def build_ribbon(xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, de
             hs.append(None)
         return offs, hs
 
-    lo, lh = side(half_l, slope_l, lim_l, skirt_cap_l)
-    ro, rh = side(half_r, slope_r, lim_r, skirt_cap_r)
+    lo, lh = side(half_l, slope_l, lim_l, skirt_cap_l, verge_l)
+    ro, rh = side(half_r, slope_r, lim_r, skirt_cap_r, verge_r)
 
     # Columns left (outermost) -> right (outermost). Offsets positive to the left.
     cols_off = [o for o in reversed(lo)] + [half_l, half_l / 2, np.zeros_like(half_l), -half_r / 2, -half_r] + \
@@ -254,7 +262,8 @@ def _skirts(rb: Ribbon) -> tuple[slice, slice]:
 def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, style: np.ndarray | None = None,
                   road_uv_m: float = ROAD_TILE_M, gravel_uv_m: float = GRAVEL_TILE_M,
                   grass_uv_m: float = 6.0, skirt: bool = True, cut: dict[str, np.ndarray] | None = None,
-                  edge_break: dict[str, np.ndarray] | None = None, name_prefix: str = "") -> list[Mesh]:
+                  edge_break: dict[str, np.ndarray] | None = None, name_prefix: str = "",
+                  kerb: dict[str, np.ndarray] | None = None) -> list[Mesh]:
     """Road chunks named 1ROAD_### (sealed) or 1GRAVEL_### (unsealed), verge/skirt chunks named 1GRASS_V###.
 
     `style` is the section's style code per station (`section.STYLES`); without it the road is all sealed and
@@ -266,6 +275,8 @@ def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, style: np.nda
     whose outer road vertex takes a u inside the painted edge line, so a sealed road's line breaks across the mouth.
     `name_prefix` goes after the KEY in every name (a roundabout's ring, `core.roundabouts`: `1ROAD_RB0_000`); a side
     with no verge (a ring's island side) gets no verge mesh.
+    `kerb`, per side, is True for each quad between rows i and i+1 whose verge (road edge to verge edge) isn't grass:
+    a bridge's kerb strip, which `core.bridges` draws. The skirt beyond it stays.
     """
     rows = len(s)
     step = s[1] - s[0] if rows > 1 else 1.0
@@ -297,8 +308,13 @@ def ribbon_meshes(rb: Ribbon, s: np.ndarray, frame: LocalFrame, *, style: np.nda
                     continue
                 side = kind[-1].upper()
                 uv = np.column_stack([pos[:, 0], pos[:, 2]]) / grass_uv_m
-                if cut is not None and cut[side][r0:last].any():
-                    keep = np.repeat(~cut[side][r0:last], nc - 1)
+                gone = np.zeros((nr - 1, nc - 1), dtype=bool)  # quads left out, (row, column) as _grid_triangles
+                if cut is not None:
+                    gone |= np.asarray(cut[side][r0:last], dtype=bool)[:, None]
+                if kerb is not None:
+                    gone[:, nc - 2 if side == "L" else 0] |= np.asarray(kerb[side][r0:last], dtype=bool)
+                if gone.any():
+                    keep = ~gone.ravel()
                     pos, uv, tri = compact(pos, uv, tri[np.concatenate([keep, keep])])
                     if not len(tri):
                         continue
@@ -426,6 +442,11 @@ class Footprint:
     open_last: list[bool] | None = None
     # Outline points that face no terrain (a ring's road edge against its island): never in the triangulation.
     interior: set[tuple[float, float]] | None = None
+    # Open spans of the road's ribbon (a bridge's open deck, `core.bridges`), each (a, b, c0, c1): its quads between
+    # rows a and b leave the footprint whole, road included, so the terrain runs on under them. Rows a and b stay the
+    # ground's ends; of their vertices, those in columns c0 to c1 - 1 face no terrain (an abutment's face, among the
+    # `patches` and `edges`, stands there instead), and the others do.
+    spans: list[tuple[int, int, int, int]] | None = None
 
 
 def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
@@ -447,6 +468,21 @@ def _cut_cells(rb: Ribbon, side: str, a: int, b: int) -> list[tuple[int, int]]:
             + [(r, edge) for r in range(b - 1, a - 1, -1)] + [(a, c) for c in range(edge + 1, outer)])
 
 
+def span_quads(rows: int, spans) -> np.ndarray:
+    """True for each quad between rows i and i+1 of the road's ribbon in an open span (`Footprint.spans`)."""
+    out = np.zeros(max(rows - 1, 0), dtype=bool)
+    for a, b, *_ in spans or ():
+        out[a:b] = True
+    return out
+
+
+def _span_ring(rb: Ribbon, a: int, b: int) -> list[tuple[int, int]]:
+    """The (row, column) ring of the ribbon's rows a to b, all its columns."""
+    cols = rb.e.shape[1]
+    return ([(r, 0) for r in range(a, b + 1)] + [(b, c) for c in range(1, cols)]
+            + [(r, cols - 1) for r in range(b - 1, a - 1, -1)] + [(a, c) for c in range(cols - 2, 0, -1)])
+
+
 def _footprint(rb: Ribbon, fp: Footprint) -> tuple[dict, np.ndarray, np.ndarray, shapely.Geometry]:
     """The terrain's inner boundary with stubs: every outline vertex of the road's ribbon (less those cut away) and
     of each other piece, each once, as (index by (easting, northing), points, heights), and the ground they all
@@ -463,6 +499,10 @@ def _footprint(rb: Ribbon, fp: Footprint) -> tuple[dict, np.ndarray, np.ndarray,
             cut_rings.append(shapely.Polygon([(rb.e[r, c], rb.n[r, c]) for r, c in ring]).buffer(0))
             gone[a + 1:b, 0 if side == "L" else cols - 1] = True
             cells += [(r, c) for r, c in ring if r in (a, b) and c != edge]
+    for a, b, c0, c1 in fp.spans or ():  # open decks: the ground ends at rows a and b, less the abutments' columns
+        cut_rings.append(shapely.Polygon([(rb.e[r, c], rb.n[r, c]) for r, c in _span_ring(rb, a, b)]).buffer(0))
+        gone[a + 1:b, 0] = gone[a + 1:b, cols - 1] = True
+        cells += [(r, c) for r in (a, b) for c in range(1, cols - 1) if not c0 <= c < c1]
     cells = [(r, c) for r, c in cells if not gone[r, c]]
     index: dict[tuple[float, float], int] = {}
     xy: list[tuple[float, float]] = []
@@ -567,7 +607,11 @@ def _fold_skirts(rb: Ribbon, fp: Footprint, index: dict, first: int) -> tuple[np
     new_h: list[float] = []
     tris = []
     cuts = fp.ribbon_cuts if fp.ribbon_cuts is not None else [None] * len(fp.ribbons)
-    for ribbon, cut in [(rb, fp.cut)] + list(zip(fp.ribbons, cuts)):
+    main_cut = fp.cut
+    if fp.spans:  # an open deck has no skirt
+        span = span_quads(rb.e.shape[0], fp.spans)
+        main_cut = {k: np.asarray(fp.cut.get(k, np.zeros(len(span), bool)), dtype=bool) | span for k in "LR"}
+    for ribbon, cut in [(rb, main_cut)] + list(zip(fp.ribbons, cuts)):
         rows = ribbon.e.shape[0]
         for side, cs in zip("LR", _skirts(ribbon)):
             e, n, h = ribbon.e[:, cs], ribbon.n[:, cs], ribbon.h[:, cs]

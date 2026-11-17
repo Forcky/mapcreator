@@ -19,20 +19,22 @@ section   03_section   sealed or unsealed (OSM surface, short runs merged), widt
                        stubs (stubs.json), and the roads crossing it (crossing_roads.json), planned
 mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, the side roads' 100 m stubs joined to the road by
                        their flares, each roundabout's ring, island and closed exits, adaptive terrain corridor (in
-                       ground classes from TASVEG in Tasmania, for Grass FX), guard rails (both sides of a bridge over a gap) and furniture (none in
-                       side roads' mouths or on a roundabout's island side), each stub's closure and police cars at some
-                       major ones (closures.json), the roads crossing it and the bridges over it, with their piers and
-                       abutments (crossing_roads.json), footbridges and rail bridges over the route and paths
+                       ground classes from TASVEG in Tasmania, for Grass FX), the route's own bridges (a kerb strip and
+                       parapets; an open deck over the ground, with abutments and piers, where the gap allows;
+                       bridges.json), 1:2 batters on fills, guard rails (up to a bridge over a gap) and furniture (none in
+                       side roads' mouths, on a roundabout's island side or on a bridge), each stub's closure and police
+                       cars at some major ones (closures.json), the roads crossing it and the bridges over it, with their
+                       piers and abutments (crossing_roads.json), footbridges and rail bridges over the route and paths
                        and railways under its bridges (rail_and_paths.json), AC dummies
 scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), typed by TASVEG in Tasmania, trunk colliders, buildings from footprints (none on a side road's first 100 m or its stub, on a roundabout's ring or small island, on a road crossing the route or under a bridge over it)
-track     05_track     numpy KN5 writer (timing gates clear of side roads' mouths), DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,
+track     05_track     numpy KN5 writer (timing gates clear of side roads' mouths, past a bridge's kerb strip), DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,
                        centreline.geojson (ODbL), the zip
 validate  06_validate  static checks (report.json); the in-game harness is for development only
 ```
 
 The stage names are `mapcreator.pipeline.STAGE_NAMES`; `mapcreator <stage> job.json` reruns one, `mapcreator build job.json` runs them all. No stage needs a GPU, Blender, the AC SDK or the game. `data-flows.md` lists each stage's inputs and outputs.
 
-The mesh and scenery stages run side by side (`pipeline/runner.py`), so anything both need comes from an earlier stage. The side roads' stubs are one such thing: the section stage plans them (`core/stubs.py`, `03_section/stubs.json`), the mesh stage builds them from the plan, and the scenery, track and validate stages read the same plan to keep trees off them, keep timing gates out of their mouths and check them. Roundabouts the route drives are another (`core/roundabouts.py`, `03_section/roundabouts.json`): planned first, so the stubs keep off them, and built, cleared and checked from the same plan. So are the roads crossing the route (`core/crossing_roads.py`, `03_section/crossing_roads.json`). The mesh stage writes what it actually built (`04_mesh/stubs.json`, `04_mesh/roundabouts.json`), less any stub, exit or ring that failed its checks on the built meshes, and the track and validate stages read those.
+The mesh and scenery stages run side by side (`pipeline/runner.py`), so anything both need comes from an earlier stage. The side roads' stubs are one such thing: the section stage plans them (`core/stubs.py`, `03_section/stubs.json`), the mesh stage builds them from the plan, and the scenery, track and validate stages read the same plan to keep trees off them, keep timing gates out of their mouths and check them. Roundabouts the route drives are another (`core/roundabouts.py`, `03_section/roundabouts.json`): planned first, so the stubs keep off them, and built, cleared and checked from the same plan. So are the roads crossing the route (`core/crossing_roads.py`, `03_section/crossing_roads.json`). The mesh stage writes what it actually built (`04_mesh/stubs.json`, `04_mesh/roundabouts.json`), less any stub, exit or ring that failed its checks on the built meshes, and the track and validate stages read those. The route's own bridges (`core/bridges.py`) are planned and built in the mesh stage alone, from the profile's bridge stations, since the scenery stage doesn't need them (trees already keep off the deck); the mesh stage writes them as built (`04_mesh/bridges.json`), and the track and validate stages read that.
 
 ## OSM data
 
