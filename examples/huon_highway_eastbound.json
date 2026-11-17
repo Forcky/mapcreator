@@ -1,0 +1,9 @@
+{
+  "track_id": "huon_highway_eastbound",
+  "waypoints": [
+    {"lon": 147.2772, "lat": -42.9721},
+    {"lon": 147.2924, "lat": -42.9654}
+  ],
+  "width": "as_mapped",
+  "layouts": "forward"
+}

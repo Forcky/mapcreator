@@ -42,13 +42,40 @@ class TasDem(BlockRaster):
     def lidar_mask(self, xy: np.ndarray) -> np.ndarray:
         return lidar_mask(xy, self._cache_dir, self._user_agent)
 
+    def surveys(self, xy: np.ndarray, *, around: np.ndarray | None = None) -> list[list[dict]]:
+        return surveys(xy, self._cache_dir, self._user_agent, around=around)
+
+
+def _box(xy: np.ndarray) -> tuple[float, float, float, float]:
+    """The index query's box round some points: the same box for the same points, so its answer comes from the cache."""
+    x0, y0 = np.asarray(xy, dtype=float).min(axis=0) - 100
+    x1, y1 = np.asarray(xy, dtype=float).max(axis=0) + 100
+    return float(x0), float(y0), float(x1), float(y1)
+
+
+def surveys(xy: np.ndarray, cache_dir: Path, user_agent: str, *, around: np.ndarray | None = None) -> list[list[dict]]:
+    """For each point (MGA55): the LiDAR projects whose footprint holds it, from theLIST's LiDAR index, oldest first.
+    Each is `{"name", "completed"` (an ISO date)`, "in_dem"}`; `in_dem` is whether it was finished before the
+    statewide DEM's release, so the DEM can hold it. A later one is a newer survey the DEM doesn't have.
+
+    `around` (points, e.g. the route's) sets the box asked for, so the answer `lidar_mask` cached for the same road is
+    used again."""
+    xy = np.asarray(xy, dtype=float).reshape(-1, 2)
+    if not len(xy):
+        return []
+    features = lidar_index.projects(_box(xy if around is None else around), cache_dir, user_agent)
+    out: list[list[dict]] = [[] for _ in range(len(xy))]
+    for name, done, shape in lidar_index.footprints(features):
+        shapely.prepare(shape)
+        for i in np.flatnonzero(shapely.contains_xy(shape, xy[:, 0], xy[:, 1])):
+            out[int(i)].append({"name": name, "completed": done.isoformat(), "in_dem": done < DEM_DATE})
+    return out
+
 
 def lidar_mask(xy: np.ndarray, cache_dir: Path, user_agent: str) -> np.ndarray:
     """For each point (MGA55): is the statewide DEM LiDAR-derived there? From theLIST's LiDAR index."""
     xy = np.asarray(xy, dtype=float)
-    x0, y0 = xy.min(axis=0) - 100
-    x1, y1 = xy.max(axis=0) + 100
-    features = lidar_index.projects((x0, y0, x1, y1), cache_dir, user_agent)
+    features = lidar_index.projects(_box(xy), cache_dir, user_agent)
     area = lidar_index.coverage(features, DEM_DATE).buffer(-EDGE_M)
     if area.is_empty:
         return np.zeros(len(xy), dtype=bool)

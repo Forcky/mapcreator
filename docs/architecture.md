@@ -11,7 +11,8 @@ route     01_route     snapped OSM centreline and its ways' tags (roads from the
                        junctions and roundabouts along it (junctions.json); the roads crossing over or under it
                        (crossings.json)
 profile   02_profile   DEM sampling, smoothing with a grade-change limit and grade cap, bridge dips filled, humps
-                       under a road crossing over bridged
+                       under a road crossing over bridged; bridges the DEM doesn't hold (older than them, or too
+                       coarse) found and warned about (dem_age.json)
 section   03_section   sealed or unsealed (OSM surface, short runs merged), width (OSM width → lanes × lane width →
                        narrow → class default, narrower on gravel; +15% / +30%), camber from the DEM (limited by
                        width; crown only on bridges and tunnels), crown; the roundabouts the route drives (roundabouts.json), then the side roads'

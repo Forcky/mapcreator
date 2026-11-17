@@ -10,6 +10,7 @@ import numpy as np
 from mapcreator.config import Settings
 from mapcreator.core import centreline as cl
 from mapcreator.core import crossings as crossings_core
+from mapcreator.core import dem_age
 from mapcreator.core import profile as pf
 from mapcreator.core import reach
 from mapcreator.core import section as sec
@@ -139,9 +140,28 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "off_road_coarse_m": round(float(strip.coarse.sum() * (line.s[1] - line.s[0])), 1) if strip is not None else 0.0,
         "humps_under_crossings_m": round(float(under.sum() * (line.s[1] - line.s[0])), 1),
     }
+    summary |= _dem_age(work, line, route["xy"], z_raw, prof.z, fine & ~strip.coarse if strip is not None else fine,
+                        dem)
     work.write_json(STAGE, "stats.json", summary)
     _plot(work, line, prof, summary)
     return summary
+
+
+def _dem_age(work: WorkDir, line: cl.Centreline, route_xy: np.ndarray, z_raw: np.ndarray, z: np.ndarray,
+             fine: np.ndarray, dem) -> dict:
+    """The bridges over or under the route that the DEM doesn't hold (`core.dem_age`): written to dem_age.json, with
+    their warnings in the summary (the validate stage repeats them in its report)."""
+    found = route_stage.crossings(work)
+    stations = [next(iter(crossing_stations(line, route_xy, [c])), None) for c in found]
+    surveys = None
+    if found and hasattr(dem, "surveys"):  # theLIST's LiDAR index names the surveys over each crossing
+        try:
+            surveys = dem.surveys(np.array([c["xy"] for c in found], dtype=float), around=line.xy)
+        except Exception as e:  # noqa: BLE001 - the survey names only add to the warning's detail
+            log.warning("LiDAR index unavailable for the bridges (%s: %s)", type(e).__name__, e)
+    report = dem_age.judge(found, stations, line.s, z_raw, z, fine, dem.sample, surveys=surveys)
+    work.write_json(STAGE, dem_age.FILE, report.as_dict())
+    return report.summary()
 
 
 def _plot(work: WorkDir, line: cl.Centreline, prof: pf.Profile, summary: dict) -> None:
