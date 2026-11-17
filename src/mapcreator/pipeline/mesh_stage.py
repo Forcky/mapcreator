@@ -21,6 +21,7 @@ import math
 from dataclasses import asdict
 
 import numpy as np
+import shapely
 
 from mapcreator import cpus
 from mapcreator.config import Settings
@@ -195,9 +196,11 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(),
     return rb, built, water, meshes
 
 
-def _rail_and_paths(work: WorkDir, c, sec, frame: LocalFrame, dem, meshes, rb, built) -> rail_and_paths.Built:
+def _rail_and_paths(work: WorkDir, c, sec, frame: LocalFrame, dem, meshes, rb, built, cross_built=None
+                    ) -> rail_and_paths.Built:
     """Footbridges and rail bridges over the route, and paths and railways under its own bridges
-    (`core.rail_and_paths`), on the ground and road just built; and `RAIL_AND_PATHS`, what was drawn or left out."""
+    (`core.rail_and_paths`), on the ground and road just built, off the route's ribbon, its stubs' and the crossing
+    roads' (`cross_built`); and `RAIL_AND_PATHS`, what was drawn or left out."""
     (work.stage(STAGE) / RAIL_AND_PATHS).unlink(missing_ok=True)
     found = route_stage.crossing_lines(work)
     if not found:
@@ -212,6 +215,9 @@ def _rail_and_paths(work: WorkDir, c, sec, frame: LocalFrame, dem, meshes, rb, b
     ground = stub_closures.TopSurface([m for m in meshes if m.name.startswith("1GRASS")], frame, areas)
     road = stub_closures.TopSurface([m for m in meshes if m.name.startswith(("1ROAD", "1GRAVEL"))], frame, areas)
     footprint = mesh.terrain_region(rb, 1.0, built.footprint if built is not None else None)[1]
+    if cross_built is not None and cross_built.pieces:
+        footprint = shapely.unary_union([footprint] + [shapely.Polygon(pc["outline"]).buffer(0)
+                                                       for pc in cross_built.pieces if len(pc["outline"]) >= 3])
     out = rail_and_paths.build(found, c, sec, frame, dem.sample, ground, road, footprint)
     work.write_json(STAGE, RAIL_AND_PATHS, {"version": rail_and_paths.FORMAT_VERSION, "structures": out.records})
     return out
@@ -350,7 +356,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         atlas.image.save(textures[furniture.MATERIAL])
     meshes += roadside.end_walls(c["s"], c["xy"], c["z"], c["heading"], dem.sample, frame)
     # Railways and paths crossing the route (`core.rail_and_paths`), on the ground and road built above.
-    lines_built = _rail_and_paths(work, c, sec, frame, dem, meshes, rb, built)
+    lines_built = _rail_and_paths(work, c, sec, frame, dem, meshes, rb, built, crossed.get("built"))
     meshes += lines_built.meshes
     # The closures placed and checked above, last, as before.
     (out / CLOSURES).unlink(missing_ok=True)
