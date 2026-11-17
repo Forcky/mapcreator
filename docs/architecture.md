@@ -9,7 +9,7 @@ job.json (waypoints, width option, layouts, junctions)
    │
 route     01_route     snapped OSM centreline and its ways' tags (roads from the local OSM index); the side-road
                        junctions and roundabouts along it (junctions.json); the roads crossing over or under it
-                       (crossings.json)
+                       (crossings.json), and the railways and paths crossing it (crossing_lines.json)
 profile   02_profile   DEM sampling, smoothing with a grade-change limit and grade cap, bridge dips filled, humps
                        under a road crossing over bridged; bridges the DEM doesn't hold (older than them, or too
                        coarse) found and warned about (dem_age.json)
@@ -22,7 +22,8 @@ mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, the side 
                        ground classes from TASVEG in Tasmania, for Grass FX), guard rails (both sides of a bridge over a gap) and furniture (none in
                        side roads' mouths or on a roundabout's island side), each stub's closure and police cars at some
                        major ones (closures.json), the roads crossing it and the bridges over it, with their piers and
-                       abutments (crossing_roads.json), AC dummies
+                       abutments (crossing_roads.json), footbridges and rail bridges over the route and paths
+                       and railways under its bridges (rail_and_paths.json), AC dummies
 scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), typed by TASVEG in Tasmania, trunk colliders, buildings from footprints (none on a side road's first 100 m or its stub, on a roundabout's ring or small island, on a road crossing the route or under a bridge over it)
 track     05_track     numpy KN5 writer (timing gates clear of side roads' mouths), DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,
                        centreline.geojson (ODbL), the zip
