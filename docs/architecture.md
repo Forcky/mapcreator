@@ -9,7 +9,7 @@ job.json (waypoints, width option, layouts, junctions)
    │
 route     01_route     snapped OSM centreline and its ways' tags (roads from the local OSM index); the side-road
                        junctions and roundabouts along it (junctions.json); the roads crossing over or under it
-                       (crossings.json)
+                       (crossings.json), and the railways and paths crossing it (crossing_lines.json)
 profile   02_profile   DEM sampling, smoothing with a grade-change limit and grade cap, bridge dips filled, humps
                        under a road crossing over bridged; bridges the DEM doesn't hold (older than them, or too
                        coarse) found and warned about (dem_age.json)
@@ -22,7 +22,8 @@ mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, the side 
                        ground classes from TASVEG in Tasmania, for Grass FX), guard rails (both sides of a bridge over a gap) and furniture (none in
                        side roads' mouths or on a roundabout's island side), each stub's closure and police cars at some
                        major ones (closures.json), the roads crossing it and the bridges over it, with their piers and
-                       abutments (crossing_roads.json), AC dummies
+                       abutments (crossing_roads.json), footbridges and rail bridges over the route and paths
+                       and railways under its bridges (rail_and_paths.json), AC dummies
 scenery   04b_scenery  trees (canopy model, else ESA WorldCover masked by Meta/WRI canopy), typed by TASVEG in Tasmania, trunk colliders, buildings from footprints (none on a side road's first 100 m or its stub, on a roundabout's ring or small island, on a road crossing the route or under a bridge over it)
 track     05_track     numpy KN5 writer (timing gates clear of side roads' mouths), DDS textures, fast_lane.ai per layout, ini files, ui, ATTRIBUTION.txt,
                        centreline.geojson (ODbL), the zip
@@ -41,8 +42,9 @@ Production reads OpenStreetMap from a local index, not from Overpass (public Ove
 Geofabrik extract (.osm.pbf) ──build once (pyosmium)──▶ index (SQLite) ──query by box──▶ route stage, scenery stage, DevRouter
 ```
 
-- **`providers/osm/index.py`** makes one pass over the extract and keeps two kinds of way, with node coordinates resolved: drivable roads (the classes in `overpass.DRIVABLE`, with their node ids, because routing needs shared nodes to connect ways) and closed `building=*` ways. Each kind has an R*Tree on its lon/lat boxes.
+- **`providers/osm/index.py`** makes one pass over the extract and keeps five kinds of way, with node coordinates resolved: drivable roads (the classes in `overpass.DRIVABLE`, with their node ids, because routing needs shared nodes to connect ways), railways and paths (`overpass.RAILWAYS` and `overpass.PATHS`, with their node ids, because a level crossing or a path crossing at grade shares a node with the road and a bridge doesn't), closed `building=*` ways and overhead power lines. Each kind has an R*Tree on its lon/lat boxes.
 - **Roads:** `index.query(path, bbox)` returns the same JSON as Overpass (`{"elements": [nodes..., ways...]}`), so `graph.build` doesn't know which source it was given. `providers/osm/roads.py` picks the source: the index when `osm_index` is set, Overpass otherwise. Overpass answers are cached on disk; index answers aren't.
+- **Railways and paths:** `index.railways_and_paths(path, bbox)` returns them in the same JSON, apart from the roads, so the router never routes along a footpath. `roads.railways_and_paths_for_bbox` picks the source as for roads, and narrows an Overpass answer to what the index keeps (`index.as_indexed`), so both sources give the same ways and tags. They are what can cross a road on a bridge or under one (footbridges, rail bridges, and the paths and lines under the route's bridges).
 - **Buildings:** `index.buildings(path, bbox, epsg)` returns footprints in the region's CRS. The national fallback regions use them when `osm_index` is set; Tasmania uses theLIST's footprints.
 - The index is opened read-only and immutable, so it can sit on a read-only mount. A rebuild writes a new file and moves it into place when complete; nothing updates the index in place.
 - Building the index needs pyosmium (the `osm` extra); querying needs only Python's `sqlite3` with the R*Tree module.

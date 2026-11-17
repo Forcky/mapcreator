@@ -371,7 +371,17 @@ def kerb(size: int = 256, seed: int = 61) -> Image.Image:
     return Image.fromarray(_mix(np.array([150.0, 148.0, 142.0]), grain, np.array([0.18, 0.18, 0.18])))
 
 
+def ballast(size: int = 256, seed: int = 81) -> Image.Image:
+    """Crushed-stone track ballast (`core.decks`): coarse grey stones, some rust-stained, with dark gaps between."""
+    stones = tileable_noise(size, 0.15, seed)
+    gaps = np.clip((tileable_noise(size, 0.6, seed + 1) - 0.25) * 4.0, 0.0, 1.0)
+    rust = np.clip((tileable_noise(size, 1.6, seed + 2) - 0.6) * 3.0, 0.0, 1.0)[..., None]
+    grey = _mix(np.array([128.0, 124.0, 118.0]), stones * gaps, np.array([0.7, 0.7, 0.7])).astype(float)
+    brown = _mix(np.array([122.0, 98.0, 78.0]), stones * gaps, np.array([0.6, 0.6, 0.6])).astype(float)
+    return Image.fromarray(np.clip(grey * (1 - 0.5 * rust) + brown * 0.5 * rust, 0, 255).astype(np.uint8))
+
+
 LIBRARY = {"asphalt": asphalt, "road_marked": road_marked, "road_plain": road_plain, "gravel_road": gravel_road,
            "gravel_road_narrow": gravel_road_narrow, "grass": grass, "ground": ground, "steel": steel, "water": water,
-           "kerb": kerb,
+           "kerb": kerb, "ballast": ballast,
            **{name: partial(ground_cover, name) for name in GROUND_COVERS}}

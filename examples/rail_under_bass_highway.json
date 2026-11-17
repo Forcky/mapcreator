@@ -1,0 +1,14 @@
+{
+  "track_id": "rail_under_bass_highway",
+  "waypoints": [
+    {
+      "lon": 146.374043,
+      "lat": -41.194075
+    },
+    {
+      "lon": 146.354501,
+      "lat": -41.191343
+    }
+  ],
+  "layouts": "forward"
+}

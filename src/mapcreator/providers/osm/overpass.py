@@ -1,4 +1,4 @@
-"""Fetch drivable OSM ways from an Overpass server, cached on disk.
+"""Fetch drivable OSM ways, and the railways and paths that cross them, from an Overpass server, cached on disk.
 
 For development only. The public Overpass servers are a shared resource with
 fair-use limits, so every response is cached and a repeated build never asks
@@ -25,12 +25,32 @@ DRIVABLE = (
 )
 # The ways a query keeps, before its bounding box. ATTRIBUTION.txt quotes it when the roads came from Overpass.
 ROADS_FILTER = f'way["highway"~"^({DRIVABLE})$"]'
+# What can cross a road without being one: railways (in use, disused or abandoned) and paths. Never routed on. They
+# are kept so a footbridge or rail bridge over the route, or a path or line under its bridge, can be found and drawn.
+RAILWAYS = "rail|light_rail|narrow_gauge|disused|abandoned"
+PATHS = "footway|cycleway|path|pedestrian|steps|bridleway"
+RAILWAYS_FILTER = f'way["railway"~"^({RAILWAYS})$"]'
+PATHS_FILTER = f'way["highway"~"^({PATHS})$"]'
+
+
+def _box(south: float, west: float, north: float, east: float) -> str:
+    return f"({south:.6f},{west:.6f},{north:.6f},{east:.6f})"
 
 
 def query_for_bbox(south: float, west: float, north: float, east: float) -> str:
     return (
         "[out:json][timeout:180];\n"
-        f"{ROADS_FILTER}({south:.6f},{west:.6f},{north:.6f},{east:.6f});\n"
+        f"{ROADS_FILTER}{_box(south, west, north, east)};\n"
+        "(._;>;);\nout body;\n"
+    )
+
+
+def railways_and_paths_query_for_bbox(south: float, west: float, north: float, east: float) -> str:
+    """The railways and paths in a box, with their nodes: the ways the local index keeps of them (`index.py`)."""
+    box = _box(south, west, north, east)
+    return (
+        "[out:json][timeout:180];\n"
+        f"({RAILWAYS_FILTER}{box};{PATHS_FILTER}{box};);\n"
         "(._;>;);\nout body;\n"
     )
 

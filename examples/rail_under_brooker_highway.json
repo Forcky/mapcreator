@@ -1,0 +1,14 @@
+{
+  "track_id": "rail_under_brooker_highway",
+  "waypoints": [
+    {
+      "lon": 147.263037,
+      "lat": -42.819511
+    },
+    {
+      "lon": 147.251424,
+      "lat": -42.814065
+    }
+  ],
+  "layouts": "forward"
+}

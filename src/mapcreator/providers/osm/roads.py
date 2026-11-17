@@ -1,4 +1,5 @@
-"""Drivable OSM roads in a bounding box: from the local index when one is configured, else Overpass.
+"""Drivable OSM roads in a bounding box (and the railways and paths that cross them): from the local index when one
+is configured, else Overpass.
 
 Production sets `osm_index` to a file built by `index.py` from a Geofabrik
 extract. Without one, development falls back to an Overpass server, whose
@@ -33,6 +34,25 @@ def for_bbox(bbox: tuple[float, float, float, float], settings: Settings, *,
     return (fetch or overpass.fetch)(overpass.query_for_bbox(south, west, north, east), settings)
 
 
+def railways_and_paths_for_bbox(bbox: tuple[float, float, float, float], settings: Settings, *,
+                                fetch: Callable[[str, Settings], dict] | None = None) -> dict:
+    """Overpass-style JSON for the railways and paths crossing `bbox` (west, south, east, north, WGS84), from the
+    same source as `for_bbox`. They are never routed on: they're what may cross the route on a bridge or under one.
+
+    Overpass's answer is narrowed to what the index keeps (`index.as_indexed`): the same ways, tags and nodes, so a
+    build finds the same crossings from either source. An index built before railways and paths were kept raises
+    `index.IndexUnavailable` (one of `INDEX_ERRORS`), and the caller goes on without them.
+    """
+    if settings.osm_index:
+        return index.railways_and_paths(settings.osm_index, bbox)
+    west, south, east, north = bbox
+    data = (fetch or overpass.fetch)(overpass.railways_and_paths_query_for_bbox(south, west, north, east), settings)
+    return index.as_indexed(data, ("railway", "path"))
+
+
+LINES_SELECTION = f"{overpass.RAILWAYS_FILTER} and {overpass.PATHS_FILTER}"
+
+
 def selection(settings: Settings) -> dict[str, str]:
     """How `for_bbox` picks the roads: the index's extract and its OSM data timestamp, or the Overpass filter.
     The route stage records it, and ATTRIBUTION.txt says it (`selection_note`)."""
@@ -52,6 +72,9 @@ def selection_note(sel: dict[str, str], *, build: str, source_url: str = "") -> 
         of = f", with data as of {sel['osm_timestamp']}" if sel.get("osm_timestamp") else ""
         return (f"The OpenStreetMap data was selected with mapcreator's index builder "
                 f"(src/mapcreator/providers/osm/index.py{at}, build {build}) from {extract}{of}.")
+    lines = (f" Railways and paths were selected with the filters {sel['overpass_lines_filter']}, narrowed to what "
+             "the index builder keeps (src/mapcreator/providers/osm/index.py)." if sel.get("overpass_lines_filter")
+             else "")
     return (f"The OpenStreetMap data was selected from an Overpass API server with the filter "
             f"{sel['overpass_filter']} around the route (src/mapcreator/providers/osm/overpass.py{at}, "
-            f"build {build}).")
+            f"build {build}).{lines}")

@@ -1,0 +1,14 @@
+{
+  "track_id": "rail_bridges_east_tamar_highway",
+  "waypoints": [
+    {
+      "lon": 146.922302,
+      "lat": -41.142356
+    },
+    {
+      "lon": 146.959924,
+      "lat": -41.182031
+    }
+  ],
+  "layouts": "forward"
+}

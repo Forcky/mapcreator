@@ -52,6 +52,15 @@ OSM_POWER = Attribution(
     note="The power lines used ship as power.geojson under ODbL.",
 )
 
+# Railways and paths from the local OSM index (or Overpass), built into footbridges, rail bridges and the lines under
+# the route's bridges (`core.rail_and_paths`): a Produced Work, so attribution is enough.
+OSM_LINES = Attribution(
+    dataset="Railways and paths",
+    holder="© OpenStreetMap contributors",
+    licence="ODbL 1.0",
+    licence_url="https://www.openstreetmap.org/copyright",
+)
+
 TAS_DEM = Attribution(
     dataset='"Tasmania 2 metre DEM" from theLIST',
     holder="© State of Tasmania",

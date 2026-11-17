@@ -1,0 +1,14 @@
+{
+  "track_id": "footbridge_brooker_highway",
+  "waypoints": [
+    {
+      "lon": 147.248588,
+      "lat": -42.798705
+    },
+    {
+      "lon": 147.249839,
+      "lat": -42.809957
+    }
+  ],
+  "layouts": "forward"
+}

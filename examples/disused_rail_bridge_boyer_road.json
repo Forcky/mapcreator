@@ -1,0 +1,14 @@
+{
+  "track_id": "disused_rail_bridge_boyer_road",
+  "waypoints": [
+    {
+      "lon": 147.094293,
+      "lat": -42.777802
+    },
+    {
+      "lon": 147.079413,
+      "lat": -42.774134
+    }
+  ],
+  "layouts": "forward"
+}
