@@ -180,6 +180,8 @@ def test_no_hole_round_a_bridge_whatever_its_line_across_the_terrain_s_lattice(a
     pts = np.column_stack([a * np.cos(angle) - n * np.sin(angle), a * np.sin(angle) + n * np.cos(angle)])
     covers = validate._Cover(triangles(meshes + deck_meshes))
     assert np.isfinite(covers.top(ac(pts)[:, [0, 2]])).all()
+    holes, _ = validate.ground_holes(validate.mesh_nodes(meshes + deck_meshes))  # the validator's own check
+    assert not len(holes), holes[:5]
 
 
 def test_each_abutment_s_face_shares_the_road_s_row_and_the_terrain_s_foot():
@@ -189,7 +191,7 @@ def test_each_abutment_s_face_shares_the_road_s_row_and_the_terrain_s_foot():
     face = verts(deck_meshes, "BRIDGE_0")
     road_and_kerb = verts(meshes, "1ROAD_") | verts(deck_meshes, "1ROAD_BK")
     terrain = verts(meshes, "1GRASS_T")
-    c0, c1 = rb.road_cols.start - 1, rb.road_cols.stop + 1
+    c0, c1 = rb.road_cols.start, rb.road_cols.stop  # the road's columns; the kerb's outer edges either side
     for row in (a, bb):
         top = ac(np.column_stack([rb.e[row, c0:c1], rb.n[row, c0:c1]]), rb.h[row, c0:c1]).astype(np.float32)
         assert all(tuple(v) in face and tuple(v) in road_and_kerb for v in top.tolist())
@@ -198,10 +200,14 @@ def test_each_abutment_s_face_shares_the_road_s_row_and_the_terrain_s_foot():
         assert all(tuple(v) in face and tuple(v) in terrain for v in fv.tolist())
         # The foot is under the deck, well below the road: the wall drops to the ground.
         assert (h <= DECK - CROWN * HALF - bridges.DECK_DEPTH_M - bridges.CLEAR_M + 0.1 + 1e-6).all()
-        # Its outer corners are the skirt's first column, so the wall closes against the skirt beside the bridge.
+        # Its outer corners are the kerb's outer edges, which the kerb and the ground beside the bridge share.
         for col in (c0 - 1, c1):
             p = ac([[rb.e[row, col], rb.n[row, col]]], [rb.h[row, col]]).astype(np.float32)
-            assert tuple(p[0].tolist()) in face
+            assert tuple(p[0].tolist()) in face and tuple(p[0].tolist()) in road_and_kerb
+            assert tuple(p[0].tolist()) in terrain | verts(meshes, "1GRASS_V")
+    # No hole the validator can find round the bridge: the ground covers everything beyond each open edge.
+    holes, _ = validate.ground_holes(validate.mesh_nodes(meshes + deck_meshes))
+    assert not len(holes), holes[:5]
 
 
 def test_the_parapets_colliders_stand_flush_with_their_faces_with_no_gap_and_no_wall_above():

@@ -347,17 +347,17 @@ Stage 1 of the flyovers work (`core/bridges.py`; `docs/ac-format.md`, "The route
   - the deck is the road's width plus the kerb strips: `man_made=bridge` outlines, and paths sharing the bridge, aren't read yet;
   - batters reach 30 m along the road past a bridge's ends and 5 m past an untagged fill. Beyond that, an approach standing high over a coarse DEM keeps today's skirt: the Lyell Highway's road is 8 m over the DEM 22 m before its bridge at 42.85 km;
   - a road drawn under the deck (stage 2a) with too little room under it (a gap of 1.5-1.9 m) could reach into the deck: the deck's checks count its verges as ground, so the deck would then be built on the ground, and the road under it stop at the embankment as before.
-- **Cost** (laptop builds, made-up WorldCover trees, the OSM index with railways and paths; mesh-stage meshes and vertices, and the KN5, main against this branch). About 60 vertices a metre of bridge (the generic barrier, rail and posts of `core/decks.py`, the fascia, colliders, kerbs and underside; 13 of them colliders), plus about 300 a pier; 5 to 7 meshes a bridge, 4 to 5 of them drawn. Guard rails on the bridges' rows give way to the parapets, and paths and railways under an open deck run on under it.
+- **Cost** (laptop builds, made-up WorldCover trees, the OSM index with railways and paths; mesh-stage meshes and vertices, and the KN5, main against this branch; every build passes validation, the hole check included). About 60 vertices a metre of bridge (the generic barrier, rail and posts of `core/decks.py`, the fascia, colliders, kerbs and underside; 13 of them colliders), plus about 300 a pier; 5 to 7 meshes a bridge, 4 to 5 of them drawn. Guard rails on the bridges' rows give way to the parapets, and paths and railways under an open deck run on under it.
 
   | Track | Bridges | Meshes | Vertices | KN5 |
   |---|---|---|---|---|
-  | `brinktop_road` | 2, both open, 1 pier | 253 → 275 | 327,591 → 331,239 | 24.0 → 24.2 MB |
-  | `lyell_highway_mt_arrowsmith` | 11: 8 open, 8 piers, 3 on the ground | 1,141 → 1,249 | 1,900,483 → 1,923,063 | 246.7 → 249.0 MB a layout |
-  | `summerleas_road` | 2: 1 open, 1 pier, 1 on the ground | 85 → 104 | 87,638 → 91,584 | 10.8 → 11.0 MB |
+  | `brinktop_road` | 2, both open, 1 pier | 253 → 275 | 327,644 → 331,269 | 24.0 → 24.2 MB |
+  | `lyell_highway_mt_arrowsmith` | 11: 8 open, 8 piers, 3 on the ground | 1,141 → 1,249 | 1,900,492 → 1,922,985 | 246.7 → 249.0 MB a layout |
+  | `summerleas_road` | 2: 1 open, 1 pier, 1 on the ground | 85 → 104 | 87,455 → 91,337 | 10.8 → 11.0 MB |
   | `huon_highway_eastbound` | 1, on the ground | 37 → 45 | 45,311 → 48,183 | 5.4 → 5.6 MB |
-  | `kingston_bypass_southbound` | none (its fills' batters only) | 79 → 79 | 80,085, the same | 10.8 MB |
-  | `rail_under_bass_highway` | 4, all open, 9 piers; two railways (the Western Line and an unnamed one) and two paths run on under them | 78 → 121 | 75,020 → 95,848 | 8.3 → 9.3 MB |
-  | `rail_under_brooker_highway` | 2, on the ground (gaps of 0.4 and 1.1 m); the railway and paths under them stop at the embankment as before | 46 → 64 | 43,003 → 48,465 | 9.1 → 9.4 MB |
+  | `kingston_bypass_southbound` | none (its fills' batters only) | 74 → 74 | 76,691, the same | 10.7 MB |
+  | `rail_under_bass_highway` | 4, all open, 9 piers; two railways (the Western Line and an unnamed one) and two paths run on under them | 78 → 121 | 74,253 → 94,947 | 8.3 → 9.3 MB |
+  | `rail_under_brooker_highway` | 2, on the ground (gaps of 0.4 and 1.1 m); the railway and paths under them stop at the embankment as before | 46 → 64 | 42,668 → 48,129 | 9.1 → 9.4 MB |
 
 ## Roads crossing the route
 

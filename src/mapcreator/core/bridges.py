@@ -36,8 +36,9 @@ height over the DEM's ground under the centreline, `z - z_raw` (none over the se
   deck, from the DEM. There's no skirt, so no embankment. At each abutment row an **abutment face** drops from the
   deck's edge row to the ground: a concrete wall whose foot is a copy of the row ABUT_SET_M into the span at the
   ground's height there (`edges`), and the terrain meets that foot, so the wall, the road and the ground share
-  every vertex where they meet. Its two outer corners are the skirt's first column, so it closes against the skirt
-  beside the bridge's end too.
+  every vertex where they meet. Its two outer corners are the kerb's outer edge, where the ground beside the
+  bridge's end (the skirt, then the terrain) meets the row as it meets the road's on the ground: the ground covers
+  everything round the abutment in plan, with no gap a car could find.
 - **Under the deck** the ground is kept at least CLEAR_M below the underside (`ground`, as `water.lowered` lowers it
   under water), over the deck's plan and GUARD_M beyond. Points under the deck and along its edges join the terrain
   (`edges`), so its triangles follow the ground there, never a long one from an abutment's foot to the other's.
@@ -424,7 +425,7 @@ class Decks:
             return extra
         base = extra if extra is not None else mesh.Footprint(
             {"L": np.zeros(self.n - 1, bool), "R": np.zeros(self.n - 1, bool)}, [], [], [])
-        c0, c1 = rb.road_cols.start - 1, rb.road_cols.stop + 1
+        c0, c1 = rb.road_cols.start, rb.road_cols.stop
         patches = []
         for sp in self.spans:
             for row in (sp.a, sp.b):
@@ -452,9 +453,9 @@ class Decks:
         return base + out * (PARAPET_W + beyond)
 
     def _abutment_plan(self, rb: mesh.Ribbon, sp: _Span, row: int) -> tuple[np.ndarray, np.ndarray]:
-        """An abutment's face in plan: its top, the row's vertices from the skirt's first column on the left to that
-        on the right; and its foot, the kerb's and road's vertices moved ABUT_SET_M into the span."""
-        c0, c1 = rb.road_cols.start - 1, rb.road_cols.stop + 1
+        """An abutment's face in plan: its top, the row's vertices from the kerb's outer edge on the left to that on
+        the right; and its foot, the road's vertices moved ABUT_SET_M into the span."""
+        c0, c1 = rb.road_cols.start, rb.road_cols.stop
         top = np.column_stack([rb.e[row, c0 - 1:c1 + 1], rb.n[row, c0 - 1:c1 + 1]])
         h = float(self.c["heading"][row])
         t = np.array([math.cos(h), math.sin(h)]) * (1.0 if row == sp.a else -1.0)
@@ -623,9 +624,9 @@ class Decks:
         return _face(np.column_stack([left, hl]), np.column_stack([right, hr]), down, s, None)
 
     def _abutment(self, rb: mesh.Ribbon, sp: _Span, row: int):
-        """The abutment's face at `row`: from the row's vertices, the skirt's first column on each side and the kerb
-        and road between, down to its foot (`footprint_points`), facing into the span."""
-        c0, c1 = rb.road_cols.start - 1, rb.road_cols.stop + 1
+        """The abutment's face at `row`: from the row's vertices, the kerb's outer edge on each side and the road
+        between, down to its foot (`footprint_points`), facing into the span."""
+        c0, c1 = rb.road_cols.start, rb.road_cols.stop
         cols = np.arange(c0 - 1, c1 + 1)
         top = np.column_stack([rb.e[row, cols], rb.n[row, cols], rb.h[row, cols]])
         foot, fh = sp.feet[row]
