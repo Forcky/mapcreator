@@ -1,0 +1,14 @@
+{
+  "track_id": "rail_bridge_bass_highway",
+  "waypoints": [
+    {
+      "lon": 146.308817,
+      "lat": -41.171295
+    },
+    {
+      "lon": 146.303686,
+      "lat": -41.160777
+    }
+  ],
+  "layouts": "forward"
+}

@@ -12,7 +12,7 @@ import shapely
 from scipy.spatial import cKDTree
 
 from mapcreator.config import Settings
-from mapcreator.core import ai_line, dem_age, junctions, scenery, stubs, validate
+from mapcreator.core import ai_line, dem_age, junctions, rail_and_paths, scenery, stubs, validate
 from mapcreator.core import crossing_roads as crossing_core
 from mapcreator.core import mesh as base_mesh
 from mapcreator.core import roundabouts as rb_core
@@ -235,8 +235,15 @@ def rail_and_paths_notes(work: WorkDir) -> list[str]:
         if r["drawn"] or r["structure"] not in STRUCTURE_WORDS:
             continue
         what = STRUCTURE_WORDS[r["structure"]]
-        named = f" ({r['name']})" if r.get("name") else ""
-        out.append(f"A {what}{named} at {r['at_m']:.0f} m along the route isn't drawn: {r['reason']}.")
+        label = f"{r['name'] or 'An unnamed ' + what} ({what}) over the route at {r['at_m'] / 1000:.2f} km"
+        if r.get("reason_code") == "dem":
+            # The DEM can't place its deck: `core.dem_age`'s one wording, as for a road's bridge left out.
+            out.append(dem_age.warning(label, coarse=not r.get("fine", True), then="it isn't drawn",
+                                       detail=f"its deck would clear the road by {r['clearance_m']:.1f} m, under "
+                                              f"{rail_and_paths.CLEARANCE_M} m; a footbridge's ramps and stairs "
+                                              "aren't in the bare-earth data either"))
+        else:
+            out.append(f"{label} isn't drawn: {r['reason']}.")
     return out
 
 

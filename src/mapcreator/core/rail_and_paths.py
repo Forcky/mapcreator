@@ -358,6 +358,7 @@ class _Route:
         self.xy = np.asarray(c["xy"], float)
         self.s = np.asarray(c["s"], float)
         self.z = np.asarray(c["z"], float)
+        self.fine = np.asarray(c["fine"], bool) if "fine" in c else np.ones(len(self.s), bool)  # LiDAR ground
         self.half = np.maximum(np.asarray(sec["half_left"], float), np.asarray(sec["half_right"], float))
         self.line = shapely.LineString(self.xy)
 
@@ -438,8 +439,10 @@ def _gaps(xs: np.ndarray, contact: np.ndarray, min_m: float = 3.0) -> list[tuple
     return out
 
 
-def _left_out(rec: dict, why: str, **extra) -> dict:
-    return {**rec, "drawn": False, "reason": why, **extra}
+def _left_out(rec: dict, why: str, code: str = "", **extra) -> dict:
+    """A structure left out: `why` in words, and `code` "dem" where the DEM can't place its deck (the build's
+    warning then takes `core.dem_age`'s shared wording)."""
+    return {**rec, "drawn": False, "reason": why, **({"reason_code": code} if code else {}), **extra}
 
 
 def _base(c: dict, structure: str) -> dict:
@@ -534,13 +537,14 @@ def _over(cr: dict, route: _Route, frame, dem_sample, ground, road, footprint, o
         clearance = rec["clearance_m"]
     if clearance is None:
         return _left_out(rec, "no elevation data at the bridge's ends")
+    rec["fine"] = bool(route.fine[route.station(cr["xy"])])
     if clearance < CLEARANCE_M:
         if signed is not None:
             return _left_out(rec, f"its underside would clear the road by {clearance:.1f} m (the road is signed for "
                                   f"{signed:g} m there), under {CLEARANCE_M} m")
         return _left_out(rec, f"its underside would clear the road by {clearance:.1f} m, under {CLEARANCE_M} m: the "
                               "elevation data doesn't show the deck's height (its approaches are ramps or stairs, or "
-                              "the data is older than the bridge), and the road isn't signed for a clearance")
+                              "the data is older than the bridge), and the road isn't signed for a clearance", "dem")
     # Supports: under each stretch where the ground stays clear of the deck, an abutment at each end (where the
     # ground meets the deck, or at the deck's end) and piers between, all off the roads the bridge passes over.
     roads = _on_deck(cr.get("roads_crossed") or [], cr, float(st["deck_at_m"]))

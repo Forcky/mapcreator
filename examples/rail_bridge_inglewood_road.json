@@ -1,0 +1,14 @@
+{
+  "track_id": "rail_bridge_inglewood_road",
+  "waypoints": [
+    {
+      "lon": 147.460179,
+      "lat": -42.330069
+    },
+    {
+      "lon": 147.47519,
+      "lat": -42.333942
+    }
+  ],
+  "layouts": "forward"
+}

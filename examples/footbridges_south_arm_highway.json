@@ -1,0 +1,14 @@
+{
+  "track_id": "footbridges_south_arm_highway",
+  "waypoints": [
+    {
+      "lon": 147.409593,
+      "lat": -42.88101
+    },
+    {
+      "lon": 147.395788,
+      "lat": -42.867243
+    }
+  ],
+  "layouts": "forward"
+}

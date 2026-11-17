@@ -1,0 +1,14 @@
+{
+  "track_id": "rail_under_lilydale_road",
+  "waypoints": [
+    {
+      "lon": 147.126657,
+      "lat": -41.378639
+    },
+    {
+      "lon": 147.138765,
+      "lat": -41.371341
+    }
+  ],
+  "layouts": "forward"
+}

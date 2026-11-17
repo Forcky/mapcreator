@@ -425,6 +425,11 @@ def test_left_out_structures_over_the_route_are_in_the_build_s_warnings(tmp_path
          "name": "South Line", "at_m": 576.1},
         {"structure": "footbridge", "drawn": True, "reason": None, "name": None, "at_m": 300.0},
         {"structure": "path_under", "drawn": False, "reason": "the route isn't on a bridge there", "name": None,
-         "at_m": 50.0}]})
+         "at_m": 50.0},
+        {"structure": "footbridge", "drawn": False, "reason": "...", "reason_code": "dem", "clearance_m": 1.4,
+         "fine": True, "name": None, "at_m": 712.1}]})
     assert validate_stage.rail_and_paths_notes(work) == [
-        "A rail bridge (South Line) at 576 m along the route isn't drawn: its underside would clear the road by 3.6 m."]
+        "South Line (rail bridge) over the route at 0.58 km isn't drawn: its underside would clear the road by 3.6 m.",
+        "An unnamed footbridge (footbridge) over the route at 0.71 km: the elevation data predates this bridge, so it "
+        "isn't drawn (its deck would clear the road by 1.4 m, under 4.6 m; a footbridge's ramps and stairs aren't in "
+        "the bare-earth data either)."]
