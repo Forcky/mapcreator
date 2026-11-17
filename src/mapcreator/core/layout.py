@@ -184,10 +184,12 @@ def gate_distances(road: RoadModel, avoid: list[tuple[float, float]] = ()) -> tu
     return start, finish
 
 
-def logic_dummies(road: RoadModel, frame: LocalFrame, avoid: list[tuple[float, float]] = ()) -> list[Dummy]:
+def logic_dummies(road: RoadModel, frame: LocalFrame, avoid: list[tuple[float, float]] = (),
+                  wider: list[tuple[float, float, float]] = ()) -> list[Dummy]:
     """The layout's AC_* dummies. `avoid`: side roads' mouths, as (from, to) metres from the layout's start, which
     the timing gates move clear of (`gate_distances`). The grid, the hot-lap spawn, the AI line and its hints keep to
-    the gates' usual places."""
+    the gates' usual places. `wider`: stretches where drivable ground runs on past the road's edge on both sides (a
+    bridge's kerb strip, `core.bridges`), as (from, to, metres): a gate there reaches that much further out."""
     if road.length < 2 * GATE_FROM_END_M + 20:
         raise ValueError(f"route of {road.length:.0f} m is too short for start and finish gates")
     out: list[Dummy] = []
@@ -195,9 +197,10 @@ def logic_dummies(road: RoadModel, frame: LocalFrame, avoid: list[tuple[float, f
     def gate(prefix: str, d: float) -> None:
         p = road.at(d)
         left = np.array([-np.sin(p["heading"]), np.cos(p["heading"])])
+        extra = max([m for a, b, m in wider if a <= d <= b], default=0.0)
         for side, half, slope, sign in (("L", p["half_left"], p["slope_left"], 1.0),
                                         ("R", p["half_right"], p["slope_right"], -1.0)):
-            off = half + GATE_OUTSIDE_EDGE_M
+            off = half + GATE_OUTSIDE_EDGE_M + extra
             e, n = np.array([p["e"], p["n"]]) + sign * left * off
             h = p["z"] - slope * half
             out.append(Dummy(f"{prefix}_{side}", frame.to_ac(e, n, h).tolist(), _forward_ac(p["heading"])))

@@ -12,7 +12,7 @@ import shapely
 from scipy.spatial import cKDTree
 
 from mapcreator.config import Settings
-from mapcreator.core import ai_line, dem_age, junctions, rail_and_paths, scenery, stubs, validate
+from mapcreator.core import ai_line, bridges, dem_age, junctions, rail_and_paths, scenery, stubs, validate
 from mapcreator.core import crossing_roads as crossing_core
 from mapcreator.core import mesh as base_mesh
 from mapcreator.core import roundabouts as rb_core
@@ -247,11 +247,19 @@ def rail_and_paths_notes(work: WorkDir) -> list[str]:
     return out
 
 
+def bridge_checks(work: WorkDir) -> list[validate.BridgeCheck]:
+    """The route's own bridges as built (`core.bridges`), as the validator sees them."""
+    records = mesh_stage.built_bridges(work)
+    if not records:
+        return []
+    return bridges.checks(records, Scene.load(work.root / mesh_stage.STAGE).frame)
+
+
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     ring_checks, ring_exits = roundabout_checks(job, work)
     rep = validate.track_folder(work.root / track_stage.STAGE / job.track_id, allow_tight_bends=job.allow_tight_bends,
                                 road_radius=road_radius(job, work), junctions=junction_checks(job, work) + ring_exits,
-                                roundabouts=ring_checks, crossing=crossing_check(work))
+                                roundabouts=ring_checks, crossing=crossing_check(work), bridges=bridge_checks(work))
     rings = _roundabouts(job, work)
     if rings:
         rep.warnings.append(f"The route passes {len(rings)} roundabout{'s' if len(rings) != 1 else ''} "

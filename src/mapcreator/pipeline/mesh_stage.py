@@ -12,6 +12,11 @@ Roundabouts the route drives (`core.roundabouts`) come from the section stage's 
 throats where it meets the road, its island, and its exits' stubs and closures. The road's verge and skirt come out on
 the island's side between the ring's two ends. A ring that fails the checks on the built meshes is left out whole, and
 the road through it is built as before; an exit that fails is left out on its own, as a side road's stub is.
+
+The route's own bridges (`core.bridges`) are planned here from the profile's bridge stations: a kerb strip and parapets
+on every tagged bridge, and an open deck over the ground, with its abutments and piers, where the gap under it allows.
+Untagged fills and bridges' closed stretches get 1:2 batters. An open deck that fails the checks on the built meshes is
+built again on the ground (`bridges.faults`).
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ import shapely
 
 from mapcreator import cpus
 from mapcreator.config import Settings
+from mapcreator.core import bridges as bridges_core
 from mapcreator.core import furniture, grass, junctions, mesh, police_car, reach, roadside, stub_closures, stubs
 from mapcreator.core import crossing_roads, rail_and_paths
 from mapcreator.core import roundabouts as rb_core
@@ -54,6 +60,9 @@ ROUNDABOUTS = "roundabouts.json"
 CROSSING_ROADS = "crossing_roads.json"
 # The railways and paths crossing the route, each drawn or left out and why (`core.rail_and_paths`).
 RAIL_AND_PATHS = "rail_and_paths.json"
+# The route's own bridges as built (`core.bridges`; the format is in docs/ac-format.md). The track and validate stages
+# read this one.
+BRIDGES = "bridges.json"
 
 log = logging.getLogger(__name__)
 
@@ -129,10 +138,19 @@ def built_roundabouts(work: WorkDir, job: Job) -> list[dict]:
     return work.read_json(STAGE, ROUNDABOUTS)["roundabouts"]
 
 
-def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(), crossing=None, crossed=None):
+def built_bridges(work: WorkDir) -> list[dict]:
+    """The route's own bridges as the mesh stage built them (`BRIDGES`, `core.bridges`): none where it built none, or
+    ran before bridges."""
+    path = work.root / STAGE / BRIDGES
+    return work.read_json(STAGE, BRIDGES)["bridges"] if path.exists() else []
+
+
+def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(), crossing=None, crossed=None,
+                     decks=None):
     """The road's ribbon, the stubs (`stubs.build`) and roundabouts (`rb_core.build`), water, and the road, verge, stub,
     ring and terrain meshes for `plan` and `rings`. `crossing`: the roads crossing the route to draw
-    (`core.crossing_roads`), kept off the ground the rest takes; what was drawn goes in `crossed["built"]`."""
+    (`core.crossing_roads`), kept off the ground the rest takes; what was drawn goes in `crossed["built"]`. `decks`
+    (`bridges.Decks`): the route's own bridges."""
     ring_pts = rb_core.centres(rings) if rings else None
     # The road's skirt is held short of the roads crossing it as well (`core.crossing_roads`), as of a stub's.
     cross_pts = crossing_roads.centres(crossing)
@@ -143,8 +161,10 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(),
         caps = stubs.mainline_caps(plan, c["xy"], c["heading"], extra=cross_pts)
     else:
         caps = stubs.mainline_caps(plan, c["xy"], c["heading"]) if plan else (None, None)
+    # Bridges: the kerb strip in place of the verge, and 1:2 batters on fills for the skirt.
     rb = mesh.build_ribbon(c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
-                           sec["slope_left"], sec["slope_right"], dem.sample, skirt_cap_l=caps[0], skirt_cap_r=caps[1])
+                           sec["slope_left"], sec["slope_right"], decks.embanked(dem.sample) if decks else dem.sample,
+                           skirt_cap_l=caps[0], skirt_cap_r=caps[1], **(decks.verges() if decks else {}))
     main_xy = np.vstack([c["xy"], ring_pts]) if rings else c["xy"]
     built = (stubs.build(plan, rb, c["s"], frame, dem.sample, skirt=gmap is None, main_xy=main_xy)
              if plan else None)
@@ -158,6 +178,9 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(),
         edge_break = {k: ring_built.edge_break[k] | (built.edge_break[k] if built is not None else False)
                       for k in "LR"}
         extra = rb_core.footprint(built, ring_built, cut)
+    if decks:  # open decks leave the terrain's footprint (so a road under one runs on under it), and their
+        # abutments' faces join it
+        extra = decks.footprint(rb, extra)
     cross_built = None
     if crossing and crossing["roads"]:
         # Roads crossing the route (`core.crossing_roads`): each its own ribbon, clear of the ground taken already.
@@ -170,18 +193,26 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(),
     water = _water(c, rb, dem, settings, region, extra)
     # Inside water the terrain sits just under the surface, so the land never shows through it.
     ground = water_core.lowered(dem.sample, water) if water else dem.sample
+    if decks:  # batters on fills, the ground kept under open decks, and points under them for the terrain
+        ground = decks.ground(ground)
+        extra = decks.footprint_points(extra, ground)
+    if crossed is not None:
+        crossed["footprint"] = extra  # for the railways and paths under the route's bridges (`_rail_and_paths`)
     # A section stage from before surfaces has no styles: all sealed and marked, as it was built then.
     style = sec["style"] if "style" in sec else np.zeros(len(c["s"]), dtype=np.int8)
+    deck_kw = {"kerb": decks.kerb()} if decks else {}
     # With ground classes the skirt goes with the terrain beside it, so only the 2 m verge is mown grass.
     if ring_built is not None:
-        meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None, cut=cut,
-                                    edge_break=edge_break)
+        meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None,
+                                    cut=decks.cut(cut) if decks else cut, edge_break=edge_break, **deck_kw)
         meshes += (built.meshes if built is not None else []) + ring_built.meshes
     elif built is None:
-        meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None)
+        meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None,
+                                    **({"cut": decks.cut(None), **deck_kw} if decks else {}))
     else:
-        meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None, cut=built.cut,
-                                    edge_break=built.edge_break)
+        meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None,
+                                    cut=decks.cut(built.cut) if decks else built.cut, edge_break=built.edge_break,
+                                    **deck_kw)
         meshes += built.meshes
     if cross_built is not None:
         meshes += cross_built.meshes
@@ -191,16 +222,22 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(),
         meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, ground, frame, ground=gmap.materials,
                                       classes=grass.MESHES, fold_skirt=True, extra=extra)
     meshes += water_core.meshes(water, frame)
+    if decks:
+        road_cut = cut if ring_built is not None else (built.cut if built is not None else None)
+        deck_meshes, decks.stats = decks.meshes(rb, frame, ground, cut=road_cut)
+        meshes += deck_meshes
     if rings:
         return rb, (built, ring_built), water, meshes
     return rb, built, water, meshes
 
 
-def _rail_and_paths(work: WorkDir, c, sec, frame: LocalFrame, dem, meshes, rb, built, cross_built=None
-                    ) -> rail_and_paths.Built:
+def _rail_and_paths(work: WorkDir, c, sec, frame: LocalFrame, dem, meshes, rb, built, cross_built=None,
+                    extra=None) -> rail_and_paths.Built:
     """Footbridges and rail bridges over the route, and paths and railways under its own bridges
     (`core.rail_and_paths`), on the ground and road just built, off the route's ribbon, its stubs' and the crossing
-    roads' (`cross_built`); and `RAIL_AND_PATHS`, what was drawn or left out."""
+    roads' (`cross_built`); and `RAIL_AND_PATHS`, what was drawn or left out. `extra`: the terrain's footprint as
+    built (`mesh.Footprint`), with the route's open decks out of it (`core.bridges`), so a path or railway under one
+    runs on under it; without it, the stubs' alone."""
     (work.stage(STAGE) / RAIL_AND_PATHS).unlink(missing_ok=True)
     found = route_stage.crossing_lines(work)
     if not found:
@@ -214,12 +251,27 @@ def _rail_and_paths(work: WorkDir, c, sec, frame: LocalFrame, dem, meshes, rb, b
         areas.append((float(lo[0]), float(lo[1]), float(hi[0]), float(hi[1])))
     ground = stub_closures.TopSurface([m for m in meshes if m.name.startswith("1GRASS")], frame, areas)
     road = stub_closures.TopSurface([m for m in meshes if m.name.startswith(("1ROAD", "1GRAVEL"))], frame, areas)
-    footprint = mesh.terrain_region(rb, 1.0, built.footprint if built is not None else None)[1]
+    if extra is None:
+        extra = built.footprint if built is not None else None
+    footprint = mesh.terrain_region(rb, 1.0, extra)[1]
     if cross_built is not None and cross_built.pieces:
         footprint = shapely.unary_union([footprint] + [shapely.Polygon(pc["outline"]).buffer(0)
                                                        for pc in cross_built.pieces if len(pc["outline"]) >= 3])
     out = rail_and_paths.build(found, c, sec, frame, dem.sample, ground, road, footprint)
     work.write_json(STAGE, RAIL_AND_PATHS, {"version": rail_and_paths.FORMAT_VERSION, "structures": out.records})
+    return out
+
+
+def _mouths(found, plan, rings, c, sec) -> dict[str, np.ndarray] | None:
+    """The side roads' mouths and the roundabouts' island sides as planned, per side (`junctions.masks`,
+    `rb_core.masks`): the route's own bridges keep clear of them (`core.bridges`)."""
+    out = None
+    if found:
+        out = junctions.masks(junctions.mouths(found, c["s"], c["xy"], c["heading"], sec["half_left"],
+                                               sec["half_right"], stubs=stubs.by_junction(plan)), c["s"])
+    if rings:
+        ring_masks = rb_core.masks(rings, c["s"])
+        out = ring_masks if out is None else {k: out[k] | ring_masks[k] for k in "LR"}
     return out
 
 
@@ -245,6 +297,12 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     # closure, is then checked on the meshes just built (`stubs.faults`, the validator's own checks): one that fails
     # is left out and the road and ground built again without it, so a side road never fails a build.
     plan = section_stage.stubs(work, job)
+    # The route's own bridges (`core.bridges`), kept clear of side roads' mouths and roundabouts as planned.
+    runs = work.read_json(route_stage.STAGE, "runs.json")
+    planned_mouths = _mouths(found, plan, section_stage.roundabouts(work, job), c, sec)
+    bridge_plan = bridges_core.plan(c, mouths=planned_mouths, names=[r["tags"].get("name") for r in runs])
+    decks = bridges_core.Decks(bridge_plan, c, sec, planned_mouths)
+    decks = decks if decks else None  # nothing to build: no bridge, and no fill to batter
     lonlat = region.to_lonlat().transform(c["xy"][::50, 0], c["xy"][::50, 1])
     jurisdiction = police_car.jurisdiction_for(region, list(zip(*lonlat)))
     reverses = tuple(lay.reverse for lay in layouts_for(job.layouts.value))
@@ -255,7 +313,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
 
     def build(stubs_now):
         rb, built, water, ground_meshes = _road_and_ground(stubs_now, c, sec, frame, ground_dem, gmap, settings, region,
-                                                           crossing=crossing, crossed=crossed)
+                                                           crossing=crossing, crossed=crossed, decks=decks)
         closed = None
         if stubs_now:
             # Each stub closed off the stage, and police cars at some of the major closures (`core.stub_closures`),
@@ -278,7 +336,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             stubs_now, rings_now = state
             rb, pair, water, ground_meshes = _road_and_ground(stubs_now, c, sec, frame, ground_dem, gmap, settings,
                                                               region, rings=rings_now, crossing=crossing,
-                                                              crossed=crossed)
+                                                              crossed=crossed, decks=decks)
             closed = None
             every = stubs_now + rb_core.exit_stubs(rings_now)
             if every:
@@ -297,6 +355,19 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             (plan, rings), build_rings, check_rings, STUB_REBUILDS, log)
     else:
         plan, (rb, built, water, meshes, closed), dropped = stubs.settle(plan, build, check, STUB_REBUILDS, log)
+    bridge_faults = bridges_core.faults(decks.records(rb), meshes, frame) if decks and decks.spans else {}
+    if bridge_faults:
+        # An open deck that fails its checks is built on the ground, with its parapets; the stubs and rings as settled.
+        log.warning("bridges built on the ground, their open decks failing checks: %s", bridge_faults)
+        decks.close(bridge_faults)
+        if rings:
+            rb, (built, ring_built), water, meshes, closed = build_rings((plan, rings))
+        else:
+            rb, built, water, meshes, closed = build(plan)
+    (out / BRIDGES).unlink(missing_ok=True)
+    if decks and decks.bridges:
+        work.write_json(STAGE, BRIDGES, {"version": bridges_core.FORMAT_VERSION, "crs": f"EPSG:{region.epsg}",
+                                         "bridges": decks.records(rb)})
     (out / STUBS).unlink(missing_ok=True)
     if planned:
         doc = work.read_json(section_stage.STAGE, section_stage.STUBS)
@@ -333,6 +404,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     on_bridge = roadside.bridge_mask(c["s"], c["bridge"], c["z"] - c["z_raw"]) if "bridge" in c else no_rail
     if on_bridge.any():
         masks = {side: mask | on_bridge for side, mask in masks.items()}
+    if decks and decks.bridges:  # on the bridge itself the parapet takes over, sharing the rail's end station
+        masks = {side: mask & ~bridges_core.interior(decks.parapet[side]) for side, mask in masks.items()}
     if fine.any() or on_bridge.any():
         if mouths is not None:
             masks, junction_stats["rail_m_removed"] = roadside.clear_mouths(masks, mouths, c["s"])
@@ -342,13 +415,21 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         if on_bridge.any():
             rail_stats["on_bridges_m"] = round(float(on_bridge.sum() * (c["s"][1] - c["s"][0])), 1)
     meshes += rails
-    limits = furniture.speed_limits(c["run"], work.read_json(route_stage.STAGE, "runs.json"))
+    limits = furniture.speed_limits(c["run"], runs)
+    # Nothing stands on a bridge but its parapets and their reflectors: no guide post, curve marker or sign, as in a
+    # side road's mouth (a post due there goes up just past it, a sign moves off it).
+    furn_mouths = mouths
+    if decks and decks.bridges:
+        furn_mouths = {k: (mouths[k] if mouths is not None else no_rail) | decks.parapet[k] for k in "LR"}
     furn, furn_stats, atlas = furniture.furniture(
         c["s"], c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
         sec["slope_left"], sec["slope_right"], sec["superelevation"], limits, frame, masks["L"], masks["R"],
         unsealed=sec["unsealed"] if "unsealed" in sec else None,
-        mouth_l=mouths["L"] if mouths is not None else None, mouth_r=mouths["R"] if mouths is not None else None,
+        mouth_l=furn_mouths["L"] if furn_mouths is not None else None,
+        mouth_r=furn_mouths["R"] if furn_mouths is not None else None,
         **({"no_cams": rb_core.cam_mask(rings, c["s"])} if rings else {}))
+    if decks and decks.bridges:
+        furn += bridges_core.reflectors(decks, rb, frame, atlas)
     meshes += furn
     textures = {}
     if furn:
@@ -356,7 +437,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         atlas.image.save(textures[furniture.MATERIAL])
     meshes += roadside.end_walls(c["s"], c["xy"], c["z"], c["heading"], dem.sample, frame)
     # Railways and paths crossing the route (`core.rail_and_paths`), on the ground and road built above.
-    lines_built = _rail_and_paths(work, c, sec, frame, dem, meshes, rb, built, crossed.get("built"))
+    lines_built = _rail_and_paths(work, c, sec, frame, dem, meshes, rb, built, crossed.get("built"),
+                                  extra=crossed.get("footprint"))
     meshes += lines_built.meshes
     # The closures placed and checked above, last, as before.
     (out / CLOSURES).unlink(missing_ok=True)
@@ -390,7 +472,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             **{name: Material(name, texture=mesh.ROAD_TEXTURE[name])
                for name in sorted({m.material for m in meshes if m.material in mesh.ROAD_TEXTURE})},
             "grass": Material("grass", texture="grass"),
-            # A roundabout island's kerb (`core.roundabouts`).
+            # A roundabout island's kerb (`core.roundabouts`), and a bridge's kerb strip.
             **({rb_core.KERB_MATERIAL: Material(rb_core.KERB_MATERIAL, texture=rb_core.KERB_TEXTURE)}
                if rb_core.KERB_MATERIAL in used else {}),
             # The bridges over the route: their concrete and its darker underside (`core.crossing_roads`).
@@ -443,4 +525,5 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "ground": ground_summary,
     } | ({"junctions": junction_stats} if junction_stats is not None else {}) | (
         {"crossing_roads": cross_stats} if cross_stats is not None else {}) | (
-        {"rail_and_paths": lines_built.stats} if lines_built.records else {})
+        {"rail_and_paths": lines_built.stats} if lines_built.records else {}) | (
+        {"bridges": decks.stats} if decks else {})
