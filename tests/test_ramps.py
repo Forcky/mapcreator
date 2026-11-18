@@ -299,6 +299,18 @@ def test_a_vertex_whose_triangles_have_no_area_points_up():
     assert np.allclose(n[3], [0.0, 1.0, 0.0])  # a real triangle's normal is as before
 
 
+@pytest.mark.parametrize("eps", [0.0, 3.21e-13, 1e-10])  # 3.21e-13: vertex 3 sums to 6.42e-13
+def test_a_vertex_whose_triangles_have_only_rounding_error_for_area_points_up(eps):
+    # A live build (Grass Tree Hill, 18 Nov 2026): a ground vertex in two triangles of almost no area summed to a
+    # normal 6.42e-13 long, and dividing by a 1e-12 floor left it 0.642 long, failing "unit normals".
+    pos = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, eps], [3.0, 0.0, 0.0], [0.0, 0.0, 5.0],
+                    [5.0, 0.0, 0.0]])
+    tri = np.array([[0, 1, 2], [1, 3, 2], [0, 4, 5]])  # vertices 1 to 3 almost in a line
+    n = mesh._vertex_normals(pos, tri)
+    assert np.allclose(np.linalg.norm(n, axis=1), 1.0, atol=1e-6)
+    assert np.allclose(n[1], [0.0, 1.0, 0.0]) and np.allclose(n[4], [0.0, 1.0, 0.0])
+
+
 def test_a_ramp_whose_mouth_would_leave_a_timing_gate_nowhere_to_stand_is_left_out():
     p, r = plan_one(ramp(20.0, 8.0, kind="merge", length=100.0))  # behind the start, then
     assert r is None

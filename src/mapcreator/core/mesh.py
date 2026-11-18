@@ -209,11 +209,14 @@ def _vertex_normals(pos: np.ndarray, tri: np.ndarray) -> np.ndarray:
     vn = np.zeros_like(pos)
     for k in range(3):
         np.add.at(vn, tri[:, k], fn)
-    vn /= np.maximum(np.linalg.norm(vn, axis=1, keepdims=True), 1e-12)
-    vn[~np.isfinite(vn).all(axis=1)] = (0.0, 1.0, 0.0)
     # A vertex whose only triangles have no area (three points in a line, which the terrain's triangulation can leave
-    # along a densified edge) has no normal at all: up, as the ground's.
-    vn[np.linalg.norm(vn, axis=1) < 0.5] = (0.0, 1.0, 0.0)
+    # along a densified edge) has no normal at all: up, as the ground's. Its summed normal is nothing but rounding
+    # error, so it's judged before dividing: dividing a 6e-13 sum by a 1e-12 floor left a normal 0.64 long, which the
+    # validator's unit-normal check failed (a live build, 18 Nov 2026).
+    length = np.linalg.norm(vn, axis=1, keepdims=True)
+    none = ~(np.isfinite(vn).all(axis=1) & (length[:, 0] > 1e-9))
+    vn = np.divide(vn, length, out=np.zeros_like(vn), where=~none[:, None])
+    vn[none] = (0.0, 1.0, 0.0)
     return vn
 
 
