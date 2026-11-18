@@ -177,9 +177,12 @@ def _crossing_roads(work: WorkDir, job: Job, region, c, section: dict, dem) -> d
     route_xy = np.load(work.root / route_stage.STAGE / "route.npz")["xy"]
     # The profile stage's verdicts on the bridges (`core.dem_age`): one the elevation data doesn't hold isn't drawn.
     ages = work.root / profile_stage.STAGE / dem_age.FILE
+    # Piers keep off the side roads' stubs and the roundabouts' rings, planned before them.
+    keep_off = [np.asarray(x["outline"], float) for x in stubs(work, job) + roundabouts(work, job) if x.get("outline")]
+    verdicts = work.read_json(profile_stage.STAGE, dem_age.FILE) if ages.exists() else None
     doc = crossing_roads_core.plan(found, c, section, dem.sample, width_factor=job.width.factor,
-                                   route_length_m=float(cl.cumulative(route_xy)[-1]),
-                                   dem_ages=work.read_json(profile_stage.STAGE, dem_age.FILE) if ages.exists() else None)
+                                   route_length_m=float(cl.cumulative(route_xy)[-1]), dem_ages=verdicts,
+                                   keep_off=keep_off)
     if not (doc["roads"] or doc["decks"] or doc["skipped"]):
         path.unlink(missing_ok=True)
         return None

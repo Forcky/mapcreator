@@ -1,0 +1,14 @@
+{
+  "track_id": "signed_bridge_bass_highway",
+  "waypoints": [
+    {
+      "lon": 146.77474,
+      "lat": -41.518893
+    },
+    {
+      "lon": 146.768291,
+      "lat": -41.519827
+    }
+  ],
+  "layouts": "forward"
+}
