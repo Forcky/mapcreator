@@ -19,7 +19,11 @@ The maintainer's answers to the flyovers research (17 Nov 2026):
   `crossings.SIGNED_FLOOR_M`; `crossings.signed_under`), that's the clearance it must keep. Where the deck's top
   stands at least MIN_DEPTH_M above that, the deck keeps its top and is thinner (an old low bridge's deck is shallow);
   else it's raised to a deck MIN_DEPTH_M deep over the route, easing back to the road's own heights by the bridge's
-  ends (so the road beyond it meets it), by no more than MAX_RAISE_M.
+  ends (so the road beyond it meets it), by no more than MAX_RAISE_M. **A bridge signed CLEARANCE_M or more** that the
+  road's heights put too low (the maintainer, 18 Nov 2026: "yes", as footbridges and rail bridges are) is raised the
+  same way, keeping its full depth, to clear the route by its signed height. Further than MAX_RAISE_M from the
+  road's heights, the elevation data likely predates the bridge, and it's left out with that warning, as is a bridge
+  the profile stage already finds the data doesn't hold.
 - **The road over the route beyond its bridge** (Q9, "yes"): its surface on the terrain for REACH_M past each end of
   the bridge, built as a road under the route's bridge is, with no closure: it's up on its embankment, out of reach.
 
@@ -96,6 +100,7 @@ MIN_ROWS = 6  # a piece of crossing road with fewer rows (10 m) isn't drawn
 MIN_DEPTH_M = 0.5  # a deck drawn at a signed height under CLEARANCE_M is at least this deep (estimate)
 MAX_RAISE_M = 2.0  # nor is it raised more than this over the road's own heights to reach its signed height
 MAX_EASE_GRADE = 0.25  # nor made to ease back to them more steeply than this
+PIER_OFF_ROADS_M = 0.5  # a pier's columns stand at least this far off a side road's stub or a roundabout's ring
 CLEAR_M = 0.5  # between a crossing road's ground and the route's, a stub's, or another crossing road's, as a stub's
 WINDOW_M = 400.0  # crossing roads' meshes are packed by material per this much of the route, as the stubs' are
 MATCH_M = 50.0  # a crossing is found on the smoothed centreline within this of where its route distance falls
@@ -385,7 +390,7 @@ def _deck_points(xy: np.ndarray, heading: np.ndarray, half: float, step: float =
 
 
 def _over(group: list[dict], route: _Route, ats: list[float], dem_sample, width_factor: float, did: int, rid: int,
-          verdicts: dict | None = None):
+          verdicts: dict | None = None, keep_off: shapely.Geometry | None = None):
     """A road's bridge over the route, and its approaches, or why it isn't drawn."""
     crossing = group[0]
     at = ats[0]
@@ -434,21 +439,25 @@ def _over(group: list[dict], route: _Route, ats: list[float], dem_sample, width_
         return None, [], _skip(crossing, at, "short")
     on_rows, on_surf = np.concatenate(on_rows), np.concatenate(on_surf)
     clearance = float((under[on_rows] - on_surf).min())
-    # A real low bridge: the route signed under CLEARANCE_M (and over the floor) under it.
+    # The clearance the route is signed for under it (at least the floor): a real low bridge under CLEARANCE_M must
+    # clear that instead; one signed CLEARANCE_M or more that the road's heights put too low is drawn at its sign.
     signs = [crossings_core.signed_under(c) for c in group]
     signed, signed_on = min(((v, w) for v, w in signs if v is not None), default=(None, None))
-    low = signed is not None and crossings_core.SIGNED_FLOOR_M <= signed < CLEARANCE_M
+    usable = signed is not None and signed >= crossings_core.SIGNED_FLOOR_M
+    low = usable and signed < CLEARANCE_M
     needed = signed if low else CLEARANCE_M
     depth, signed_rec = DECK_DEPTH_M, {}
     if signed is not None:
         signed_rec = {"signed_m": signed, "signed_on": signed_on}
-    if low and clearance < signed:
-        thin = float((top[on_rows] - on_surf).min()) - signed
+    if usable and clearance < min(signed, CLEARANCE_M):
+        above = float((top[on_rows] - on_surf).min())  # the deck's top over the route, where it's lowest
         raised = 0.0
-        if thin >= MIN_DEPTH_M:
-            depth = min(thin, DECK_DEPTH_M)
+        if low and above - signed >= MIN_DEPTH_M:
+            depth = min(above - signed, DECK_DEPTH_M)  # a low bridge keeps its top, its deck thinner
         else:
-            raised = MIN_DEPTH_M - thin
+            # Raised to its sign: a low bridge's deck MIN_DEPTH_M deep, a full-height one's its full depth.
+            depth = MIN_DEPTH_M if low else DECK_DEPTH_M
+            raised = signed + depth - above
             r0, r1 = int(on_rows.min()), int(on_rows.max())
             run_a, run_b = float(ss[r0] - ss[0]), float(ss[-1] - ss[r1])
             if raised > MAX_RAISE_M or raised > MAX_EASE_GRADE * max(min(run_a, run_b), 1e-6):
@@ -459,7 +468,6 @@ def _over(group: list[dict], route: _Route, ats: list[float], dem_sample, width_
             ease[:r0] = (ss[:r0] - ss[0]) / max(run_a, 1e-9)
             ease[r1 + 1:] = (ss[-1] - ss[r1 + 1:]) / max(run_b, 1e-9)
             top = top + raised * ease
-            depth = MIN_DEPTH_M
         under = top - depth
         clearance = float((under[on_rows] - on_surf).min())
         signed_rec |= {"height_from": "signed", "raised_m": round(raised, 2)}
@@ -502,19 +510,24 @@ def _over(group: list[dict], route: _Route, ats: list[float], dem_sample, width_
         ok_row = (~inside | (edge_beyond >= limit + PIER_R)).all(axis=1) & (
             (off > 0).all(axis=1) | (off < 0).all(axis=1) | ~inside.any(axis=1))
         reach = max(int(round(span_m / n / 2 / ROW_M)), 1)
+        offs = np.linspace(-(half - 1.2), half - 1.2, 2 if 2 * half < 10.0 else 3)
+
+        def columns(kk):
+            return xy[kk] + offs[:, None] * cl.normals(np.array([hd[kk]]))[0][None, :]
+
+        def off_roads(kk):  # not on a side road's stub or a roundabout's ring
+            return keep_off is None or not shapely.intersects_xy(keep_off, *columns(kk).T).any()
+
         for i in range(1, n):
             want = fa + (fb - fa) * i / n
             cands = [k for k in range(int(want) - reach, int(math.ceil(want)) + reach + 1)
-                     if fa + 2 <= k <= fb - 2 and ok_row[k]]
+                     if fa + 2 <= k <= fb - 2 and ok_row[k] and off_roads(k)]
             if not cands:
                 continue
             k = min(cands, key=lambda kk: abs(kk - want))
             if any(abs(k - p["row"]) < 2 for p in piers):
                 continue
-            nrm = cl.normals(np.array([hd[k]]))[0]
-            cols = 2 if 2 * half < 10.0 else 3
-            offs = np.linspace(-(half - 1.2), half - 1.2, cols)
-            piers.append({"row": k, "xy": _r2(xy[k]), "columns": _r2(xy[k] + offs[:, None] * nrm[None, :])})
+            piers.append({"row": k, "xy": _r2(xy[k]), "columns": _r2(columns(k))})
     deck_rows = {"s": _r2(ss), "xy": _r2(xy), "z": _r3(top), "heading": np.round(hd, 5).tolist()}
     outline = _r2(np.asarray(shapely.LineString(xy).buffer(half, cap_style="flat").exterior.coords)[:-1])
     deck = {"id": did, "crossings": ids, "station_m": round(at, 2), "label": dem_age.label(crossing, at),
@@ -544,15 +557,22 @@ def _over(group: list[dict], route: _Route, ats: list[float], dem_sample, width_
 
 
 def plan(crossings: list[dict], c, section, dem_sample, *, width_factor: float = 1.0,
-         route_length_m: float | None = None, dem_ages: dict | None = None) -> dict:
+         route_length_m: float | None = None, dem_ages: dict | None = None,
+         keep_off: list[np.ndarray] | None = None) -> dict:
     """The roads crossing the route to draw, the decks over it, and those left out: the content of
     crossing_roads.json. `crossings` are crossings.json's; `c` and `section` the smoothed centreline's and
     cross-section's arrays; `route_length_m` the routed polyline's length, to find each crossing on the smoothed
     centreline (its stations drift from the routed line's). `dem_ages`: the profile stage's verdicts on the bridges
     (`core.dem_age`, `02_profile/dem_age.json`). A bridge the elevation data doesn't hold is left out on its word;
-    without a verdict the plan measures the DEM itself."""
+    without a verdict the plan measures the DEM itself. `keep_off`: the side roads' stubs' and the roundabouts' rings'
+    paved outlines (n, 2), which no pier stands on (PIER_OFF_ROADS_M and its radius clear)."""
     route = _Route(c, section)
     verdicts = {i: b for b in (dem_ages or {}).get("bridges") or [] for i in b.get("crossings") or []}
+    avoid = None
+    if keep_off:
+        avoid = shapely.union_all([shapely.Polygon(o).buffer(PIER_R + PIER_OFF_ROADS_M) for o in keep_off
+                                   if len(o) >= 3])
+        shapely.prepare(avoid)
     scale = float(route.s[-1]) / route_length_m if route_length_m else 1.0
     roads, decks, skipped = [], [], []
     groups: dict[int, list[tuple[dict, float]]] = {}
@@ -565,7 +585,7 @@ def plan(crossings: list[dict], c, section, dem_sample, *, width_factor: float =
             groups.setdefault(cr.get("way_id"), []).append((cr, at))
     for group in groups.values():
         deck, approaches, skip = _over([g[0] for g in group], route, [g[1] for g in group], dem_sample, width_factor,
-                                       len(decks), len(roads), verdicts)
+                                       len(decks), len(roads), verdicts, keep_off=avoid)
         if deck is None:
             skipped.append(skip)
             continue

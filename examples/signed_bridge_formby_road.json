@@ -1,0 +1,14 @@
+{
+  "track_id": "signed_bridge_formby_road",
+  "waypoints": [
+    {
+      "lon": 146.362715,
+      "lat": -41.193339
+    },
+    {
+      "lon": 146.360267,
+      "lat": -41.187753
+    }
+  ],
+  "layouts": "forward"
+}

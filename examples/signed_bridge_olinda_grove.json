@@ -1,0 +1,14 @@
+{
+  "track_id": "signed_bridge_olinda_grove",
+  "waypoints": [
+    {
+      "lon": 147.308883,
+      "lat": -42.911158
+    },
+    {
+      "lon": 147.310662,
+      "lat": -42.914959
+    }
+  ],
+  "layouts": "forward"
+}

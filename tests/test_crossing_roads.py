@@ -554,12 +554,12 @@ def test_the_section_stage_plans_crossing_roads_whatever_the_junctions_option_an
 
 # -- a real low bridge: drawn at the height the route is signed for (the maintainer, 18 Nov 2026) ---------------------
 
-def signed_plan(top, maxheight):
+def signed_plan(top, maxheight, dem_ages=None):
     c, sec = road(z=0.0)
     ways = [(0.0, 125.0, False), (125.0, 175.0, True), (175.0, 300.0, False)]
     x = crossing("over", bridge=True, road_ways=ways)
     x["route"]["maxheight"] = maxheight
-    return cr.plan([x], c, sec, embankment(top, 0.0))
+    return cr.plan([x], c, sec, embankment(top, 0.0), dem_ages=dem_ages)
 
 
 def test_a_low_bridge_the_route_is_signed_for_is_drawn_at_that_height_with_a_thinner_deck():
@@ -616,3 +616,48 @@ def test_a_signed_low_deck_passes_the_validator_at_its_own_height_and_its_piers_
     for m in ms:
         if m.name.startswith("1WALL_PIER"):
             assert m.positions[:, 1].max() <= under.max() - cr.HEADSTOCK[1] + 1e-3
+
+
+# -- a bridge signed 4.6 m or more that the road's heights put too low (the maintainer, 18 Nov 2026: "yes") -----------
+
+def test_a_bridge_signed_over_4_6_m_the_dem_can_t_place_is_raised_to_its_sign_with_its_full_depth():
+    p = signed_plan(5.0, "5.2")  # the road's heights: 3.7 m under a 1.3 m deck; the sign: 5.2 m
+    (d,) = p["decks"]
+    assert (d["height_from"], d["signed_m"], d["signed_on"]) == ("signed", 5.2, "route")
+    assert d["clearance_m"] == pytest.approx(5.2, abs=0.01) and d["depth_m"] == cr.DECK_DEPTH_M
+    assert d["required_clearance_m"] == cr.CLEARANCE_M and d["raised_m"] == pytest.approx(1.5, abs=0.05)
+    z = np.asarray(d["rows"]["z"])
+    assert z.max() == pytest.approx(5.0 + d["raised_m"], abs=0.01)
+    a0, a1 = p["roads"]  # eased back to the road's own heights by its ends: the road beyond meets it exactly
+    assert a0["rows"]["z"][-1] == pytest.approx(z[0]) and a1["rows"]["z"][0] == pytest.approx(z[-1])
+    assert z[0] == pytest.approx(5.0, abs=0.05) and z[-1] == pytest.approx(5.0, abs=0.05)
+    assert any("(drawn at its signed height, 5.2 m)" in w for w in cr.warnings(p))
+
+
+def test_a_signed_bridge_too_far_from_the_dem_or_one_the_profile_stage_doesn_t_hold_stays_left_out():
+    (k,) = signed_plan(3.5, "5.2")["skipped"]  # 2.9 m to raise, more than MAX_RAISE_M: data older than the bridge
+    assert k["reason"] == "dem_predates" and k["signed_m"] == 5.2
+    (w,) = cr.warnings(signed_plan(3.5, "5.2"))
+    assert "the elevation data predates this bridge, so its deck is left out" in w
+    p = signed_plan(5.0, "5.2", dem_ages=judged("predates", separation=3.5))  # left out on the profile stage's word
+    assert p["decks"] == [] and p["skipped"][0]["reason"] == "dem_predates" and p["skipped"][0].get("dem_age")
+
+
+def test_a_bridge_that_already_clears_4_6_m_is_drawn_as_the_dem_gives_it_whatever_its_sign():
+    for sign in ("6.5", "4.8", None):
+        (d,) = signed_plan(7.0, sign)["decks"]
+        assert d["clearance_m"] == pytest.approx(7.0 - cr.DECK_DEPTH_M, abs=0.1) and "height_from" not in d
+
+
+def test_a_pier_keeps_off_a_side_road_s_stub_and_a_roundabout_s_ring():
+    (pier,) = over_plan()["decks"][0]["piers"]
+    cols = np.asarray(pier["columns"])
+    # A side road's stub paved right where the pier would stand: it moves along the deck, clear of it.
+    stub = np.asarray(shapely.box(*(cols.min(axis=0) - 1.0), *(cols.max(axis=0) + 1.0)).exterior.coords)[:-1]
+    c, sec = road(z=0.0)
+    ways = [(0.0, 125.0, False), (125.0, 175.0, True), (175.0, 300.0, False)]
+    p = cr.plan([crossing("over", bridge=True, road_ways=ways)], c, sec, embankment(7.0, 0.0), keep_off=[stub])
+    (moved,) = p["decks"][0]["piers"]
+    assert moved["row"] != pier["row"]
+    clear = shapely.Polygon(stub).buffer(cr.PIER_R + cr.PIER_OFF_ROADS_M)
+    assert not shapely.intersects_xy(clear, *np.asarray(moved["columns"]).T).any()
