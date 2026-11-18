@@ -75,11 +75,11 @@ def test_a_slip_ramp_the_junction_finder_cant_see_is_found_with_its_kind_and_the
     assert res["skipped"] == [] and res["rule"]["max_angle_deg"] == 15.0
 
 
-def test_a_ramp_at_10_degrees_is_the_junction_finder_s_angle_skip_and_one_at_30_is_its_side_road():
+def test_a_ramp_at_10_degrees_is_the_junction_finder_s_ramp_skip_and_one_at_30_is_its_side_road():
     g = network([(300, out_at(300, -10.0), LINK), (600, out_at(600, 30.0), LINK)])
     xy = route_of(g)
     found = junctions.find(g, xy)
-    assert [(s["at_m"], s["reason"]) for s in found["skipped"]] == [(290.0, "angle")]
+    assert [(s["at_m"], s["reason"]) for s in found["skipped"]] == [(290.0, "ramp")]
     assert [j["at_m"] for j in found["junctions"]] == [590.0]  # 30 degrees: a side road, stubbed as before
     (r,) = ramps.find(g, xy)["ramps"]
     assert (r["at_m"], r["side"], r["hidden"]) == (290.0, "right", False)

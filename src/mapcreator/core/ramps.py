@@ -17,7 +17,8 @@ can't see. Not one that's private, that has a bridge, tunnel or layer in its fir
 leads onto a roundabout the route drives, that meets the route again within `junctions.MIN_LEG_M`, or that's within
 END_CLEAR_M of the route's first or last point (the end wall closes it). Each is followed out FOLLOW_M. Its `kind`
 says how traffic uses it: `diverge` (an off-ramp, one-way away from the route), `merge` (an on-ramp, one-way onto it)
-or `two_way`. `select` picks the ways: links only here, but the same code would take a shallow fork of any class.
+or `two_way`. `select` picks the ways: links only. A shallow fork of any other class is a junction
+(`core.junctions`), and `core.forks` draws its gore with this module's plan and meshes.
 
 **The plan** (`plan`, the section stage; `03_section/ramps.json`). Along the road, on the ramp's side:
 - **the taper**, from where the ramp's outer edge leaves the road's edge to where its inner edge does (the split):
@@ -47,6 +48,12 @@ A ramp whose taper, gore or nose can't be drawn, that would overlap a side road'
 or whose mouth would leave a timing gate nowhere to stand is left out, listed in `skipped` with the reason, and the
 road is built there as before. The mesh stage checks each one on the meshes it builds, as it checks stubs, and leaves
 out any that fail (`settle`).
+
+**Shallow forks** (`core.forks`): a side road under 15 degrees that isn't a link, or one too skewed for a stub's
+flare, is drawn the same way, as a ramps.json record with `fork: true` and its junction's id. Three fields of the
+record it's planned from change how: `end_d_m` ends its stub that far in from the road's edge line (not STUB_M past
+the nose), `opposing` says whether the gore splits opposing traffic (diagonals) and `flow` which way traffic runs
+beside it (the chevrons' points). `plan(planned=)` keeps the forks off the slip ramps already planned.
 """
 
 from __future__ import annotations
@@ -199,12 +206,8 @@ def find(net, route_xy: np.ndarray, *, select=is_ramp, to_lonlat=None) -> dict:
 
 def _spliced(rt: jn._Route, i: int, to: np.ndarray) -> bool:
     """Whether the segment from route point `i` to `to` is the one a waypoint next to it was spliced into: it passes
-    through that waypoint."""
-    for j in (i - 1, i + 1):
-        if 0 <= j < len(rt.node) and rt.node[j] < 0 \
-                and jn._segment_distance(rt.xy[j], np.vstack([rt.xy[i], to])) < jn.ON_ROUTE_M:
-            return True
-    return False
+    through that waypoint (`junctions._spliced`)."""
+    return jn._spliced(rt, i, to)
 
 
 def _main_road(nw: jn._Network, rt: jn._Route, i: int, along: str) -> dict:
@@ -310,7 +313,11 @@ def _candidate(r: dict, m: stubs._Mainline, dem_sample, width_factor: float) -> 
     k = _first(g_in >= NOSE_W_M)
     if k is None:
         return None, "parallel"
-    last = int(min(k + STUB_M, len(sm.s) - 1))
+    if r.get("end_d_m") is not None:  # a shallow fork's gore stub (`core.forks`): to d metres in from the road's edge
+        edge = _first(g_mid >= 0.0)
+        last = int(min((edge if edge is not None else 0) + float(r["end_d_m"]), len(sm.s) - 1))
+    else:
+        last = int(min(k + STUB_M, len(sm.s) - 1))
     if last - k < MIN_RIBBON_M:
         return None, "short"
     kc = _first(g_in >= ISLAND_END_W_M, k)
@@ -442,10 +449,10 @@ def _candidate(r: dict, m: stubs._Mainline, dem_sample, width_factor: float) -> 
     paint = "none"
     polygons: list = []
     if main_marked and not unsealed:
-        paint = "diagonals" if r.get("kind") == "two_way" else "chevrons"
+        paint = "diagonals" if _opposing(r) else "chevrons"
         polygons = _paint(throat, rows_xy, rows_n, w, es_in, es_out, k, d_split, chain, m, near, side, sign,
                           split_row, nose_row, dirn, style_name, paint, spacing_m(r.get("main") or {}),
-                          r.get("kind"), height)
+                          _traffic(r), height)
     # How far the ramp has turned away from the road by the nose, against the way the road runs beside it.
     hm = float(np.interp(s_nose, m.s, m.heading)) + (0.0 if dirn > 0 else math.pi)
     nose_angle = abs(math.degrees(math.atan2(math.sin(rows_h[k] - hm), math.cos(rows_h[k] - hm))))
@@ -485,9 +492,27 @@ def _candidate(r: dict, m: stubs._Mainline, dem_sample, width_factor: float) -> 
                  "grade": np.round(np.gradient(z)[kept], 4).tolist(), "half_m": [round(w, 3)] * n_kept},
         "outline": r2(np.asarray(outline.exterior.coords)[:-1]),
     }
+    if r.get("fork"):  # a shallow fork (`core.forks`): which way traffic runs beside its gore, and whether it's opposed
+        record |= {"fork": True, "flow": r.get("flow"), "opposing": bool(r.get("opposing"))}
     priority = (0 if r.get("closure") == "major" else 1, -(n_rows - 1), r["id"])
     return _Candidate(record, priority, throat.buffer(0), island.buffer(0), rows_xy[kept], rows_n[kept], w, k - k0,
                       kc - k0), None
+
+
+def _opposing(r: dict) -> bool:
+    """Whether the gore splits opposing traffic (diagonal stripes): a two-way ramp; a fork says so itself
+    (`core.forks`)."""
+    if "opposing" in r:
+        return bool(r["opposing"])
+    return r.get("kind") == "two_way"
+
+
+def _traffic(r: dict) -> str | None:
+    """Which way the chevrons point: `merge` where traffic beside the gore runs from the nose to the split, else as
+    the ramp's kind says. A fork gives the way it runs beside its gore (`flow`, "in" towards its node)."""
+    if "flow" in r:
+        return "merge" if r["flow"] == "in" else "diverge"
+    return r.get("kind")
 
 
 def _paint(throat, rows_xy, rows_n, w, es_in, es_out, k, d_split, chain, m, near, side, sign, split_row, nose_row,
@@ -645,12 +670,14 @@ def _fit(cand: _Candidate, m: stubs._Mainline, kept: list[_Candidate], taken: li
 
 def plan(ramps: list[dict], c, section, dem_sample, *, width_factor: float = 1.0, layouts: tuple[bool, ...] = (False,),
          junctions: list[dict] | None = None, stubs_plan: list[dict] | None = None,
-         rings: list[dict] | None = None, crossing: dict | None = None) -> dict:
+         rings: list[dict] | None = None, crossing: dict | None = None, planned: list[dict] | None = None) -> dict:
     """The ramps' plan: the content of ramps.json (without `crs`). `ramps` are ramps.json's from the route stage; `c`,
     `section` and `dem_sample` as `stubs.plan` takes them. The side roads' stubs (`stubs_plan`, for `junctions`) and
     the roundabouts (`rings`, roundabouts.json's) are already planned: a ramp keeps off them, never the other way, so
     no stub drawn without ramps changes. `crossing`: the roads crossing the route (crossing_roads.json): a ramp keeps
-    off the piers and abutments of the bridges over the route (`bridge`); one may pass under a deck."""
+    off the piers and abutments of the bridges over the route (`bridge`); one may pass under a deck. `planned`: ramps
+    already planned (the slip ramps, when planning the shallow forks' gores, `core.forks`), kept off as a stub is, their
+    mouths left where they are for the timing gates."""
     m = stubs._Mainline(c, section)
     cands, skipped = [], []
     for r in ramps:
@@ -668,6 +695,9 @@ def plan(ramps: list[dict], c, section, dem_sample, *, width_factor: float = 1.0
         taken.append((st["side"], tuple(st["mouth"]["rows"]), geom))
     for ring in rings or []:
         taken.append((ring["island_side"], tuple(ring["mouth"]["rows"]), shapely.Polygon(ring["outline"]).buffer(0)))
+    for r in planned or []:
+        geom = shapely.union(paved(r).buffer(mesh.VERGE_M + CLEAR_M), shapely.Polygon(r["island"]["outline"]).buffer(0))
+        taken.append((r["side"], tuple(r["mouth"]["rows"]), geom))
     avoid = rb_core.avoid(rings) if rings else None
     piers = structures(crossing)
     kept: list[_Candidate] = []
@@ -677,7 +707,8 @@ def plan(ramps: list[dict], c, section, dem_sample, *, width_factor: float = 1.0
             skipped.append({"junction": cand.record["junction"], "name": cand.record["name"], "reason": reason})
             continue
         kept.append(fitted)
-    kept = _clear_gates(kept, c, section, layouts, junctions or [], stubs_plan or [], rings or [], skipped)
+    kept = _clear_gates(kept, c, section, layouts, junctions or [], stubs_plan or [], rings or [], skipped,
+                        planned or [])
     sound = []
     for k in kept:
         outline = shapely.Polygon(k.record["outline"]).buffer(0.05)
@@ -695,9 +726,9 @@ def plan(ramps: list[dict], c, section, dem_sample, *, width_factor: float = 1.0
             "skipped": sorted(skipped, key=lambda s: s["junction"])}
 
 
-def _clear_gates(kept: list[_Candidate], c, section, layouts, junctions, stubs_plan, rings, skipped):
-    """The ramps less any whose mouth would leave a timing gate nowhere clear to stand, with the side roads' and the
-    roundabouts' mouths where they are (`layout.gate_distances`)."""
+def _clear_gates(kept: list[_Candidate], c, section, layouts, junctions, stubs_plan, rings, skipped, planned=()):
+    """The ramps less any whose mouth would leave a timing gate nowhere clear to stand, with the side roads', the
+    roundabouts' and the ramps already `planned` mouths where they are (`layout.gate_distances`)."""
     s = np.asarray(c["s"], float)
     # Every side road's mouth, with its stub's flares where it has one, as the track stage places the gates.
     mouths = jn.mouths(junctions, s, c["xy"], c["heading"], section["half_left"], section["half_right"],
@@ -711,6 +742,8 @@ def _clear_gates(kept: list[_Candidate], c, section, layouts, junctions, stubs_p
             fixed = jn.layout_intervals(mouths, s, reverse)
             if rings:
                 fixed += rb_core.layout_intervals(rings, s, reverse)
+            if planned:
+                fixed += layout_intervals(list(planned), s, reverse)
             mine = list(zip(layout_intervals([k.record for k in kept], s, reverse, sort=False), kept))
             for d in gate_distances(road, sorted(fixed + [sp for sp, _ in mine])):
                 blocking = [k for (lo, hi), k in mine if lo <= d <= hi]
@@ -1069,6 +1102,14 @@ def _build_one(r: dict, rb: mesh.Ribbon, frame: LocalFrame, dem_sample, skirt: b
     return meshes, sb, own_cut, patches, edges, (side, lo, hi, br0, br1), interior
 
 
+def mesh_tag(r: dict) -> str:
+    """What follows `1ROAD_`, `1GRASS_` or `1GRAVEL_` in a ramp's meshes' names: `JS<k>_`, k its id less RAMP_ID_BASE;
+    a shallow fork's gore stub (`core.forks`) `JF<k>_`, k its junction's id."""
+    if r.get("fork"):
+        return f"JF{int(r['junction'])}_"
+    return f"JS{int(r['junction']) - RAMP_ID_BASE}_"
+
+
 def rb_stations(rb: mesh.Ribbon, rows: np.ndarray) -> np.ndarray:
     """Distance along the road's centre column to each of `rows`, from its first row."""
     col = rb.road_cols.start + 2
@@ -1107,7 +1148,8 @@ def _paint_parts(r: dict, throat: shapely.Polygon, heights: dict) -> list[shapel
 
 def build(ramps: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, dem_sample, *, skirt: bool,
           others: np.ndarray) -> Built:
-    """The ramps' meshes from the plan: each ramp's ribbon (`1ROAD_JS<k>_###`, its verges `1GRASS_JS<k>_V###L/R`),
+    """The ramps' meshes from the plan: each ramp's ribbon (`1ROAD_JS<k>_###`, its verges `1GRASS_JS<k>_V###L/R`;
+    `JF<k>` for a shallow fork's, `mesh_tag`),
     its throat (`1ROAD_JS<k>_G`: the taper and the gore, with the gore's paint) and its grass (`1GRASS_JS<k>_I`: the
     taper's verge and the nose island); the road's cut and edge break; and the pieces the terrain leaves room for. `rb`
     is the road's ribbon (its skirt held short of the ramps, `centres`), `others` every other centreline point the
@@ -1119,7 +1161,7 @@ def build(ramps: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
     out = Built([], cut, edge_break, [], [], [], [], {}, {}, set())
     others = np.asarray(others, float).reshape(-1, 2)
     for r in ramps:
-        tag = f"JS{int(r['junction']) - RAMP_ID_BASE}_"
+        tag = mesh_tag(r)
         rest = centres([q for q in ramps if q is not r])
         try:
             meshes, sb, own_cut, patches, edges, (side, lo, hi, br0, br1), interior = _build_one(
@@ -1141,6 +1183,9 @@ def build(ramps: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
                  "triangles": int(sum(len(m.triangles) for m in out.meshes)),
                  "length_m": round(sum(r["length_m"] - r["ribbon_from_m"] for r in built), 1),
                  "painted": sum(r["gore"]["paint"] != "none" for r in built)}
+    gores = sum(bool(r.get("fork")) for r in built)
+    if gores:  # of them, the shallow forks' gore stubs (`core.forks`)
+        out.stats["gores"] = gores
     return out
 
 
@@ -1259,9 +1304,12 @@ def settle(state: dict, run, check_ramps, rebuilds: int = 3, log=None):
         for r in ramps:
             if r["junction"] in found or attempt >= rebuilds:
                 dropped.append({"junction": r["junction"], "name": r.get("name"), "reason": "build_check",
-                                "faults": found.get(r["junction"], [])})
+                                "faults": found.get(r["junction"], []), **({"fork": True} if r.get("fork") else {})})
                 if log is not None and r["junction"] in found:
-                    log.warning("slip ramp left out: %s (%s) at %.0f m: %s", r.get("name") or "an unnamed ramp",
-                                r["junction"], r["station_m"], ", ".join(found[r["junction"]]))
+                    log.warning("%s left out: %s (%s) at %.0f m: %s",
+                                "shallow fork's gore stub" if r.get("fork") else "slip ramp",
+                                r.get("name") or ("an unnamed road" if r.get("fork") else "an unnamed ramp"),
+                                r["junction"], r["station_m"],
+                                ", ".join(found[r["junction"]]))
         state["ramps"] = [] if attempt >= rebuilds else [r for r in ramps if r["junction"] not in found]
     return run()

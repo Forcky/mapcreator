@@ -281,8 +281,9 @@ def ramp_checks(job: Job, work: WorkDir) -> list[validate.JunctionCheck]:
         edge = c["xy"][rows] + nrm * half[:, None]
         band = shapely.Polygon(np.vstack([edge, (edge + nrm * junctions.MOUTH_BAND_M)[::-1]])).buffer(0)
         road = shapely.union(ramps_core.paved(r), shapely.Polygon(r["island"]["outline"]).buffer(0))
-        label = (f"{r.get('name') or 'an unnamed ramp'} ({r['highway']}, {r['closure']}, slip ramp) at "
-                 f"{r['station_m'] / 1000:.2f} km on the {r['side']}")
+        what = "gore" if r.get("fork") else "slip ramp"  # a shallow fork's gore stub (`core.forks`), or a ramp
+        label = (f"{r.get('name') or 'an unnamed ' + ('road' if r.get('fork') else 'ramp')} ({r['highway']}, "
+                 f"{r['closure']}, {what}) at {r['station_m'] / 1000:.2f} km on the {r['side']}")
         ramp, _ = ramps_core.check(r, c, sec, frame)
         out.append(validate.JunctionCheck(label, to_ac(road.intersection(band)), to_ac(road), ramp))
     return out

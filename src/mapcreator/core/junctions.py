@@ -5,16 +5,29 @@ nodes is a junction when:
 - its way is a class the router may drive (`DRIVABLE`: motorway to living_street, `road` and the links). The road
   data holds nothing else, so driveways, service roads and tracks never are;
 - it isn't private: of `motor_vehicle`, `vehicle` and `access`, the most specific one tagged isn't `private` or `no`;
-- it leaves at least `MIN_ANGLE_DEG` off the mainline, measured `ANGLE_AT_M` out along it, against both the road
-  ahead and the road behind;
 - it's clear of the rest of the route: followed outwards, it stops where it meets another part of the route, and one
   that does so within `MIN_LEG_M` isn't a junction;
 - it has no `bridge`, `tunnel` or `layer` other than 0 within its first `GRADE_FREE_M`: a road passing over or
   under isn't a junction.
 
+**A shallow side road** leaves under `MIN_ANGLE_DEG` off the mainline, measured `ANGLE_AT_M` out along it, against
+the road ahead or the road behind: a Y junction, a fork. It's a junction too (the maintainer's answer to the
+shallow-Y research's Q2, 18 Nov 2026), drawn with a gore where it can be (`core.forks`), except:
+- a link (`*_link`): a slip ramp (`ramp`, `core.ramps`);
+- within END_CLEAR_M of the route's first or last point (`route_end`): the road carrying straight on past the route's
+  end, which its end wall closes;
+- one that never parts from the route by NOSE_W_M (both verges and half a metre between the two roads' edges) within
+  its leg (`parallel`): there's no room for a nose;
+- one leading onto a roundabout the route drives within SHALLOW_LEG_M (`roundabout`): the other carriageway of the
+  road the route arrives or leaves by.
+Under about 7 degrees a side road's first metres lie along the route; one that isn't the route itself (the segment a
+waypoint was spliced into) is a shallow side road all the same.
+
 Each side road is followed out to `LEG_M`, or to where it ends or meets the route: along its own way, then, at the
-way's end, onto the straightest way that turns less than `CONTINUE_DEG`. It carries a closure level for the closures
-to come: limited by its access tags (`LIMITED_ACCESS`), else major or minor by its class (`closure_level`).
+way's end, onto the straightest way that turns less than `CONTINUE_DEG`. One under SHALLOW_DEG is also followed out to
+SHALLOW_LEG_M (`fork`), so a gore, its nose and a closure past it fit (Q3); its 100 m line, which the mouths and
+clearances read, is as before. It carries a closure level for the closures to come: limited by its access tags
+(`LIMITED_ACCESS`), else major or minor by its class (`closure_level`).
 
 Roundabouts (`junction=roundabout` or `circular`) the route drives or touches are recorded with their ring, in the
 order it's driven (its ways' direction), and their exits (`core.roundabouts` draws them). A way leaving the ring where
@@ -64,6 +77,11 @@ OTHER_PART_SLACK_M = 5.0
 # waypoint was spliced into, which runs on past the route's start or end.
 ON_ROUTE_M = 0.25
 ON_ROUTE_PROBE_M = 2.0
+# Shallow side roads (module notes; the shallow-Y research's Q2 and Q3).
+SHALLOW_DEG = 25.0  # a side road under this off the mainline is followed SHALLOW_LEG_M, for a gore (`core.forks`)
+SHALLOW_LEG_M = 150.0
+END_CLEAR_M = 20.0  # a shallow side road this near the route's first or last point is the road carrying on past it
+NOSE_W_M = 4.5  # the gap between the two roads' edges at a gore's nose: both 2 m verges and 0.5 m (`ramps.NOSE_W_M`)
 
 MOUTH_BAND_M = 3.0  # beyond the mainline's edge: guide posts stand at 0.8 m, guard rails at 1 m, signs at 2 m
 MOUTH_BAND_STEP_M = 0.5
@@ -318,6 +336,116 @@ def _grade_separated_near(net: _Network, leg: _Leg) -> bool:
     return any(grade_separated(net.tags(w)) for w, m in zip(leg.ways, leg.entered_m) if m < GRADE_FREE_M)
 
 
+def is_link(tags: dict) -> bool:
+    """A link (`motorway_link` to `tertiary_link`): a slip ramp under MIN_ANGLE_DEG (`core.ramps`)."""
+    hw = str(tags.get("highway") or "")
+    return hw.endswith("_link") and hw in DRIVABLE
+
+
+def is_shallow(j: dict) -> bool:
+    """Whether a junction (junctions.json's) leaves under MIN_ANGLE_DEG: a fork, drawn as a gore (`core.forks`)."""
+    return float(j.get("off_mainline_deg", 90.0)) < MIN_ANGLE_DEG
+
+
+def gore_only(j: dict) -> bool:
+    """Whether a junction is a shallow side road the route stage found (under MIN_ANGLE_DEG, with its `fork`): it gets
+    a gore stub where it can (`core.forks`), never a side road's stub. A roundabout's exit never is."""
+    return j.get("fork") is not None and is_shallow(j)
+
+
+def _spliced(rt: _Route, i: int, to: np.ndarray) -> bool:
+    """Whether the segment from route point `i` to `to` is the one a waypoint next to it was spliced into: it passes
+    through that waypoint."""
+    for j in (i - 1, i + 1):
+        if 0 <= j < len(rt.node) and rt.node[j] < 0 \
+                and _segment_distance(rt.xy[j], np.vstack([rt.xy[i], to])) < ON_ROUTE_M:
+            return True
+    return False
+
+
+def _far_leg(nw: _Network, rt: _Route, node: int, nb: int, way: int, here: np.ndarray, at: float, limit: float,
+             elsewhere: set[int]) -> _Leg:
+    """A shallow side road followed out to `limit` (SHALLOW_LEG_M) as its 100 m leg is, for its gore."""
+    leg = nw.walk(node, nb, way, rt.nodes - {node}, limit, elsewhere)
+    clip = rt.other_part_m(leg.line, here, at)
+    if clip is not None and clip < cumulative(leg.line)[-1]:
+        leg.line, leg.ends = _cut(leg.line, clip), "meets_route"
+    return leg
+
+
+def _route_way(nw: _Network, rt: _Route, i: int, along: str) -> tuple[int | None, str | None]:
+    """The route's own way beside a side road at route point `i` (ahead of the node for one running ahead, else
+    behind), and which way its traffic flows there: "out" (away from the node), "in", or None (both ways)."""
+    step = 1 if along == "ahead" else -1
+    node = int(rt.node[i])
+    j = i + step
+    while 0 <= j < len(rt.node) and rt.node[j] < 0:  # past a spliced waypoint, to the next node
+        j += step
+    if not 0 <= j < len(rt.node):
+        return None, None
+    other = int(rt.node[j])
+    for nb, way in nw.adj[node]:
+        if nb == other:
+            one_way = nw.one_way.get(frozenset((node, other)))
+            return way, None if one_way is None else ("out" if one_way[0] == node else "in")
+    return None, None
+
+
+def _parallel(nw: _Network, rt: _Route, i: int, leg: _Leg, way: int) -> bool:
+    """Whether a shallow side road never parts from the route by NOSE_W_M within its leg: the gap between the two
+    roads' edges, their widths as mapped (`section.width_from_tags`), stays under it."""
+    tags = nw.tags(way)
+    side_half = sec.width_from_tags(tags, unsealed=sec.surface_class(tags) == sec.UNSEALED)[0] / 2
+    main_half = 0.0
+    for along in ("ahead", "behind"):
+        w, _ = _route_way(nw, rt, i, along)
+        if w is not None:
+            t = nw.tags(w)
+            main_half = max(main_half, sec.width_from_tags(t, unsealed=sec.surface_class(t) == sec.UNSEALED)[0] / 2)
+    at = float(rt.s[i])
+    reach = float(cumulative(leg.line)[-1]) + 2 * ANGLE_AT_M
+    piece = rt.piece(at - reach, at + reach)
+    gap = max(_segment_distance(p, piece) for p in leg.line) - main_half - side_half
+    return gap < NOSE_W_M
+
+
+def _fork_record(nw: _Network, rt: _Route, i: int, node: int, nb: int, way: int, far: _Leg, side: str,
+                 along: str) -> dict:
+    """What a shallow side road's gore needs (`core.forks`): its leg out to SHALLOW_LEG_M; which way it runs beside
+    the road (`along`); how traffic uses it (`kind`) and the gore between the two roads: `flow`, the way traffic beside
+    the gore runs ("out" from the node or "in"), and `opposing`, whether the gore splits opposing traffic; and the
+    route's own way beside it (`main`, as `ramps.json` has it), whose class and speed space the paint.
+
+    Traffic keeps left. On a two-way road the lane beside the gore is the one on the gore's side: on the road's left,
+    it runs as the route does (out of the node ahead of it, into it behind); on the side road's inner edge, nearest
+    the road, it runs in on a fork to the left ahead (or to the right behind), out otherwise. `kind`: `two_way`; a
+    one-way side road running with the traffic beside it, `diverge` (out) or `merge` (in); or one running against it,
+    `split` (a divided road's other carriageway where it splits off)."""
+    one_way = nw.one_way.get(frozenset((node, nb)))
+    left_ahead = (side == "left") == (along == "ahead")
+    if one_way is None:
+        side_flow = "in" if left_ahead else "out"
+    else:
+        side_flow = "out" if one_way[0] == node else "in"
+    main_way, main_flow = _route_way(nw, rt, i, along)
+    if main_flow is None:
+        main_flow = "out" if left_ahead else "in"
+    if one_way is None:
+        kind = "two_way"
+    elif side_flow == main_flow:
+        kind = "diverge" if side_flow == "out" else "merge"
+    else:
+        kind = "split"
+    main = {}
+    if main_way is not None:
+        t = nw.tags(main_way)
+        main = {"way_id": nw.ways[main_way]["id"], "highway": t.get("highway"), "maxspeed": t.get("maxspeed"),
+                "oneway": t.get("oneway"), "lane_markings": t.get("lane_markings")}
+    return {"kind": kind, "along": along, "flow": main_flow, "opposing": side_flow != main_flow, "main": main,
+            "length_m": round(float(cumulative(far.line)[-1]), 1), "ends": far.ends, "way_ids": [
+                nw.ways[w]["id"] for w in far.ways], "line": np.round(far.line, 2).tolist()}
+
+
 def find(net, route_xy: np.ndarray, *, leg_m: float = LEG_M, to_lonlat=None) -> dict:
     """The junctions and roundabouts along a routed polyline: the content of junctions.json.
 
@@ -332,6 +460,7 @@ def find(net, route_xy: np.ndarray, *, leg_m: float = LEG_M, to_lonlat=None) -> 
     rings = _rings(nw, rt)
     ring_node = {n for ring in rings for n in ring["nodes"]}
     elsewhere = nw.ring_nodes - ring_node  # roundabouts the route doesn't drive: a side road stops at one
+    total = float(rt.s[-1])
     found, skipped = [], []
     for i in range(1, len(rt.xy) - 1):  # a side road at the route's very end is closed by its end wall
         node = int(rt.node[i])
@@ -345,9 +474,11 @@ def find(net, route_xy: np.ndarray, *, leg_m: float = LEG_M, to_lonlat=None) -> 
         u_out /= max(float(np.hypot(*u_out)), 1e-9)
         tangent = u_in + u_out if float(np.hypot(*(u_in + u_out))) > 1e-6 else u_out
         for nb, way in nw.adj[node]:
-            if frozenset((node, nb)) in rt.pairs or rt.along_route(here, nw.xy[nb], at) or nw.is_ring(way):
+            if frozenset((node, nb)) in rt.pairs or nw.is_ring(way):
                 continue  # the route itself; or a ring's own way, recorded with its roundabout
             tags = nw.tags(way)
+            if rt.along_route(here, nw.xy[nb], at) and (_spliced(rt, i, nw.xy[nb]) or is_link(tags)):
+                continue  # the route itself, running on past its end; or a slip ramp the route can't see (`core.ramps`)
             leg = nw.walk(node, nb, way, rt.nodes - {node}, leg_m, elsewhere)
             clip = rt.other_part_m(leg.line, here, at)
             if clip is not None and clip < cumulative(leg.line)[-1]:
@@ -355,18 +486,27 @@ def find(net, route_xy: np.ndarray, *, leg_m: float = LEG_M, to_lonlat=None) -> 
             length = float(cumulative(leg.line)[-1])
             direction = _along(leg.line, ANGLE_AT_M) - here
             angle = _wrap(_heading(direction) - _heading(tangent))
-            off = min(abs(_wrap(_heading(direction) - _heading(u_out))),
-                      abs(_wrap(_heading(direction) - _heading(-u_in))))
+            ahead = abs(_wrap(_heading(direction) - _heading(u_out)))
+            behind = abs(_wrap(_heading(direction) - _heading(-u_in)))
+            off = min(ahead, behind)
+            far, onto_ring = None, False
+            if off < SHALLOW_DEG and tags.get("highway") in DRIVABLE:
+                far = _far_leg(nw, rt, node, nb, way, here, at, max(leg_m, SHALLOW_LEG_M), elsewhere)
+                onto_ring = any(n in ring_node for n in far.nodes[1:])
             if tags.get("highway") not in DRIVABLE:
                 reason = "class"
             elif is_private(tags):
                 reason = "private"
             elif _grade_separated_near(nw, leg):
                 reason = "grade_separated"
-            elif any(n in ring_node for n in leg.nodes[1:]):
+            elif any(n in ring_node for n in leg.nodes[1:]) or (off < MIN_ANGLE_DEG and onto_ring):
                 reason = "roundabout"  # an entry or exit of a roundabout the route drives
-            elif off < MIN_ANGLE_DEG:
-                reason = "angle"
+            elif off < MIN_ANGLE_DEG and is_link(tags):
+                reason = "ramp"  # a slip ramp (`core.ramps`)
+            elif off < MIN_ANGLE_DEG and (at < END_CLEAR_M or at > total - END_CLEAR_M):
+                reason = "route_end"
+            elif off < MIN_ANGLE_DEG and _parallel(nw, rt, i, far, way):
+                reason = "parallel"
             elif leg.ends == "meets_route" and length < MIN_LEG_M:
                 reason = "meets_route"
             else:
@@ -379,7 +519,11 @@ def find(net, route_xy: np.ndarray, *, leg_m: float = LEG_M, to_lonlat=None) -> 
                                 "name": tags.get("name"), "reason": reason})
                 continue
             turn = abs(_wrap(_heading(u_out) - _heading(u_in)))
-            found.append({**record, "route_turn_deg": round(turn, 1), **_leg_record(nw, leg, way)})
+            extra = {}
+            if far is not None and not onto_ring:  # one leading onto a ring the route drives gets no gore
+                along = "ahead" if ahead <= behind else "behind"
+                extra = {"fork": _fork_record(nw, rt, i, node, nb, way, far, record["side"], along)}
+            found.append({**record, "route_turn_deg": round(turn, 1), **_leg_record(nw, leg, way), **extra})
     found.sort(key=lambda j: (j["at_m"], j["side"], j["angle_deg"]))
     junctions = [{"id": k, **j} for k, j in enumerate(found)]
     if to_lonlat is not None:
@@ -389,7 +533,8 @@ def find(net, route_xy: np.ndarray, *, leg_m: float = LEG_M, to_lonlat=None) -> 
     return {"version": FORMAT_VERSION,
             "rule": {"leg_m": leg_m, "min_angle_deg": MIN_ANGLE_DEG, "angle_at_m": ANGLE_AT_M, "min_leg_m": MIN_LEG_M,
                      "grade_free_m": GRADE_FREE_M, "classes": sorted(DRIVABLE), "private": sorted(PRIVATE),
-                     "limited_access": sorted(LIMITED_ACCESS)},
+                     "limited_access": sorted(LIMITED_ACCESS), "shallow_deg": SHALLOW_DEG,
+                     "shallow_leg_m": max(leg_m, SHALLOW_LEG_M), "end_clear_m": END_CLEAR_M, "nose_w_m": NOSE_W_M},
             "junctions": junctions,
             "roundabouts": [_ring_record(nw, rt, ring, k, leg_m, elsewhere) for k, ring in enumerate(rings)],
             "skipped": skipped}

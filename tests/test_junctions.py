@@ -138,14 +138,21 @@ def test_a_bridge_counts_only_within_the_first_30_m(bridge_from, counts):
         assert res["skipped"][0]["reason"] == "grade_separated"
 
 
-@pytest.mark.parametrize("deg,counts", [(10.0, False), (168.0, False), (20.0, True), (150.0, True)])
-def test_a_side_road_must_leave_at_least_15_degrees_off_the_road_ahead_and_behind(deg, counts):
-    res = find(network([(500, at_angle(500, deg), {"highway": "unclassified"})]))
-    assert bool(res["junctions"]) == counts
-    if counts:
-        assert res["junctions"][0]["off_mainline_deg"] == pytest.approx(min(deg, 180 - deg), abs=0.5)
-    else:
-        assert res["skipped"][0]["reason"] == "angle"
+@pytest.mark.parametrize("deg,shallow,fork", [(10.0, True, True), (168.0, True, True), (20.0, False, True),
+                                              (150.0, False, False)])
+def test_a_side_road_at_any_angle_is_a_junction_and_one_under_25_degrees_is_followed_150_m(deg, shallow, fork):
+    # Under 15 degrees off the road ahead or behind it's a shallow side road, a fork (`core.forks`): a junction since
+    # the shallow-Y research's Q2; under 25 it's also followed out 150 m for a gore (Q3), its 100 m line as before.
+    res = find(network([(500, at_angle(500, deg, length=200.0), {"highway": "unclassified"})]))
+    (j,) = res["junctions"]
+    assert j["off_mainline_deg"] == pytest.approx(min(deg, 180 - deg), abs=0.5) and res["skipped"] == []
+    assert junctions.is_shallow(j) == shallow and junctions.gore_only(j) == shallow
+    assert j["length_m"] == pytest.approx(100.0) and ("fork" in j) == fork
+    if fork:
+        f = j["fork"]
+        assert f["length_m"] == pytest.approx(150.0) and f["ends"] == "length" and len(f["line"]) >= 2
+        assert f["along"] == ("ahead" if deg < 90 else "behind") and f["kind"] == "two_way" and f["opposing"]
+        assert f["main"]["highway"] == "secondary"
 
 
 def hairpin(gap: float):

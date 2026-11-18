@@ -15,6 +15,7 @@ from mapcreator.config import Settings
 from mapcreator.core import centreline as cl
 from mapcreator.core import crossing_roads as crossing_roads_core
 from mapcreator.core import dem_age
+from mapcreator.core import forks as forks_core
 from mapcreator.core import profile as pf
 from mapcreator.core import ramps as ramps_core
 from mapcreator.core import roundabouts as rb_core
@@ -33,7 +34,8 @@ STUBS = "stubs.json"
 ROUNDABOUTS = "roundabouts.json"
 # The roads crossing the route drawn: under its bridges, and over it on their own (`core.crossing_roads`).
 CROSSING_ROADS = "crossing_roads.json"
-# The slip ramps: their tapers, gores, nose islands and stubs (`core.ramps`).
+# The slip ramps: their tapers, gores, nose islands and stubs (`core.ramps`); and the shallow forks' gore stubs, drawn
+# the same way (`core.forks`, `fork: true`).
 RAMPS = "ramps.json"
 
 
@@ -113,16 +115,26 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     cross_summary = _crossing_roads(work, job, region, c, section, dem)
     # Slip ramps (`core.ramps`), planned after the stubs, rings and crossing roads: each keeps off the stubs and rings,
     # so none of those changes, and off the piers and abutments of the bridges over the route.
-    ramp_summary = None
+    ramp_summary, ramp_plan, fork_summary = None, None, None
     ramp_list = route_stage.ramps(work, job)
     if ramp_list:
         ramp_plan = ramps_core.plan(ramp_list, c, section, dem.sample, width_factor=job.width.factor, layouts=layouts,
                                     junctions=found, stubs_plan=plan["stubs"] if found else [],
                                     rings=ring_plan["roundabouts"] if rings else [], crossing=crossing_roads(work))
-        work.write_json(STAGE, RAMPS, {"version": ramp_plan.pop("version"), "crs": f"EPSG:{region.epsg}", **ramp_plan})
         ramp_summary = {"ramps": len(ramp_plan["ramps"]), "skipped": {}}
         for sk in ramp_plan["skipped"]:
             ramp_summary["skipped"][sk["reason"]] = ramp_summary["skipped"].get(sk["reason"], 0) + 1
+    # Shallow forks (`core.forks`): a gore stub, drawn as a slip ramp is, for each side road under 15 degrees and each
+    # whose stub was too skewed to flare; planned last, keeping off everything above, so none of it changes.
+    fork_plan = forks_core.plan(found, plan if found else None, c, section, dem.sample, width_factor=job.width.factor,
+                                layouts=layouts, rings=ring_plan["roundabouts"] if rings else [],
+                                crossing=crossing_roads(work),
+                                ramps_planned=ramp_plan["ramps"] if ramp_plan is not None else [])
+    doc = forks_core.merged(ramp_plan, fork_plan)
+    if doc is not None:
+        work.write_json(STAGE, RAMPS, {"version": doc.pop("version"), "crs": f"EPSG:{region.epsg}", **doc})
+        if fork_plan is not None:
+            fork_summary = forks_core.summary(doc)
     else:
         (work.stage(STAGE) / RAMPS).unlink(missing_ok=True)
     sources: dict[str, float] = {}
@@ -150,7 +162,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
                      if (style[:-1] == k).any()},
     } | ({"junction_stubs": stub_summary} if stub_summary is not None else {})       | ({"roundabouts": ring_summary} if ring_summary is not None else {}) | (
         {"crossing_roads": cross_summary} if cross_summary is not None else {}) | (
-        {"ramps": ramp_summary} if ramp_summary is not None else {})
+        {"ramps": ramp_summary} if ramp_summary is not None else {}) | (
+        {"forks": fork_summary} if fork_summary is not None else {})
 
 
 def _crossing_roads(work: WorkDir, job: Job, region, c, section: dict, dem) -> dict | None:
@@ -191,10 +204,10 @@ def roundabouts(work: WorkDir, job: Job) -> list[dict]:
 
 
 def ramps(work: WorkDir, job: Job) -> list[dict]:
-    """The slip ramps the section stage planned (`core.ramps`), as ramps.json lists them: none for a job built without
-    junctions, or with none on its route."""
+    """The slip ramps the section stage planned (`core.ramps`), and the shallow forks' gore stubs (`core.forks`), as
+    ramps.json lists them: none for a job built without junctions, or with none on its route."""
     path = work.root / STAGE / RAMPS
-    if not route_stage.ramps(work, job) or not path.exists():
+    if not (route_stage.ramps(work, job) or route_stage.junctions(work, job)) or not path.exists():
         return []
     return work.read_json(STAGE, RAMPS)["ramps"]
 
