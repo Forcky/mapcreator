@@ -525,7 +525,8 @@ def _kn5_checks(rep: Report, path: Path) -> tuple[dict, dict] | None:
 
 
 def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: Path, *,
-                   allow_tight_bends: bool = False, road_radius: tuple[np.ndarray, np.ndarray] | None = None) -> None:
+                   allow_tight_bends: bool = False, road_radius: tuple[np.ndarray, np.ndarray] | None = None,
+                   signed_decks: dict[str, float] | None = None) -> None:
     """`road_radius`: the centreline's radius every metre, as (AC x/z points, radii), for the route check. Without
     it (a folder checked on its own) the road's middle is found from the AI file."""
     road = RoadSurface(data["nodes"])
@@ -553,7 +554,7 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
             gap = float(cKDTree(xz).query(spawns, workers=cpus.count())[0].min())
             rep.check(gap >= TRUNK_SPAWN_CLEARANCE_M,
                       f"{label}: {what} colliders at least {TRUNK_SPAWN_CLEARANCE_M:.0f} m from every spawn ({gap:.1f} m)")
-    overhead_checks(rep, label, data, road)
+    overhead_checks(rep, label, data, road, signed_decks)
     for gate in ("AC_AB_START", "AC_AB_FINISH"):
         left, right = dummies.get(f"{gate}_L"), dummies.get(f"{gate}_R")
         if left is None or right is None:
@@ -602,21 +603,47 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
         rep.check(float(fwd @ ai_dir) > 0.8, f"{label}: {name} faces the AI line's direction")
 
 
-def overhead_checks(rep: Report, label: str, data: dict, road: "RoadSurface") -> None:
+def deck_clearance(name: str, signed: dict[str, float] | None, default: float = OVERHEAD_CLEARANCE_M) -> float:
+    """The clearance a deck mesh must keep over the road: `default`, or for a real low bridge drawn at the height its
+    road is signed for, that height (`signed`, by mesh-name prefix: `BRIDGE_X3_`, `RAILBRIDGE_0_`)."""
+    for prefix, value in (signed or {}).items():
+        if name.startswith(prefix):
+            return float(value)
+    return default
+
+
+def _deck_gaps(meshes: list[dict], road: "RoadSurface", signed: dict[str, float] | None,
+               default: float) -> tuple[float, float, float] | None:
+    """Over the road, each deck vertex's height above the road at or under it, against the clearance its deck must
+    keep: (the worst shortfall, that vertex's gap, its deck's clearance), or None where no deck is over the road."""
+    worst = None
+    for m in meshes:
+        need = deck_clearance(m["name"], signed, default)
+        pos = np.unique(m["vertices"]["pos"].astype(float).round(3), axis=0)
+        for p in pos[road.covers(pos[:, [0, 2]])]:
+            h = road.height(p[0], p[2], below=p[1])
+            if h is not None and (worst is None or need - (p[1] - h) > worst[0]):
+                worst = (need - (p[1] - h), p[1] - h, need)
+    return worst
+
+
+def overhead_checks(rep: Report, label: str, data: dict, road: "RoadSurface",
+                    signed: dict[str, float] | None = None) -> None:
     """Every deck over the road (footbridges and rail bridges, `core.rail_and_paths`) clears it by
-    OVERHEAD_CLEARANCE_M: each deck vertex over the road, its height above the road there."""
+    OVERHEAD_CLEARANCE_M, or a real low bridge by the height its road is signed for (`signed`, `deck_clearance`):
+    each deck vertex over the road, its height above the road at or under it."""
     decks = [n for n in data["nodes"] if n["class"] == 2 and n["name"].startswith(OVERHEAD_DECKS)
              and "_DECK" in n["name"]]
     if not decks:
         return
-    pos = np.unique(np.concatenate([m["vertices"]["pos"] for m in decks]).astype(float).round(3), axis=0)
-    over = pos[road.covers(pos[:, [0, 2]])]
-    gaps = [p[1] - h for p in over if (h := road.height(p[0], p[2])) is not None]
-    if not gaps:
+    worst = _deck_gaps(decks, road, signed, OVERHEAD_CLEARANCE_M)
+    if worst is None:
         rep.passed.append(f"{label}: {len(decks)} deck meshes over the route, none over the road itself")
         return
-    rep.check(min(gaps) >= OVERHEAD_CLEARANCE_M - OVERHEAD_TOLERANCE_M,
-              f"{label}: decks over the road clear it by at least {OVERHEAD_CLEARANCE_M} m ({min(gaps):.2f} m)")
+    _, gap, need = worst
+    rep.check(worst[0] <= OVERHEAD_TOLERANCE_M,
+              f"{label}: decks over the road clear it by at least {OVERHEAD_CLEARANCE_M} m, or the height their road "
+              f"is signed for ({gap:.2f} m at the worst, against {need:g} m)")
 
 
 class _Cover:
@@ -976,9 +1003,11 @@ def is_mainline_road(name: str) -> bool:
 CROSSING_CLEAR_M = CLEARANCE_M + DECK_DEPTH_M  # a crossing road under the route's road is this far below it or more
 
 
-def crossing_checks(rep: Report, label: str, data: dict, crossing: CrossingCheck | None) -> None:
+def crossing_checks(rep: Report, label: str, data: dict, crossing: CrossingCheck | None,
+                    signed_decks: dict[str, float] | None = None) -> None:
     """Roads crossing the route (`core.crossing_roads`). Each bridge over the route clears its road by CLEARANCE_M
-    everywhere over it (a failure: the plan never draws one lower). Each road drawn under the route's bridge or beyond
+    everywhere over it, or a real low bridge by the height the route is signed for there (`signed_decks`,
+    `deck_clearance`): a failure, as the plan never draws one lower. Each road drawn under the route's bridge or beyond
     a bridge over it is drawn, has no hole round it and no ground over it, as `stub_failures` judges stubs, and none
     stands over or under the route's road within CROSSING_CLEAR_M: warnings, since they're out of reach, and the mesh
     stage has already left out any that overlaps the route's ground."""
@@ -988,13 +1017,11 @@ def crossing_checks(rep: Report, label: str, data: dict, crossing: CrossingCheck
     route = RoadSurface([n for n in nodes if is_mainline_road(n["name"])])
     decks = [n for n in nodes if n["name"].startswith(DECK_MESH)]
     if decks:
-        xyz = np.concatenate([n["vertices"]["pos"] for n in decks]).astype(float)
-        over = xyz[route.covers(xyz[:, [0, 2]])]
-        gaps = [p[1] - h for p in over if (h := route.height(p[0], p[2])) is not None]
-        low = min(gaps) if gaps else np.inf
-        rep.check(low >= CLEARANCE_M - 0.05, f"{label}: {crossing.decks} bridge{'s' if crossing.decks != 1 else ''} "
-                  f"over the route clear its road by {CLEARANCE_M} m or more"
-                  + (f" ({low:.2f} m at the lowest)" if np.isfinite(low) else ""))
+        worst = _deck_gaps(decks, route, signed_decks, CLEARANCE_M)
+        rep.check(worst is None or worst[0] <= 0.05,
+                  f"{label}: {crossing.decks} bridge{'s' if crossing.decks != 1 else ''} over the route clear its road "
+                  f"by {CLEARANCE_M} m or more, or the height it's signed for"
+                  + (f" ({worst[1]:.2f} m at the worst, against {worst[2]:g} m)" if worst is not None else ""))
     if not crossing.roads:
         return
     found = stub_failures(data, list(crossing.roads))
@@ -1093,13 +1120,14 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
                  road_radius: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
                  junctions: list[JunctionCheck] | None = None,
                  roundabouts: list[RoundaboutCheck] | None = None, crossing: CrossingCheck | None = None,
-                 bridges: list[BridgeCheck] | None = None) -> Report:
+                 bridges: list[BridgeCheck] | None = None, signed_decks: dict[str, float] | None = None) -> Report:
     """`road_radius`: by layout label ("main", "forward", "reverse"), the centreline's radius every metre over the
     layout's AI line, as (AC x/z points, radii). The validate stage passes it from the profile, so a bend is judged
     as main's 1 m centreline line judged it. `junctions`: the side roads' junctions, for `junction_checks`, a
     roundabout's exits among them; `roundabouts`: the rings drawn whole, for `roundabout_checks`; `crossing`: the
     roads crossing the route drawn, and the bridges over it, for `crossing_checks`; `bridges`: the route's own
-    bridges, for `bridge_checks`."""
+    bridges, for `bridge_checks`; `signed_decks`: the decks drawn at the height their road is signed for, under 4.6 m,
+    by mesh-name prefix (`deck_clearance`)."""
     rep = Report()
     tid = track_dir.name
     kn5_materials: set[str] = set()
@@ -1149,13 +1177,14 @@ def track_folder(track_dir: Path, *, allow_tight_bends: bool = False,
         if datas:
             merged = {"nodes": [n for d in datas for n in d["nodes"]], "materials": datas[0]["materials"]}
             _layout_checks(rep, label, merged, all_dummies, base / "ai" / "fast_lane.ai",
-                           allow_tight_bends=allow_tight_bends, road_radius=(road_radius or {}).get(label))
+                           allow_tight_bends=allow_tight_bends, road_radius=(road_radius or {}).get(label),
+                           signed_decks=signed_decks)
             # Every layout's KN5 holds the same meshes; only the gates differ.
             junction_checks(rep, label, merged, all_dummies, junctions or [], meshes=lay == layouts[0])
             closure_checks(rep, label, merged, all_dummies, junctions or [], meshes=lay == layouts[0])
             if lay == layouts[0]:
                 roundabout_checks(rep, label, merged, roundabouts or [])
-                crossing_checks(rep, label, merged, crossing)
+                crossing_checks(rep, label, merged, crossing, signed_decks)
                 ground_checks(rep, label, merged)
                 bridge_checks(rep, label, merged, bridges or [])
     for rel in ("ATTRIBUTION.txt", "centreline.geojson", "extension/ext_config.ini"):

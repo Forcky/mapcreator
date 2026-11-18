@@ -314,8 +314,18 @@ def test_a_footbridge_the_dem_cannot_place_is_left_out_unless_the_road_is_signed
     top = v[:, 1].max()
     assert top == pytest.approx(ROAD_Z + 5.3 + rail_and_paths.FOOTBRIDGE.depth_m, abs=0.01)
     assert rec["top_m"][0] == pytest.approx(top - (30 - HALF - 2) / 14, abs=0.2)
-    (low,) = _build([over_crossing(maxheight="3.8")], flat).records
-    assert not low["drawn"] and "signed for 3.8 m" in low["reason"]
+    # Signed under 4.6 m: a real low bridge, drawn at its signed height (the maintainer, 18 Nov 2026), raised to a
+    # thin deck over the road where the DEM can't show it, as a signed footbridge is.
+    built = _build([over_crossing(maxheight="3.8")], flat)
+    (low,) = built.records
+    assert low["drawn"] and low["height_from"] == "signed" and low["clearance_m"] == pytest.approx(3.8)
+    assert low["depth_m"] == rail_and_paths.MIN_DEPTH_M and low["required_clearance_m"] == 3.8
+    assert built.stats["drawn_at_signed_height"] == ["a footbridge, 3.8 m"]
+    v = _deck_vertices(built, "FOOTBRIDGE_0_DECK")
+    assert v[np.abs(v[:, 2]) <= HALF, 1].min() - ROAD_Z == pytest.approx(3.8, abs=0.01)
+    # Under the floor, a sign is taken for a slip: left out, saying so.
+    (slip,) = _build([over_crossing(maxheight="1.5")], flat).records
+    assert not slip["drawn"] and "signed for only 1.5 m" in slip["reason"] and "slip" in slip["reason"]
     # Signed on the other carriageway's way under the same bridge only: the lowest such counts.
     roads = [{"line_at_m": 30.0, "way_id": 1, "angle_deg": 90.0, "route": True, "tags": {"highway": "motorway"}},
              {"line_at_m": 45.0, "way_id": 2, "angle_deg": 90.0, "route": False,
@@ -439,3 +449,82 @@ def test_left_out_structures_over_the_route_are_in_the_build_s_warnings(tmp_path
         "An unnamed footbridge (footbridge) over the route at 0.71 km: the elevation data predates this bridge, so it "
         "isn't drawn (its deck would clear the road by 1.4 m, under 4.6 m; a footbridge's ramps and stairs aren't in "
         "the bare-earth data either)."]
+
+
+# -- real low bridges: drawn at the height the road under them is signed for (the maintainer, 18 Nov 2026) -----------
+
+def test_a_low_rail_bridge_the_dem_agrees_with_keeps_its_top_and_gets_a_thinner_deck():
+    # Inglewood Road under the South Line: the DEM gives 3.6 m under a 1.4 m deck, and the road is signed for 3.8 m.
+    built = _build([over_crossing("railway", maxheight="3.8")], embankment(5.0))
+    (rec,) = built.records
+    assert rec["drawn"] and rec["height_from"] == "signed" and rec["dem_clearance_m"] == pytest.approx(3.6)
+    assert rec["clearance_m"] == pytest.approx(3.8) and rec["depth_m"] == pytest.approx(1.2)
+    assert rec["top_m"] == pytest.approx([105.0, 105.0])  # where the DEM puts it
+    v = _deck_vertices(built, "RAILBRIDGE_0_DECK")
+    over = np.abs(v[:, 2]) <= HALF
+    assert v[over, 1].min() - ROAD_Z == pytest.approx(3.8, abs=0.01)
+    # Signed higher than the DEM shows, but under 4.6 m: as the DEM gives it, which already clears the sign.
+    (as_dem,) = _build([over_crossing("railway", maxheight="3.4")], embankment(5.0)).records
+    assert as_dem["drawn"] and as_dem["height_from"] == "dem_ends" and as_dem["clearance_m"] == pytest.approx(3.6)
+    assert as_dem["required_clearance_m"] == 3.4
+
+
+def test_a_low_rail_bridge_the_dem_puts_too_low_is_raised_and_falls_back_to_its_line_by_its_ends():
+    # Boyer Road under the disused line: signed 4.4 m, the DEM's ends a little low for that.
+    built = _build([over_crossing("railway", maxheight="4.4")], embankment(4.6))
+    (rec,) = built.records
+    assert rec["drawn"] and rec["clearance_m"] == pytest.approx(4.4) and rec["depth_m"] == rail_and_paths.MIN_DEPTH_M
+    assert rec["top_m"] == pytest.approx([104.6, 104.6])  # back on the DEM's line at its ends: the approaches meet it
+    v = _deck_vertices(built, "RAILBRIDGE_0_SOFFIT")  # its underside: level at the sign over the road
+    assert v[np.abs(v[:, 2]) <= HALF, 1] == pytest.approx(ROAD_Z + 4.4, abs=0.01)
+    # Crossing near one end of the bridge, too near to fall back on the deck: its approach carries the rest down.
+    cr = over_crossing("railway", maxheight="4.4", half_len=30.0)
+    cr["structure"]["deck"] = cr["line"] = [[200.0, -5.5], [200.0, 30.0]]
+    cr["structure"]["deck_at_m"] = cr["roads_crossed"][0]["line_at_m"] = 5.5
+    cr["structure"]["approaches"] = [[[200.0, -5.5], [200.0, -45.5]], [[200.0, 30.0], [200.0, 70.0]]]
+    banks = lambda e, n: ROAD_Z + 4.6 * (np.abs(np.asarray(n, float)) > 5.0) + 0 * np.asarray(e)  # noqa: E731
+    built = _build([cr], banks)
+    (near,) = built.records
+    assert near["drawn"] and near["clearance_m"] == pytest.approx(4.4)
+    bank = _deck_vertices(built, "RAILBRIDGE_0_ON_BALLAST")
+    south = bank[bank[:, 2] > 5.5]  # AC z is south: the approach off the deck's raised start
+    assert south[:, 1].max() == pytest.approx(ROAD_Z + 4.4 + rail_and_paths.MIN_DEPTH_M + decks.BALLAST[2], abs=0.05)
+    # Too far from the DEM (more than MAX_RAISE_M): the data's likely older than the bridge, so it's left out.
+    (old,) = _build([over_crossing("railway", maxheight="4.4")], embankment(1.0)).records
+    assert not old["drawn"] and old["reason_code"] == "dem" and "signed for 4.4 m" in old["reason"]
+
+
+def test_the_validator_takes_a_signed_low_deck_s_own_height():
+    road = _node("1ROAD_000", [[-10, 0, -5], [10, 0, -5], [10, 0, 5], [-10, 0, 5]], [[0, 1, 2], [0, 2, 3]])
+    deck = _node("RAILBRIDGE_4_DECK", [[0, 3.8, -1], [1, 3.8, -1], [1, 3.8, 1]], [[0, 1, 2]])
+    data = {"nodes": [road, deck]}
+    surface = validate.RoadSurface(data["nodes"])
+    rep = validate.Report()
+    validate.overhead_checks(rep, "main", data, surface)
+    assert rep.failed  # 4.6 m, as for any deck without a sign
+    rep = validate.Report()
+    validate.overhead_checks(rep, "main", data, surface, {"RAILBRIDGE_4_": 3.8})
+    assert not rep.failed and "against 3.8 m" in rep.passed[0]
+    rep = validate.Report()
+    validate.overhead_checks(rep, "main", data, surface, {"RAILBRIDGE_4_": 4.0})
+    assert rep.failed
+
+
+def test_the_validate_stage_names_the_decks_drawn_at_their_signed_height(tmp_path):
+    work = WorkDir(tmp_path / "w")
+    work.write_json(mesh_stage.STAGE, mesh_stage.RAIL_AND_PATHS, {"version": 1, "structures": [
+        {"structure": "railbridge", "crossing": 4, "drawn": True, "required_clearance_m": 3.8},
+        {"structure": "footbridge", "crossing": 5, "drawn": True, "required_clearance_m": 4.6},
+        {"structure": "footbridge", "crossing": 6, "drawn": False, "reason": "..."}]})
+    work.write_json(mesh_stage.STAGE, mesh_stage.CROSSING_ROADS, {"decks": [
+        {"id": 0, "required_clearance_m": 4.4}, {"id": 1, "required_clearance_m": 4.6}], "roads": []})
+    assert validate_stage.signed_decks(work) == {"RAILBRIDGE_4_": 3.8, "BRIDGE_X0_": 4.4}
+
+
+def test_a_low_deck_is_never_the_road_spawns_gates_and_the_ai_line_are_measured_against():
+    road = _node("1ROAD_000", [[-10, 0, -5], [10, 0, -5], [10, 0, 5], [-10, 0, 5]], [[0, 1, 2], [0, 2, 3]])
+    deck = _node("RAILBRIDGE_4_DECK", [[-10, 2.5, -1], [10, 2.5, -1], [10, 2.5, 1]], [[0, 1, 2]])
+    for name in ("RAILBRIDGE_4_DECK", "FOOTBRIDGE_0_SOFFIT", "BRIDGE_X0_ROAD", "BRIDGE_X0_CONCRETE"):
+        assert not validate.is_road_mesh(name)
+    surface = validate.RoadSurface([road, deck])
+    assert surface.height(0.5, 0.2) == pytest.approx(0.0)  # a spawn or an AI point under the deck: the road's height

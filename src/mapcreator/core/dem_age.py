@@ -34,6 +34,8 @@ from dataclasses import asdict, dataclass, field
 
 import numpy as np
 
+from mapcreator.core.crossings import SIGNED_FLOOR_M, signed_under
+
 FORMAT_VERSION = 1
 FILE = "dem_age.json"  # in the profile stage's folder
 
@@ -89,6 +91,7 @@ class Bridge:
     surveys: list[dict] = field(default_factory=list)  # the LiDAR the DEM holds there, oldest first (if known)
     newer_surveys: list[dict] = field(default_factory=list)  # LiDAR over it the DEM doesn't hold
     surveys_known: bool = False  # whether the DEM said which surveys lie over it (theLIST's index, in Tasmania)
+    signed_m: float | None = None  # the clearance the road under it is signed for, where that's the bar (under 4.6 m)
 
     @property
     def flagged(self) -> bool:
@@ -98,7 +101,8 @@ class Bridge:
         return warning(self.label, coarse=self.verdict == "coarse", detail=self.detail())
 
     def detail(self) -> str:
-        parts = [f"it puts the two roads {self.separation_m:.1f} m apart, where a bridge needs {MIN_CLEARANCE_M:g} m"]
+        bar = f"{self.signed_m:g} m, as its road is signed" if self.signed_m is not None else f"{MIN_CLEARANCE_M:g} m"
+        parts = [f"it puts the two roads {self.separation_m:.1f} m apart, where a bridge needs {bar}"]
         if self.surveys:
             last = self.surveys[-1]
             parts.append(f"its newest LiDAR there is {last['name']}, finished {_month(last['completed'])}")
@@ -241,7 +245,14 @@ def judge(crossings: list[dict], stations: list[float | None], s: np.ndarray, z_
             b.upper_m, b.lower_m = round(upper, 2), round(lower, 2)
             b.separation_m = round(upper - lower, 2)
             on_fine = bool(fine[int(np.argmin(np.abs(s - st)))]) if len(fine) == len(s) else True
-            b.verdict = "holds" if upper - lower >= MIN_CLEARANCE_M else "predates" if on_fine else "coarse"
+            # A road signed under 4.6 m (and over the floor, `crossings.SIGNED_FLOOR_M`) under another road's bridge
+            # is a real low bridge: the sign is the bar.
+            bar = MIN_CLEARANCE_M
+            if relation == "over":
+                signed, _ = signed_under(c)
+                if signed is not None and SIGNED_FLOOR_M <= signed < MIN_CLEARANCE_M:
+                    bar, b.signed_m = signed, signed
+            b.verdict = "holds" if upper - lower >= bar else "predates" if on_fine else "coarse"
         key = (relation, c.get("way_id"), route.get("way_id")) if c.get("way_id") is not None else (relation, i)
         groups.setdefault(key, []).append(b)
     bridges = [_worst(g) for g in groups.values()]

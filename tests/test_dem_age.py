@@ -267,3 +267,17 @@ def test_without_crossings_nothing_is_flagged_and_an_older_profile_stage_gives_n
     out = profile_stage.run(Job(track_id="t", waypoints=HOBART), config.load(), work)
     assert out["bridges_checked"] == 0 and out["dem_warnings"] == []
     assert work.read_json(profile_stage.STAGE, dem_age.FILE)["bridges"] == []
+
+
+def test_a_road_signed_under_4_6_m_under_a_bridge_takes_its_sign_as_the_bar():
+    from mapcreator.core import dem_age
+
+    s = np.arange(0.0, 1001.0)
+    z = np.zeros_like(s)
+    base = {"id": 0, "relation": "over", "bridge": True, "way_id": 7, "name": "High Road", "tags": {},
+            "line": [[500.0, -60.0], [500.0, 60.0]], "line_at_m": 60.0, "way_length_m": 120.0}
+    top = lambda x, y: np.full(np.shape(x), 4.2)  # noqa: E731 - the bridge's ends 4.2 m over the route
+    for maxheight, verdict, bar in ((None, "predates", None), ("3.8", "holds", 3.8), ("1.5", "predates", None)):
+        c = dict(base, route={"way_id": 1, "tunnel": False, **({"maxheight": maxheight} if maxheight else {})})
+        (b,) = dem_age.judge([c], [500.0], s, z, z, np.ones(len(s), bool), top).bridges
+        assert (b.verdict, b.signed_m) == (verdict, bar), maxheight
