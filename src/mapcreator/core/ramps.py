@@ -53,7 +53,10 @@ out any that fail (`settle`).
 flare, is drawn the same way, as a ramps.json record with `fork: true` and its junction's id. Three fields of the
 record it's planned from change how: `end_d_m` ends its stub that far in from the road's edge line (not STUB_M past
 the nose), `opposing` says whether the gore splits opposing traffic (diagonals) and `flow` which way traffic runs
-beside it (the chevrons' points). `plan(planned=)` keeps the forks off the slip ramps already planned.
+beside it (the chevrons' points). `plan(planned=)` keeps the forks off the slip ramps already planned. With
+`full_closure`, a stub too short for its closure's full kit (the second tape and sign 25 m past the obstacle) runs on
+along its line until it has room, standing where `stub_closures.place` puts it (`_closure_short_m`), where its line
+holds it; otherwise it's as it was.
 """
 
 from __future__ import annotations
@@ -68,11 +71,12 @@ from scipy.ndimage import uniform_filter1d
 from scipy.spatial import cKDTree
 
 from mapcreator.core import centreline as cl
+from mapcreator.core import closures
 from mapcreator.core import junctions as jn
 from mapcreator.core import mesh
 from mapcreator.core import roundabouts as rb_core
 from mapcreator.core import section as sec
-from mapcreator.core import stubs
+from mapcreator.core import stub_closures, stubs
 from mapcreator.core import textures
 from mapcreator.core.layout import RoadModel, gate_distances
 from mapcreator.core.scene import LocalFrame, Mesh
@@ -499,6 +503,53 @@ def _candidate(r: dict, m: stubs._Mainline, dem_sample, width_factor: float) -> 
                       kc - k0), None
 
 
+FULL_CLOSURE_TRIES = 3  # rounds of running a stub on until its closure has room for the full kit
+
+
+def _closure_short_m(rec: dict, c, section, tree, extra_road, reverses) -> float:
+    """How much longer a planned ramp's stub must be for its closure to get the full kit (`closures.layout`: the
+    obstacle, then the second tape and sign 25 m beyond it, and FULL_LAYOUT_SPARE_M past that), the closure standing
+    where `stub_closures.place` puts it: its origin, where its tape keeps TAPE_CLEAR_M from the road. 0 where it has
+    room, and for a limited closure, which never has the kit. `extra_road`: the rings' paved outlines, which count as
+    road there too; `reverses`: the layouts, for the overshoot rule."""
+    level = rec.get("closure") if rec.get("closure") in closures.LEVELS else "minor"
+    if level == "limited":
+        return 0.0
+    outline = shapely.Polygon(rec["outline"]).buffer(0)
+    road = stub_closures._road_near(c, section, np.asarray(outline.centroid.coords[0]), tree)
+    if extra_road is not None and not extra_road.is_empty:
+        road = shapely.union(road, extra_road)
+    st = stub_closures._Stub(rec, outline, road, stubs.pose(rec), float(rec["rows"]["half_m"][0]))
+    origin = st.origin()
+    j = {"angle_deg": rec.get("junction_angle_deg") or 0.0, "route_turn_deg": rec.get("route_turn_deg") or 0.0}
+    overshoot = stub_closures.is_overshoot(j, rec, np.asarray(c["s"], float), np.asarray(c["heading"], float),
+                                           reverses)
+    ob = closures.OVERSHOOT_OBSTACLE_M if overshoot else closures.OBSTACLE_M
+    need = ob + closures.WARNING_BEYOND_M + closures.FULL_LAYOUT_SPARE_M
+    return max(need - (float(rec["length_m"]) - origin), 0.0)
+
+
+def _with_room(cand: _Candidate, r: dict, m: stubs._Mainline, dem_sample, width_factor: float, c, section, extra_road,
+               reverses) -> _Candidate:
+    """A fork's gore stub run on along its line (its `end_d_m` moved out) until its closure has room for the full kit
+    (`_closure_short_m`); as it was where it has room already, or where its line runs out first."""
+    reverses = tuple(reverses)
+    short = _closure_short_m(cand.record, c, section, m.tree, extra_road, reverses)
+    if short <= 0.0:
+        return cand
+    end, longer = float(r["end_d_m"]), cand
+    for _ in range(FULL_CLOSURE_TRIES):
+        end += math.ceil(short)
+        again, _ = _candidate({**r, "end_d_m": end}, m, dem_sample, width_factor)
+        if again is None or again.record["length_m"] <= longer.record["length_m"]:
+            break  # its line ends first
+        longer = again
+        short = _closure_short_m(longer.record, c, section, m.tree, extra_road, reverses)
+        if short <= 0.0:
+            return longer
+    return cand
+
+
 def _opposing(r: dict) -> bool:
     """Whether the gore splits opposing traffic (diagonal stripes): a two-way ramp; a fork says so itself
     (`core.forks`)."""
@@ -680,9 +731,12 @@ def plan(ramps: list[dict], c, section, dem_sample, *, width_factor: float = 1.0
     mouths left where they are for the timing gates."""
     m = stubs._Mainline(c, section)
     cands, skipped = [], []
+    extra_road = rb_core.paved(rings) if rings else None
     for r in ramps:
         try:
             cand, why = _candidate(r, m, dem_sample, width_factor)
+            if cand is not None and r.get("full_closure"):
+                cand = _with_room(cand, r, m, dem_sample, width_factor, c, section, extra_road, layouts)
         except shapely.errors.GEOSException:
             cand, why = None, "geometry"
         if cand is None:

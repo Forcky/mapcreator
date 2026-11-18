@@ -16,7 +16,8 @@ from test_ramps import (FRAME, GROUND, HALF, HOBART, IDENT, LINK, _Region, ac_xz
 from test_ramps import ramp as slip_ramp
 
 from mapcreator import config
-from mapcreator.core import (ai_line, forks, junctions, mesh, police_car, ramps, stub_closures, stubs, validate)
+from mapcreator.core import (ai_line, closures, forks, junctions, mesh, police_car, ramps, stub_closures, stubs,
+                             validate)
 from mapcreator.core.layout import RoadModel
 from mapcreator.job import Job
 from mapcreator.pipeline import route_stage, section_stage
@@ -335,6 +336,35 @@ def test_the_checks_pass_and_the_closure_stands_past_the_nose_with_the_kit_its_c
     assert closed.stats["cars"] == 1
     found = stubs.faults([], meshes + terrain, closed.meshes, c, sec, FRAME, extra=checks)
     assert ramps.faults_of(found) == {}
+
+
+def test_a_gore_stub_too_short_for_its_closure_s_full_kit_runs_on_within_its_150_m():
+    # At 7 degrees the nose is about 66 m in from the road's edge: to 100 m in, the closure past it would have no room
+    # for its second tape. The maintainer's answer (18 Nov 2026): run the stub on to 45 m past the closure.
+    j = fork_junction(400.0, 7.0)
+    edge_d = HALF / math.sin(math.radians(7.0))
+    c, sec = road()
+    short = ramps.plan([{**forks.as_ramp(j), "full_closure": False}], c, sec, flat())["ramps"][0]
+    assert short["rows_from_m"] + short["length_m"] == pytest.approx(edge_d + forks.END_D_M, abs=1.5)
+    c, sec, plan, rb, b, meshes, terrain = built([j], dem_h=GROUND - 0.4)
+    (r,) = plan
+    assert r["length_m"] > short["length_m"] + 5 and r["rows_from_m"] + r["length_m"] <= junctions.SHALLOW_LEG_M
+    assert len(r["rows"]["d"]) > len(short["rows"]["d"]) and r["taper"] == short["taper"]  # the gore as it was
+    top = stub_closures.TopSurface(meshes + terrain, FRAME, stub_closures.areas(plan))
+    closed = stub_closures.place(plan, ramps.junctions_for(plan), c, sec, FRAME, top)
+    (rec,) = closed.records
+    assert set(rec["elements"]) == {"tape", "obstacle", "warning"}  # the full kit, past the nose
+    room = r["length_m"] - rec["origin_m"]
+    need = closures.OBSTACLE_M + closures.WARNING_BEYOND_M + closures.FULL_LAYOUT_SPARE_M
+    assert need <= room < need + 1.5 and "warning" in closures.layout("major", length=room)
+    assert "warning" not in closures.layout("major", length=short["length_m"] - rec["origin_m"])
+    found = stubs.faults([], meshes + terrain, closed.meshes, c, sec, FRAME, extra=ramps.checks(plan, c, sec, FRAME))
+    assert ramps.faults_of(found) == {}
+    # At 10 degrees there's room at 100 m in: the stub ends there, as before.
+    _, fp = plan_forks([fork_junction(400.0, 10.0)])
+    ten = fp["ramps"][0]
+    assert ten["rows_from_m"] + ten["length_m"] == pytest.approx(HALF / math.sin(math.radians(10.0)) + 100.0, abs=1.5)
+    # At 6 degrees the room would be past its 150 m line: it ends 100 m in (above), its closure without a second tape.
 
 
 # -- the section stage --------------------------------------------------------------------------------------------------
