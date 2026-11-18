@@ -404,13 +404,64 @@ def test_a_skewed_stub_at_a_sharp_corner_leaves_no_hole_in_the_terrain(x, deg, s
     # And no terrain reaches over the stub's road.
     on_stub = validate._grid_in(paved.buffer(-0.1), 0.61) + [0.0131, 0.0173]
     assert np.isnan(validate._Cover(triangles(meshes, "1GRASS_T")).top(ac_xz(on_stub))).all()
-    # Every edge of the ground the road and its stub take is an edge of a terrain triangle: none reaches across it.
-    footprint = mesh._footprint(rb, b.footprint)[3]
+    # Every edge of the ground the road and its stub take is an edge of a terrain triangle: none reaches across it. (Bar
+    # those at a crossing of two pieces' outlines, which the terrain meets lying over both: the next test.)
+    index, _, _, footprint = mesh._footprint(rb, b.footprint)
     terrain = np.round(triangles(meshes, "1GRASS_T")[:, :, [0, 2]].astype(np.float32), 3)
     have = {frozenset((tuple(p), tuple(q))) for t in terrain.tolist() for p, q in zip(t, t[1:] + t[:1])}
     seg = mesh._outline_segments(footprint)
-    ends = np.round(ac_xz(seg.reshape(-1, 2)).astype(np.float32), 3).reshape(-1, 2, 2)
+    piece = np.array([[(float(x), float(y)) in index for x, y in pair.tolist()] for pair in seg]).all(axis=1)
+    ends = np.round(ac_xz(seg[piece].reshape(-1, 2)).astype(np.float32), 3).reshape(-1, 2, 2)
+    assert piece.sum() > 0.9 * len(seg)
     assert all(frozenset((tuple(p), tuple(q))) in have for p, q in ends.tolist())
+
+
+# Far from the track's origin, where a 32-bit float keeps a point only to about half a millimetre (Esperance Coast
+# Road's junction 006 stands 4.4 km out).
+FAR = LocalFrame(-4000.0, 4400.0, 0.0)
+
+
+@pytest.mark.parametrize("skirt", [True, False])
+@pytest.mark.parametrize("x, deg", [(301.6, 45.0), (300.0, 90.0), (300.0, 145.0)])
+def test_where_a_stub_s_skirt_crosses_the_road_s_the_terrain_meets_both_without_a_crack(x, deg, skirt):
+    """Esperance Coast Road (18 Nov 2026): the hole check found ground missing where a stub's skirt reached over the
+    road's. The terrain had a point on the crossing, which neither skirt has: rounded to 32-bit floats 4.4 km from the
+    origin, its edges and the skirts' no longer met, and cracks a fraction of a millimetre wide opened between them."""
+    c, sec = road()
+    dem = flat(GROUND - 0.4)
+    plan = stubs.plan([junction(x, deg)], c, sec, dem)["stubs"]
+    caps = stubs.mainline_caps(plan, c["xy"], c["heading"])
+    rb = mesh.build_ribbon(c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
+                           sec["slope_left"], sec["slope_right"], dem, skirt_cap_l=caps[0], skirt_cap_r=caps[1])
+    b = stubs.build(plan, rb, c["s"], FAR, dem, skirt=skirt, main_xy=c["xy"])
+    meshes = (mesh.ribbon_meshes(rb, c["s"], FAR, skirt=skirt, cut=b.cut, edge_break=b.edge_break) + b.meshes
+              + mesh.terrain_meshes(rb, 150.0, dem, FAR, fold_skirt=not skirt, extra=b.footprint))
+    index, _, _, footprint = mesh._footprint(rb, b.footprint)
+    # The crossings: the corners of the footprint's outline that no piece has, with the outline's points either side.
+    crossings = []
+    for ring in [footprint.exterior, *footprint.interiors]:
+        pts = np.asarray(ring.coords)[:-1]
+        for k in range(len(pts)):
+            if (float(pts[k, 0]), float(pts[k, 1])) not in index:
+                crossings += [(pts[k], pts[k - 1]), (pts[k], pts[(k + 1) % len(pts)])]
+    assert len(crossings) >= 4  # two skirts crossing, at least
+    # The ground right along the outline out from each crossing, a fifth of a millimetre either side, is all covered.
+    probes = []
+    for at, towards in crossings:
+        d = towards - at
+        across = np.array([-d[1], d[0]]) / np.hypot(*d)
+        for t in np.linspace(0.001, 0.5, 200) / max(float(np.hypot(*d)), 0.5):
+            probes += [at + d * t + across * o for o in (-2e-4, -1e-4, 0.0, 1e-4, 2e-4)]
+    probes = np.array(probes)
+    xz = FAR.to_ac(probes[:, 0], probes[:, 1], np.zeros(len(probes)))[:, [0, 2]]
+    ground = np.concatenate([m.positions.astype(float)[m.triangles] for m in meshes if validate.is_ground_mesh(m.name)])
+    ground = ground[np.hypot(*(ground[:, 0, [0, 2]] - xz.mean(axis=0)).T) < 80.0]
+    assert not np.isnan(validate._Cover(ground).top(xz)).any()
+    # Nor is any crossing a terrain point: there it would meet both skirts' edges in T-junctions.
+    terrain = triangles(meshes, "1GRASS_T").reshape(-1, 3)[:, [0, 2]]
+    terrain = terrain[np.hypot(*(terrain - xz.mean(axis=0)).T) < 80.0]
+    spots = FAR.to_ac(*np.array([at for at, _ in crossings]).T, np.zeros(len(crossings)))[:, [0, 2]]
+    assert np.hypot(*(terrain[:, None, :] - spots[None, :, :]).transpose(2, 0, 1)).min() > 1e-3
 
 
 def test_stub_meshes_are_named_by_surface_and_packed_by_material():
