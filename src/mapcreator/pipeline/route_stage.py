@@ -304,10 +304,29 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
 def _write_crossings(g: osm_graph.RoadGraph, route: osm_graph.Route, region, work: WorkDir) -> dict:
     """Write crossings.json (`core.crossings`) whatever the job's junctions option: the profile is built on it."""
     found = crossings_core.find(g, route.xy, route.seg_way, to_lonlat=region.to_lonlat())
+    _signed_heights(found["crossings"], g, route)
     work.write_json(STAGE, CROSSINGS, {"version": found.pop("version"), "crs": f"EPSG:{region.epsg}", **found})
     return {"crossings": {"over": sum(c["relation"] == "over" for c in found["crossings"]),
                           "under": sum(c["relation"] == "under" for c in found["crossings"]),
                           "unresolved": len(found["unresolved"])}}
+
+
+def _signed_heights(found: list[dict], g: osm_graph.RoadGraph, route: osm_graph.Route) -> None:
+    """Add to each crossing the clearances signed under it (`crossings.signed_under`): the route's own `maxheight`
+    there (`route.maxheight`), and for another road's bridge over it, those of the other roads under that bridge
+    (`maxheight_beside`: the other carriageway's, usually)."""
+    tags = {w["id"]: w.get("tags") or {} for w in g.ways}
+    route_ids = {route.ways[int(w)]["id"] for w in route.seg_way}
+    for c in found:
+        mh = tags.get(c["route"]["way_id"], {}).get("maxheight")
+        if mh is not None:
+            c["route"]["maxheight"] = mh
+        if c["relation"] == "over" and c.get("bridge"):
+            beside = [r["tags"]["maxheight"]
+                      for r in rail_and_paths.roads_crossed(np.asarray(c["line"], float), g, route_ways=route_ids)
+                      if not r["route"] and r["way_id"] != c["way_id"] and "maxheight" in r["tags"]]
+            if beside:
+                c["maxheight_beside"] = beside
 
 
 LINES_MARGIN_DEG = 0.003  # railways and paths are fetched in the route's box with this much more round it

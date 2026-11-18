@@ -550,3 +550,69 @@ def test_the_section_stage_plans_crossing_roads_whatever_the_junctions_option_an
     work.write_json(route_stage.STAGE, route_stage.CROSSINGS, {"version": 1, "crossings": [], "unresolved": []})
     out = section_stage.run(job, config.load(), work)
     assert "crossing_roads" not in out and section_stage.crossing_roads(work) is None
+
+
+# -- a real low bridge: drawn at the height the route is signed for (the maintainer, 18 Nov 2026) ---------------------
+
+def signed_plan(top, maxheight):
+    c, sec = road(z=0.0)
+    ways = [(0.0, 125.0, False), (125.0, 175.0, True), (175.0, 300.0, False)]
+    x = crossing("over", bridge=True, road_ways=ways)
+    x["route"]["maxheight"] = maxheight
+    return cr.plan([x], c, sec, embankment(top, 0.0))
+
+
+def test_a_low_bridge_the_route_is_signed_for_is_drawn_at_that_height_with_a_thinner_deck():
+    p = signed_plan(5.0, "3.8")  # the DEM: 3.7 m under a 1.3 m deck; the sign: 3.8 m
+    (d,) = p["decks"]
+    assert (d["height_from"], d["signed_m"], d["signed_on"], d["required_clearance_m"]) == ("signed", 3.8, "route", 3.8)
+    assert d["clearance_m"] == pytest.approx(3.8, abs=0.01) and d["depth_m"] == pytest.approx(1.2, abs=0.05)
+    assert np.asarray(d["rows"]["z"]) == pytest.approx(5.0, abs=0.05)  # its top where the road's heights put it
+    assert p["skipped"] == [] and len(p["roads"]) == 2
+    (w,) = [w for w in cr.warnings(p) if "drawn over the route" in w]
+    assert "3.8 m clear (drawn at its signed height, 3.8 m)" in w
+    assert cr.summary(p)["drawn_at_signed_height"] == ["Cross Road (secondary) over the route at 0.50 km, 3.8 m"]
+
+
+def test_a_low_bridge_the_road_s_heights_put_too_low_is_raised_over_the_route_and_eases_back_by_its_ends():
+    p = signed_plan(4.0, "3.8")
+    (d,) = p["decks"]
+    assert d["clearance_m"] == pytest.approx(3.8, abs=0.01) and d["depth_m"] == cr.MIN_DEPTH_M
+    assert d["raised_m"] == pytest.approx(0.3, abs=0.05)
+    z = np.asarray(d["rows"]["z"])
+    assert z.max() == pytest.approx(4.0 + d["raised_m"], abs=0.01)
+    assert z[0] == pytest.approx(4.0, abs=0.05) and z[-1] == pytest.approx(4.0, abs=0.05)
+    a0, a1 = p["roads"]  # the road beyond meets it exactly
+    assert a0["rows"]["z"][-1] == pytest.approx(z[0]) and a1["rows"]["z"][0] == pytest.approx(z[-1])
+    # The DEM too far below the sign for any deck: the data's likely older than the bridge.
+    (k,) = signed_plan(1.0, "3.8")["skipped"]
+    assert k["reason"] == "dem_predates" and k["signed_m"] == 3.8
+
+
+def test_a_sign_under_the_floor_is_taken_for_a_slip_and_a_bridge_without_one_is_left_out_as_before():
+    p = signed_plan(5.0, "1.8")
+    (k,) = p["skipped"]
+    assert k["reason"] == "low_clearance" and p["decks"] == []
+    assert "signed for only 1.8 m there: under 2 m, a sign is taken for a slip" in cr.warnings(p)[0]
+    (k,) = signed_plan(5.0, "default")["skipped"]  # not a height
+    assert k["reason"] == "low_clearance" and "signed_m" not in k
+
+
+def test_a_signed_low_deck_passes_the_validator_at_its_own_height_and_its_piers_colliders_stop_under_it():
+    p = signed_plan(4.0, "3.8")
+    c, sec = road(z=0.0)
+    ground = cr.GroundUnderDecks(type("Dem", (), {"sample": staticmethod(embankment(4.0))})(), p["decks"])
+    ms, _ = cr.decks(p, FRAME, ground.sample)
+    rb, _ = route_ground(c, sec, embankment(4.0))
+    data = validate.mesh_nodes(mesh.ribbon_meshes(rb, c["s"], FRAME) + ms)
+    rep = validate.Report()
+    validate.crossing_checks(rep, "main", data, validate.CrossingCheck((), 1))
+    assert rep.failed  # against 4.6 m
+    rep = validate.Report()
+    validate.crossing_checks(rep, "main", data, validate.CrossingCheck((), 1), {"BRIDGE_X0_": 3.8})
+    assert not rep.failed, rep.failed
+    d = p["decks"][0]
+    under = np.asarray(d["rows"]["z"]) - d["depth_m"]
+    for m in ms:
+        if m.name.startswith("1WALL_PIER"):
+            assert m.positions[:, 1].max() <= under.max() - cr.HEADSTOCK[1] + 1e-3

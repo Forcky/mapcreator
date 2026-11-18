@@ -1,0 +1,14 @@
+{
+  "track_id": "low_footbridge_argyle_street",
+  "waypoints": [
+    {
+      "lon": 147.315876,
+      "lat": -42.869841
+    },
+    {
+      "lon": 147.311043,
+      "lat": -42.864014
+    }
+  ],
+  "layouts": "forward"
+}

@@ -1,0 +1,14 @@
+{
+  "track_id": "low_bridges_bridge_road",
+  "waypoints": [
+    {
+      "lon": 147.125137,
+      "lat": -41.43758
+    },
+    {
+      "lon": 147.133220,
+      "lat": -41.439020
+    }
+  ],
+  "layouts": "forward"
+}

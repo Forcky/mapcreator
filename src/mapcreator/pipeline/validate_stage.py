@@ -216,6 +216,26 @@ def _dem_age_warnings(work: WorkDir, covered: set | None = None) -> list[str]:
     return dem_age.Report(bridges, doc.get("not_bridges", 0), doc.get("unmatched", 0)).warnings()
 
 
+def signed_decks(work: WorkDir) -> dict[str, float]:
+    """The decks over the route drawn at the height their road is signed for, under 4.6 m (the maintainer, 18 Nov
+    2026: real low bridges), by mesh-name prefix: the clearance each must keep (`validate.deck_clearance`)."""
+    out: dict[str, float] = {}
+    path = work.root / mesh_stage.STAGE / mesh_stage.CROSSING_ROADS
+    if path.exists():
+        for d in work.read_json(mesh_stage.STAGE, mesh_stage.CROSSING_ROADS).get("decks") or []:
+            need = d.get("required_clearance_m")
+            if need is not None and need < crossing_core.CLEARANCE_M:
+                out[f"{crossing_core.DECK_MESH}{d['id']}_"] = float(need)
+    path = work.root / mesh_stage.STAGE / mesh_stage.RAIL_AND_PATHS
+    if path.exists():
+        for r in work.read_json(mesh_stage.STAGE, mesh_stage.RAIL_AND_PATHS)["structures"]:
+            need = r.get("required_clearance_m")
+            if r["drawn"] and need is not None and need < rail_and_paths.CLEARANCE_M:
+                prefix = "RAILBRIDGE" if r["structure"] == "railbridge" else "FOOTBRIDGE"
+                out[f"{prefix}_{r['crossing']}_"] = float(need)
+    return out
+
+
 STRUCTURE_WORDS = {"footbridge": "footbridge", "railbridge": "rail bridge"}
 
 
@@ -293,7 +313,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     rep = validate.track_folder(work.root / track_stage.STAGE / job.track_id, allow_tight_bends=job.allow_tight_bends,
                                 road_radius=road_radius(job, work),
                                 junctions=junction_checks(job, work) + ring_exits + ramp_checks(job, work),
-                                roundabouts=ring_checks, crossing=crossing_check(work), bridges=bridge_checks(work))
+                                roundabouts=ring_checks, crossing=crossing_check(work), bridges=bridge_checks(work),
+                                signed_decks=signed_decks(work))
     rings = _roundabouts(job, work)
     if rings:
         rep.warnings.append(f"The route passes {len(rings)} roundabout{'s' if len(rings) != 1 else ''} "

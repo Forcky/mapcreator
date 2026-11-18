@@ -14,7 +14,12 @@ The maintainer's answers to the flyovers research (17 Nov 2026):
   the bridge way's own ends (as the route's own bridges do, `profile.fill_runs`), and it's drawn only where its
   underside clears the route by CLEARANCE_M or more, the lowest clearance Australian practice allows on local roads
   (5.4 m on main roads). Otherwise the whole structure is left out, with the reason: where the DEM shows no gap
-  under the bridge, the elevation data predates it.
+  under the bridge, the elevation data predates it. **A real low bridge** (the maintainer, 18 Nov 2026: "drawn at
+  real height for low bridges"): where the route is signed for less than CLEARANCE_M under it (`maxheight`, at least
+  `crossings.SIGNED_FLOOR_M`; `crossings.signed_under`), that's the clearance it must keep. Where the deck's top
+  stands at least MIN_DEPTH_M above that, the deck keeps its top and is thinner (an old low bridge's deck is shallow);
+  else it's raised to a deck MIN_DEPTH_M deep over the route, easing back to the road's own heights by the bridge's
+  ends (so the road beyond it meets it), by no more than MAX_RAISE_M.
 - **The road over the route beyond its bridge** (Q9, "yes"): its surface on the terrain for REACH_M past each end of
   the bridge, built as a road under the route's bridge is, with no closure: it's up on its embankment, out of reach.
 
@@ -45,6 +50,7 @@ from scipy.ndimage import uniform_filter1d
 from scipy.spatial import cKDTree
 
 from mapcreator.core import centreline as cl
+from mapcreator.core import crossings as crossings_core
 from mapcreator.core import dem_age
 from mapcreator.core import junctions as jn
 from mapcreator.core import mesh
@@ -87,6 +93,9 @@ WALL_EMBED_M = 0.3  # walls and colliders reach this far below the ground
 PIER_EMBED_M = 0.5
 PIER_COLLIDER = (-1.0, 3.0)  # a pier's collider, from its ground, as a tree trunk's (`scenery.TRUNK_COLLIDER`)
 MIN_ROWS = 6  # a piece of crossing road with fewer rows (10 m) isn't drawn
+MIN_DEPTH_M = 0.5  # a deck drawn at a signed height under CLEARANCE_M is at least this deep (estimate)
+MAX_RAISE_M = 2.0  # nor is it raised more than this over the road's own heights to reach its signed height
+MAX_EASE_GRADE = 0.25  # nor made to ease back to them more steeply than this
 CLEAR_M = 0.5  # between a crossing road's ground and the route's, a stub's, or another crossing road's, as a stub's
 WINDOW_M = 400.0  # crossing roads' meshes are packed by material per this much of the route, as the stubs' are
 MATCH_M = 50.0  # a crossing is found on the smoothed centreline within this of where its route distance falls
@@ -413,20 +422,53 @@ def _over(group: list[dict], route: _Route, ats: list[float], dem_sample, width_
     under = top - DECK_DEPTH_M
     # The clearance: the deck's underside over the route's road and verges, sampled every half metre.
     pts, _ = _deck_points(xy, hd, half)
-    clearance = np.inf
+    row_of = np.repeat(np.arange(pts.shape[0]), pts.shape[1])
+    on_rows, on_surf = [], []
     for a in ats:
         st, off, inside = route.project(a, pts.reshape(-1, 2))
         on = inside & (np.abs(off) <= route.half_at(st, off) + mesh.VERGE_M) & (np.abs(st - a) <= 150.0)
         if on.any():
-            gaps = np.repeat(under, pts.shape[1])[on] - route.surface(st[on], off[on])
-            clearance = min(clearance, float(gaps.min()))
-    if not np.isfinite(clearance):
+            on_rows.append(row_of[on])
+            on_surf.append(route.surface(st[on], off[on]))
+    if not on_rows:
         return None, [], _skip(crossing, at, "short")
-    if clearance < CLEARANCE_M:
+    on_rows, on_surf = np.concatenate(on_rows), np.concatenate(on_surf)
+    clearance = float((under[on_rows] - on_surf).min())
+    # A real low bridge: the route signed under CLEARANCE_M (and over the floor) under it.
+    signs = [crossings_core.signed_under(c) for c in group]
+    signed, signed_on = min(((v, w) for v, w in signs if v is not None), default=(None, None))
+    low = signed is not None and crossings_core.SIGNED_FLOOR_M <= signed < CLEARANCE_M
+    needed = signed if low else CLEARANCE_M
+    depth, signed_rec = DECK_DEPTH_M, {}
+    if signed is not None:
+        signed_rec = {"signed_m": signed, "signed_on": signed_on}
+    if low and clearance < signed:
+        thin = float((top[on_rows] - on_surf).min()) - signed
+        raised = 0.0
+        if thin >= MIN_DEPTH_M:
+            depth = min(thin, DECK_DEPTH_M)
+        else:
+            raised = MIN_DEPTH_M - thin
+            r0, r1 = int(on_rows.min()), int(on_rows.max())
+            run_a, run_b = float(ss[r0] - ss[0]), float(ss[-1] - ss[r1])
+            if raised > MAX_RAISE_M or raised > MAX_EASE_GRADE * max(min(run_a, run_b), 1e-6):
+                return None, [], _skip(crossing, at, "dem_predates", crossings=ids, clearance_m=clearance,
+                                       dem_gap_m=dem_gap, **signed_rec)
+            # Level over the route, easing back to the road's own heights by the bridge's ends.
+            ease = np.ones(len(ss))
+            ease[:r0] = (ss[:r0] - ss[0]) / max(run_a, 1e-9)
+            ease[r1 + 1:] = (ss[-1] - ss[r1 + 1:]) / max(run_b, 1e-9)
+            top = top + raised * ease
+            depth = MIN_DEPTH_M
+        under = top - depth
+        clearance = float((under[on_rows] - on_surf).min())
+        signed_rec |= {"height_from": "signed", "raised_m": round(raised, 2)}
+    if clearance < needed - 0.005:
         # With no verdict on it, a DEM that shows no gap under the bridge predates it.
         measured = all(r == "measure" for r, _ in flagged)
-        reason = "dem_predates" if measured and dem_gap < MIN_GAP_M else "low_clearance"
-        return None, [], _skip(crossing, at, reason, crossings=ids, clearance_m=clearance, dem_gap_m=dem_gap)
+        reason = "dem_predates" if measured and dem_gap < MIN_GAP_M and signed is None else "low_clearance"
+        return None, [], _skip(crossing, at, reason, crossings=ids, clearance_m=clearance, dem_gap_m=dem_gap,
+                               **signed_rec)
     # The abutments: from the route outwards, where the ground under the deck rises to near its underside, clear of
     # the route's verge.
     ground = np.interp(ss, line.s, raw)
@@ -478,7 +520,8 @@ def _over(group: list[dict], route: _Route, ats: list[float], dem_sample, width_
     deck = {"id": did, "crossings": ids, "station_m": round(at, 2), "label": dem_age.label(crossing, at),
             "way_id": crossing.get("way_id"),
             "name": crossing.get("name"), "highway": crossing.get("highway"), **look,
-            "deck_half_m": round(half, 3), "depth_m": DECK_DEPTH_M, "clearance_m": round(clearance, 2),
+            "deck_half_m": round(half, 3), "depth_m": round(depth, 3), "clearance_m": round(clearance, 2),
+            "required_clearance_m": needed, **signed_rec,
             "dem_gap_m": round(dem_gap, 2), "length_m": round(float(b1 - b0), 1), "rows": deck_rows,
             "abutments": [{"end": "start", "face_row": fa, "end_row": 0},
                           {"end": "end", "face_row": fb, "end_row": len(ss) - 1}],
@@ -540,6 +583,9 @@ def summary(doc: dict) -> dict:
     """What a plan, or the meshes as built, holds, for the stage's summary."""
     out = {"roads": {kind: sum(r["kind"] == kind for r in doc["roads"]) for kind in ("under", "approach")},
            "decks": len(doc["decks"])}
+    signed = [f"{describe(d)}, {d['signed_m']:g} m" for d in doc["decks"] if d.get("height_from") == "signed"]
+    if signed:
+        out["drawn_at_signed_height"] = signed
     if doc.get("skipped"):
         out["skipped"] = {}
         for k in doc["skipped"]:
@@ -577,7 +623,9 @@ def warnings(doc: dict | None, built: dict | None = None) -> list[str]:
     if shown["decks"]:
         out.append(f"{len(shown['decks'])} bridge{'s' if len(shown['decks']) != 1 else ''} drawn over the route, "
                    "visual only, with colliders on their piers and abutments: "
-                   + "; ".join(f"{describe(d)}, {d['clearance_m']:.1f} m clear" for d in shown["decks"]))
+                   + "; ".join(f"{describe(d)}, {d['clearance_m']:.1f} m clear"
+                               + (f" (drawn at its signed height, {d['signed_m']:g} m)"
+                                  if d.get("height_from") == "signed" else "") for d in shown["decks"]))
     # Bridges the elevation data doesn't hold, worded as `dem_age` words them; those that read the same (a highway's two
     # decks over the route) share a line.
     same: dict[tuple, list[dict]] = {}
@@ -587,8 +635,15 @@ def warnings(doc: dict | None, built: dict | None = None) -> list[str]:
             continue
         then = LEFT_OUT[k["relation"]]
         if k["reason"] == "low_clearance":
+            signed = k.get("signed_m")
+            why = ""
+            if signed is not None and signed < crossings_core.SIGNED_FLOOR_M:
+                why = (f" (the route is signed for only {signed:g} m there: under "
+                       f"{crossings_core.SIGNED_FLOOR_M:g} m, a sign is taken for a slip)")
+            elif signed is not None:
+                why = f" (the route is signed for {signed:g} m there)"
             out.append(f"{describe(k)}: its underside would clear the route by only {k['clearance_m']:.1f} m, under "
-                       f"the {CLEARANCE_M:g} m needed, so {then}.")
+                       f"the {CLEARANCE_M:g} m needed{why}, so {then}.")
         else:
             out.append(f"{describe(k)}: {REASONS[k['reason']]}, so {then}.")
     for (name, relation, reason), group in same.items():
@@ -1030,7 +1085,9 @@ def deck_meshes(d: dict, frame: LocalFrame, ground_sample) -> tuple[list[Mesh], 
         beam_lo = under[r] - HEADSTOCK[1]
         for c_xy, gh in zip(cols, g):
             _prism(concrete, frame, c_xy, PIER_R, float(gh) - PIER_EMBED_M, beam_lo)
-            _prism(piers_c, frame, c_xy, PIER_R, float(gh) + PIER_COLLIDER[0], float(gh) + PIER_COLLIDER[1])
+            # No higher than the column: under a low deck, the headstock starts lower than 3 m up.
+            _prism(piers_c, frame, c_xy, PIER_R, float(gh) + PIER_COLLIDER[0],
+                   min(float(gh) + PIER_COLLIDER[1], float(beam_lo)))
         _box(concrete, frame, xy[r], tang[r], (HEADSTOCK[0], 2 * half - 0.4), beam_lo, under[r])
     out = (road.meshes(f"{DECK_MESH}{k}_ROAD", d["style"]) + concrete.meshes(f"{DECK_MESH}{k}_CONCRETE", CONCRETE)
            + soffit.meshes(f"{DECK_MESH}{k}_SOFFIT", SOFFIT) + rail.meshes(f"{DECK_MESH}{k}_RAIL", RAIL_MATERIAL)

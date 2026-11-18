@@ -17,11 +17,20 @@ waterways aren't listed. Coordinates are in the region's projected CRS, as the r
 Today the profile stage reads it: where a road crosses over the route, the bare-earth DEM's embankment beside the
 underpass must not lift the route (`core.profile.humps_under`). The structures to come (decks, piers, the roads
 under the route's bridges) build on the same list.
+
+**Signed clearances.** A road's `maxheight` is the clearance its road authority signs under a bridge: a measured
+height, usually a little under the real one. The route stage records the route's own (`route.maxheight`) and those of
+the other roads under the same bridge (`maxheight_beside`: the other carriageway's, usually), and `signed_under`
+reads them. A bridge over the route whose road is signed under the 4.6 m the elevation data must otherwise show is
+drawn at its signed height (the maintainer, 18 Nov 2026: "drawn at real height for low bridges"): `core.dem_age`
+takes the sign as the bar a bridge must clear, and `core.crossing_roads` and `core.rail_and_paths` draw its deck at
+it. A sign under SIGNED_FLOOR_M is taken for a slip, not a bridge.
 """
 
 from __future__ import annotations
 
 import math
+import re
 
 import numpy as np
 import shapely
@@ -51,6 +60,33 @@ def is_bridge(tags: dict) -> bool:
 
 def is_tunnel(tags: dict) -> bool:
     return not _no(tags.get("tunnel"))
+
+
+# A sign under this is more likely a slip (a width, a car park barrier's height, a typing error) than a bridge a car
+# drives under: a car is about 1.5 m tall, and this leaves half a metre over its roof. Australia's roads have few signs
+# that low (Nov 2026: Tasmania's lowest is 3.8 m; Victoria has one of 1,371 signed roads under 2.0 m, at 1.8 m).
+SIGNED_FLOOR_M = 2.0
+_METRES = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(m|metres?|meters?)?\s*$")
+
+
+def signed_height(value) -> float | None:
+    """A `maxheight` in metres (`3.8`, `3.8 m`), or None: no tag, `default`, `below_default`, or one in feet."""
+    m = _METRES.match(str(value)) if value is not None else None
+    return float(m.group(1)) if m else None
+
+
+def signed_under(crossing: dict) -> tuple[float | None, str | None]:
+    """The clearance the road under a bridge over the route is signed for: the route's own `maxheight` there, else the
+    lowest of the other roads under the same bridge (`maxheight_beside`, or a record's `roads_crossed`), and where it
+    was found ("route" or "another road under the bridge"). (None, None) without one."""
+    own = signed_height((crossing.get("route") or {}).get("maxheight"))
+    if own is not None:
+        return own, "route"
+    beside = list(crossing.get("maxheight_beside") or [])
+    beside += [(r.get("tags") or {}).get("maxheight")
+               for r in crossing.get("roads_crossed") or [] if not r.get("route")]
+    values = [v for v in (signed_height(b) for b in beside) if v is not None]
+    return (min(values), "another road under the bridge") if values else (None, None)
 
 
 def level(tags: dict) -> float:
