@@ -123,9 +123,18 @@ def test_a_point_near_a_long_outline_edge_no_longer_leaves_a_hole_beside_it():
     assert all(frozenset((k, (k + 1) % 4)) in edges for k in range(4))  # every outline edge kept
 
 
-def test_where_two_pieces_outlines_cross_the_terrain_meets_both_at_the_crossing():
-    # Two overlapping squares: the corner of the footprint's outline where their edges cross is neither's vertex. The
-    # terrain takes it as one, at the height of both edges there (the mean), and covers the ground right up to it.
+def _covered(pts, tri, region, footprint):
+    """The terrain covers `region` (no hole), and lies over `footprint` by no more than a sliver (the overlap)."""
+    polys = shapely.polygons(pts[tri])
+    cover = shapely.union_all(polys)
+    assert region.difference(cover).area < 1e-9
+    return cover.intersection(footprint).area
+
+
+def test_where_two_pieces_outlines_cross_the_terrain_stands_just_inside_both():
+    # Two overlapping squares: where their edges cross, the footprint's outline has a corner that's neither's vertex.
+    # A terrain point there would meet both edges in a T-junction, which rounding to 32-bit floats opens into a crack,
+    # so the terrain's point stands CROSSING_INSET_M inside both edges instead, at the mean of their heights there.
     a = np.array([[0.0, 0.0], [6.0, 0.0], [6.0, 6.0], [0.0, 6.0]])
     b = a + [4.0, 3.0]
     ring = np.vstack([a, b])
@@ -133,14 +142,30 @@ def test_where_two_pieces_outlines_cross_the_terrain_meets_both_at_the_crossing(
     corridor = shapely.box(-20.0, -20.0, 30.0, 30.0)
     others = np.array([[-20.0, -20.0], [30.0, -20.0], [30.0, 30.0], [-20.0, 30.0]])
     pts, plain, (pts2, hts2, tri) = _triangulate(ring, others, footprint, corridor)
-    region = corridor.difference(footprint)
-    assert _plan_area(pts2[tri]) == pytest.approx(region.area)
-    new = pts2[len(pts):]
-    assert sorted(map(tuple, new.tolist())) == [(4.0, 6.0), (6.0, 3.0)]
+    over = _covered(pts2, tri, corridor.difference(footprint), footprint)
+    assert 0 < over < 0.2  # slivers 2 cm wide at the most, along the edges either side of each crossing
+    new, new_h = pts2[len(pts):], hts2[len(pts):]
+    inset = mesh.CROSSING_INSET_M
+    order = np.argsort(new[:, 0])
+    assert np.allclose(new[order], [[4 + inset, 6 - inset], [6 - inset, 3 + inset]])
     # (6, 3) is half way along a's edge from point 1 (height 1) to point 2 (height 2), and a third of the way along b's
     # from point 4 (height 4) to point 5 (height 5).
-    at = {tuple(p): h for p, h in zip(new.tolist(), hts2[len(pts):])}
-    assert at[(6.0, 3.0)] == pytest.approx((1.5 + 4 + 1 / 3) / 2)
+    assert new_h[order][1] == pytest.approx((1.5 + 4 + 1 / 3) / 2)
+
+
+def test_a_corner_poking_a_centimetre_into_another_piece_is_the_terrain_s_point_there():
+    # b's left corner pokes 1 cm across a's right edge, so its edges cross a's at (6, 2.99) and (6, 3.01), a centimetre
+    # from the corner: the terrain takes the corner itself, a point b's mesh has, and adds none.
+    a = np.array([[0.0, 0.0], [6.0, 0.0], [6.0, 6.0], [0.0, 6.0]])
+    b = np.array([[5.99, 3.0], [8.0, 1.0], [10.0, 3.0], [8.0, 5.0]])
+    ring = np.vstack([a, b])
+    footprint = shapely.union(shapely.Polygon(a), shapely.Polygon(b))
+    corridor = shapely.box(-20.0, -20.0, 30.0, 30.0)
+    others = np.array([[-20.0, -20.0], [30.0, -20.0], [30.0, 30.0], [-20.0, 30.0]])
+    pts, plain, (pts2, _, tri) = _triangulate(ring, others, footprint, corridor)
+    assert len(pts2) == len(pts)  # no new point
+    assert 4 in np.unique(tri)  # b's corner
+    assert _covered(pts2, tri, corridor.difference(footprint), footprint) < 0.1
 
 
 def test_terrain_no_outline_edge_crosses_is_left_as_delaunay_made_it():

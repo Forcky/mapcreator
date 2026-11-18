@@ -48,8 +48,14 @@ FOLD_FRACTION = 0.8  # skirt may reach at most this share of the local radius on
 OTHER_PART_RATIO = 1.4
 # A corner of the terrain's re-triangulated patches (`_constrain`) this close to one of its points is that point.
 SAME_POINT_M = 1e-6
-# Where two pieces' outlines cross, each piece's edge is followed on to its next point within this (`_outline_heights`).
+# Where two pieces' outlines cross, each piece's edge is followed on to its next point within this (`_crossings`).
 CROSSING_REACH_M = 12.0
+# Where two pieces' outlines cross, the terrain's point stands this far inside both their edges, or takes the nearer
+# edge's end inside the footprint when that's nearer than twice the move (`_crossings`). Rounding to the KN5's 32-bit
+# floats moves a point by up to about 2 mm 30 km from the track's origin, so the inset keeps well clear of that.
+CROSSING_INSET_M = 0.02
+# Where only one edge runs on into the footprint, its end there is taken within this.
+CROSSING_TAKE_M = 2.0
 # Terrain in ground classes (`terrain_meshes(ground=...)`): a class's mesh gathers its triangles from consecutive
 # 400 m chunks until it holds about CLASS_MESH_TRIANGLES, or spans CLASS_MESH_CHUNKS chunks (3.2 km) with at least a
 # quarter of that. So the track has about as many terrain meshes as without classes, not a mesh per class per chunk
@@ -649,11 +655,24 @@ def _outline_segments(footprint: shapely.Geometry) -> np.ndarray:
     return np.concatenate(out)
 
 
-def _outline_heights(footprint: shapely.Geometry, pts: np.ndarray, hts: np.ndarray) -> dict:
-    """Heights for the footprint's outline vertices that aren't among `pts`, by (easting, northing): where two pieces'
-    outlines cross, which neither has as a vertex. Each takes the mean of the two pieces' edges' heights there: the
-    outline reaches it along one piece's edge and leaves along the other's, and each edge runs on to a point of `pts`
-    beyond it (inside the other piece). Where that can't be found, it's interpolated along the outline between the
+def _crossings(footprint: shapely.Geometry, pts: np.ndarray, hts: np.ndarray) -> dict:
+    """Where the terrain meets two pieces whose outlines cross (a stub's skirt reaching over the road's): by the
+    (easting, northing) of each footprint outline vertex that isn't among `pts`, (the point of `pts` the terrain takes
+    there, or None; where else its own point stands; the height at the crossing).
+
+    The crossing is neither piece's vertex. A terrain point on it would meet both pieces' edges in T-junctions, and
+    rounding to the KN5's 32-bit floats opens those into cracks a fraction of a millimetre wide (Esperance Coast Road,
+    18 Nov 2026: one the hole check found). So the terrain goes where it overlaps the pieces instead. The outline
+    reaches the crossing along one piece's edge and leaves along the other's (the next outline vertex, or the next
+    crossing on the same edge, gives each edge's line), and each edge runs on beyond it to its own next point, one of
+    `pts`. Where both run on into the footprint:
+    - within twice the inset below of the nearer of those ends, the terrain takes that end: it shares that whole edge
+      with its piece, and lies over the other by the overlap;
+    - otherwise its point stands CROSSING_INSET_M inside both edges, on the line halving the angle between them.
+    Where only one does (the other's outline doubles back, round a sliver of ground reaching in), the terrain takes
+    its end within CROSSING_TAKE_M. A move that would turn a triangle over is undone (`_place`). The height is the mean
+    of the two edges' heights at the crossing, each along its edge between its points either side. Where an edge's
+    points can't be found, the point stays on the crossing, its height interpolated along the outline between the
     nearest points of `pts`."""
     tree = cKDTree(pts)
     out = {}
@@ -670,24 +689,92 @@ def _outline_heights(footprint: shapely.Geometry, pts: np.ndarray, hts: np.ndarr
             at, h = np.concatenate([at - loop, at, at + loop]), np.tile(h, 3)  # round the ring either way
             for k in np.flatnonzero(~known):
                 x = c[k]
-                edges = []
+                edges = []  # (height at the crossing, the edge's next point beyond it, how far on, its direction)
+                near = np.asarray(tree.query_ball_point(x, CROSSING_REACH_M), dtype=np.int64)
+                v = pts[near] - x
                 for nb in ((k - 1) % len(c), (k + 1) % len(c)):
-                    if not known[nb]:
-                        continue
-                    d = x - c[nb]
-                    length = float(np.hypot(*d))
-                    near = np.asarray(tree.query_ball_point(x, CROSSING_REACH_M), dtype=np.int64)
-                    v = pts[near] - x
-                    along = (v @ d) / max(length, 1e-12)
-                    off = np.abs(v[:, 0] * d[1] - v[:, 1] * d[0]) / max(length, 1e-12)
-                    on = (along > 1e-9) & (off < SAME_POINT_M)  # the same edge, on beyond the crossing
-                    if on.any():
-                        j = int(np.argmin(np.where(on, along, np.inf)))
-                        h0, h1 = hts[idx[nb]], hts[near[j]]
-                        edges.append(h0 + (h1 - h0) * length / (length + along[j]))
-                key = (float(x[0]), float(x[1]))
-                out[key] = float(np.mean(edges)) if edges else float(np.interp(s[k], at, h))
+                    u = (x - c[nb]) / max(float(np.hypot(*(x - c[nb]))), 1e-12)  # along the edge, towards the crossing
+                    along = v @ u
+                    on = np.abs(v[:, 0] * u[1] - v[:, 1] * u[0]) < SAME_POINT_M  # on the edge's line
+                    ahead, behind = on & (along > 1e-9), on & (along < -1e-9)
+                    if ahead.any() and behind.any():
+                        j = int(np.argmin(np.where(ahead, along, np.inf)))
+                        i = int(np.argmax(np.where(behind, along, -np.inf)))
+                        h0, h1 = hts[near[i]], hts[near[j]]
+                        edges.append((h0 + (h1 - h0) * -along[i] / (along[j] - along[i]), int(near[j]),
+                                      float(along[j]), u))
+                height = float(np.mean([e[0] for e in edges])) if edges else float(np.interp(s[k], at, h))
+                take, stand = None, x
+                # The ends the terrain may take: inside the footprint, their edges running to them through it all the
+                # way. Where an edge doesn't (the outline doubles back there, round a sliver of ground reaching in),
+                # only the other end can be taken, and only when it's near.
+                into = [e for e in edges if shapely.contains_xy(footprint, *pts[e[1]])
+                        and shapely.contains(footprint, shapely.LineString([x, pts[e[1]]]))]
+                if into:
+                    _, j, a, _ = min(into, key=lambda e: e[2])
+                    if len(into) == 2:
+                        u1, u2 = into[0][3], into[1][3]
+                        half_sin = float(np.sqrt(max(0.0, (1.0 - float(u1 @ u2)) / 2)))  # sin of half their angle
+                        bisector = u1 + u2
+                        if half_sin > 1e-6 and np.hypot(*bisector) > 1e-6:
+                            step = CROSSING_INSET_M / half_sin
+                            if a <= 2 * step:
+                                take = j
+                            else:
+                                stand = x + bisector / np.hypot(*bisector) * step
+                    elif a <= CROSSING_TAKE_M:
+                        take = j
+                out[(float(x[0]), float(x[1]))] = (take, stand, height)
     return out
+
+
+def _place(pts: np.ndarray, hts: np.ndarray, xy: np.ndarray, made: np.ndarray, new: np.ndarray, crossings: dict,
+           cross_xy: np.ndarray, cross_tri: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The re-triangulated patches' corners that aren't points of `pts` (`new`, indices into the corners of `xy`, (n,
+    3, 2), whose others `made` numbers already): placed as `crossings` says, or, for a point the triangulation made
+    off the outline, left where it is at the height of the plain triangle it's in (`cross_xy`, corners `cross_tri`).
+    Where two crossings on one edge take the same point (a corner of one piece poking through the other's edge), the
+    triangle between them closes up and goes. A crossing whose move would turn one of its triangles over, or flatten
+    it, stays on the crossing. Returns the points and heights, new ones after the others, and the triangles (n, 3)."""
+    flat = xy.reshape(-1, 2)
+    keys = [(float(x), float(y)) for x, y in flat[new].tolist()]
+    order = list(dict.fromkeys(keys))  # each once
+
+    def plain_height(q):
+        a, b, c = cross_xy[:, 0], cross_xy[:, 1], cross_xy[:, 2]
+        v0, v1, v2 = c - a, b - a, q - a
+        den = v0[:, 0] * v1[:, 1] - v1[:, 0] * v0[:, 1]
+        den = np.where(np.abs(den) > 1e-12, den, np.inf)
+        u = (v2[:, 0] * v1[:, 1] - v1[:, 0] * v2[:, 1]) / den
+        v = (v0[:, 0] * v2[:, 1] - v2[:, 0] * v0[:, 1]) / den
+        k = int(np.argmax(np.minimum(np.minimum(u, v), 1 - u - v)))  # the triangle it's in, or nearest to it
+        ha, hb, hc = hts[cross_tri[k]]
+        return float(ha + u[k] * (hc - ha) + v[k] * (hb - ha))
+
+    def signed(q):
+        return ((q[:, 1, 0] - q[:, 0, 0]) * (q[:, 2, 1] - q[:, 0, 1])
+                - (q[:, 2, 0] - q[:, 0, 0]) * (q[:, 1, 1] - q[:, 0, 1]))
+
+    plan = {k: crossings.get(k) or (None, np.asarray(k), plain_height(np.asarray(k))) for k in order}
+    before = signed(xy)
+    numbers = made.copy()
+    while True:
+        added = [k for k in order if plan[k][0] is None]
+        number = {k: len(pts) + n for n, k in enumerate(added)}
+        numbers[new] = [plan[k][0] if plan[k][0] is not None else number[k] for k in keys]
+        at = np.vstack([pts, [plan[k][1] for k in added]]) if added else pts
+        tri = numbers.reshape(-1, 3)
+        closed = (tri[:, 0] == tri[:, 1]) | (tri[:, 1] == tri[:, 2]) | (tri[:, 2] == tri[:, 0])
+        after = signed(at[tri])
+        bad = set(np.flatnonzero(~closed & ((np.sign(after) != np.sign(before)) | (np.abs(after) < 1e-9))).tolist())
+        back = {keys[n] for n in range(len(keys)) if new[n] // 3 in bad}
+        back = [k for k in back if plan[k][0] is not None or not np.array_equal(plan[k][1], np.asarray(k))]
+        if not back:
+            break
+        for k in back:  # on the crossing itself, as the triangulation drew it
+            plan[k] = (None, np.asarray(k), plan[k][2])
+    hts = np.concatenate([hts, [plan[k][2] for k in added]]) if added else hts
+    return at, hts, tri[~closed]
 
 
 def _may_enter(corners: np.ndarray, seg: np.ndarray) -> np.ndarray:
@@ -717,10 +804,10 @@ def _constrain(pts: np.ndarray, hts: np.ndarray, tri: np.ndarray, keep: np.ndarr
 
     So every triangle the outline passes through is taken out, and the ground they covered, less the footprint, is
     triangulated again over its own outline (shapely's constrained Delaunay triangulation): no new points, except
-    where two pieces' outlines cross, at the mean of the two edges' heights there (`_outline_heights`). Returns the
-    points and heights, any new ones after the others, and the triangles. Should GEOS fail on the geometry, the
-    triangles are left as Delaunay made them, and the validator's hole check (`validate.ground_holes`) has the last
-    word."""
+    where two pieces' outlines cross, which the terrain meets overlapping both pieces, never in a T-junction
+    (`_crossings`, `_place`). Returns the points and heights, any new ones after the others, and the triangles. Should
+    GEOS fail on the geometry, the triangles are left as Delaunay made them, and the validator's hole check
+    (`validate.ground_holes`) has the last word."""
     try:
         return _constrained(pts, hts, tri, keep, corridor, footprint)
     except shapely.errors.GEOSException:
@@ -754,15 +841,8 @@ def _constrained(pts, hts, tri, keep, corridor, footprint):
     xy = shapely.get_coordinates(patches).reshape(-1, 4, 2)[:, :3]
     gap, made = cKDTree(pts).query(xy.reshape(-1, 2))
     new = np.flatnonzero(gap > SAME_POINT_M)
-    if len(new):  # where two pieces' outlines cross
-        heights = _outline_heights(footprint, pts, hts)
-        keys = [(float(x), float(y)) for x, y in xy.reshape(-1, 2)[new].tolist()]
-        nearest = dict(zip(keys, made[new].tolist()))  # the nearest point's height, should the outline give none
-        order = list(dict.fromkeys(keys))  # each once
-        number = {k: len(pts) + n for n, k in enumerate(order)}
-        made[new] = [number[k] for k in keys]
-        pts = np.vstack([pts, order])
-        hts = np.concatenate([hts, [heights.get(k, hts[nearest[k]]) for k in order]])
+    if len(new):  # where two pieces' outlines cross (`_crossings`)
+        pts, hts, made = _place(pts, hts, xy, made, new, _crossings(footprint, pts, hts), corners[cross], tri[cross])
     made = made.reshape(-1, 3)
     c = pts[made].mean(axis=1)
     made = made[shapely.contains_xy(corridor, c[:, 0], c[:, 1])]
