@@ -7,7 +7,9 @@ The maintainer accepted every proposal of the shallow-Y research on 18 Nov 2026:
   under about 10 degrees where its edges leave the road's, whatever its angle 15 m out). Every stub drawn today stays
   as it is, and so do the long acute flares drawn today (Q7).
 - **Q3:** such a side road (under `junctions.SHALLOW_DEG`, 25 degrees) is followed out 150 m (junctions.json's
-  `fork`), and its gore stub ends END_D_M in from the road's edge line, not 100 m from its node.
+  `fork`), and its gore stub ends END_D_M in from the road's edge line, not 100 m from its node. Where that leaves its
+  closure too little room for the full kit (the second tape and sign), it ends 45 m past the closure instead, within
+  the 150 m (the maintainer's answer, 18 Nov 2026; `ramps.plan`'s `full_closure`).
 - **Q4, the nose:** a painted gore until the gap between the two roads' edges is 4.5 m, then mown grass joining the two
   verges; no kerb, raised island or crash cushion.
 - **Q5, the paint, by South Australia's rules:** white chevrons where traffic beside the gore runs the same way on
@@ -45,11 +47,12 @@ def wanted(j: dict, skew: set[int]) -> bool:
 
 def as_ramp(j: dict) -> dict:
     """A junction (junctions.json's) as a ramp for `ramps.plan`: its 150 m line, how traffic uses it, the road beside
-    it, where its stub ends, and `fork`."""
+    it, where its stub ends (END_D_M in from the road's edge, or further where its closure needs the room:
+    `full_closure`), and `fork`."""
     f = j["fork"]
     return {**{k: v for k, v in j.items() if k != "fork"}, "line": f["line"], "length_m": f["length_m"],
             "ends": f["ends"], "way_ids": f["way_ids"], "kind": f["kind"], "along": f["along"], "main": f["main"],
-            "flow": f["flow"], "opposing": f["opposing"], "end_d_m": END_D_M, "fork": True}
+            "flow": f["flow"], "opposing": f["opposing"], "end_d_m": END_D_M, "full_closure": True, "fork": True}
 
 
 def candidates(junctions: list[dict], stubs_skipped: list[dict]) -> list[dict]:
