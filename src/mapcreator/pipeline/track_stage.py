@@ -444,8 +444,8 @@ def _write_attribution(track_dir, attributions, title: str, *, power_geojson: bo
 def _write_centreline(track_dir, job: Job, c, sec, region, lonlat, attributions, side_roads=(), rings=(),
                       ramps=()) -> None:
     """The route's centreline (ODbL), each side road's stub (`core.stubs`), each roundabout's ring and exits
-    (`core.roundabouts`) and each slip ramp (`core.ramps`) as features of their own: OSM-derived geometry the track is
-    built from, as `power.geojson` ships the power lines."""
+    (`core.roundabouts`), each slip ramp (`core.ramps`) and each shallow fork's gore stub (`core.forks`) as features of
+    their own: OSM-derived geometry the track is built from, as `power.geojson` ships the power lines."""
     step = 5
     idx = np.arange(0, len(c["s"]), step)
     lon, lat = lonlat.transform(c["xy"][idx, 0], c["xy"][idx, 1])
@@ -504,7 +504,9 @@ def _write_centreline(track_dir, job: Job, c, sec, region, lonlat, attributions,
             "geometry": {"type": "LineString",
                          "coordinates": [[round(float(a), 7), round(float(b), 7), round(float(h), 2)]
                                          for a, b, h in zip(lon, lat, z)]},
-            "properties": {"kind": "ramp", "name": r["name"], "highway": r["highway"], "ramp": r["kind"],
+            # A shallow fork's gore stub (`core.forks`) is a side road's, drawn as a ramp is.
+            "properties": {"kind": "fork" if r.get("fork") else "ramp", "name": r["name"], "highway": r["highway"],
+                           "ramp": r["kind"],
                            "station_m": r["station_m"], "side": r["side"], "width_m": round(r["width_m"], 2),
                            "surface_class": r["surface"], "length_m": r["length_m"], "license": "ODbL-1.0"},
         })

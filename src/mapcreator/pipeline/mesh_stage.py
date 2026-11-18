@@ -64,7 +64,8 @@ RAIL_AND_PATHS = "rail_and_paths.json"
 # The route's own bridges as built (`core.bridges`; the format is in docs/ac-format.md). The track and validate stages
 # read this one.
 BRIDGES = "bridges.json"
-# The slip ramps as built: the section stage's plan less any left out here (`ramps_core.settle`).
+# The slip ramps and the shallow forks' gore stubs (`core.forks`) as built: the section stage's plan less any left out
+# here (`ramps_core.settle`).
 RAMPS = "ramps.json"
 
 log = logging.getLogger(__name__)

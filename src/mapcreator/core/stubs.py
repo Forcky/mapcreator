@@ -23,7 +23,9 @@ junction:
 A stub that would come within a verge of another part of the route is cut short before it; one that would overlap
 a stub already kept is cut short, or with smaller flares left out, keeping major roads, then longer ones, first. A
 stub whose mouth would leave a timing gate nowhere clear to stand (`layout.gate_distances`) is left out. Each one left
-out is listed under `skipped`, with the reason.
+out is listed under `skipped`, with the reason. A shallow side road, under 15 degrees (`junctions.gore_only`), gets no
+stub (`shallow`): it gets a gore stub where it can (`core.forks`, as one too skewed to flare does), and its mouth still
+keeps the timing gates clear.
 
 **Clusters** (`_merge`): a stub that doesn't fit beside the others even with smaller flares, because its mouth shares
 the road's rows with kept stubs on its side, is drawn with them as one cluster where each can keep its own ribbon: their
@@ -730,6 +732,9 @@ def plan(junctions: list[dict], c, section, dem_sample, *, width_factor: float =
     m = _Mainline(c, section)
     cands, skipped = [], []
     for j in junctions:
+        if jn.gore_only(j):  # under 15 degrees: a gore stub where it can be (`core.forks`); its mouth still counts
+            skipped.append({"junction": j["id"], "name": j.get("name"), "reason": "shallow"})
+            continue
         if flare_scale == 1.0:
             cand, why = _drawn(j, m, dem_sample, width_factor)
         else:
