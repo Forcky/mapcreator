@@ -92,8 +92,10 @@ def test_dev_router_preview_says_where_it_turns_back():
     turn = preview["turns_back"]
     assert [turn["lon"], turn["lat"]] == pytest.approx([147.319, -42.80], abs=1e-5)
     assert turn["along_m"] == pytest.approx(good["length_m"], rel=0.01)
-    assert turn["message"].startswith(f"The route turns back on itself {turn['along_m'] / 1000:.1f} km along and "
-                                      f"drives {turn['retraced_m'] / 1000:.1f} km of road twice.")
+    # It turns back at the second point, on an unnamed road: the message names the point.
+    assert turn["message"] == (f"The route turns back on itself at point 2 and drives "
+                               f"{turn['retraced_m'] / 1000:.1f} km of road twice. A track can't go back the way it "
+                               "came: move point 2 onto the road you mean, or remove it.")
 
 
 def test_graphhopper_preview_says_where_it_turns_back():
@@ -104,10 +106,107 @@ def test_graphhopper_preview_says_where_it_turns_back():
                                                     "points": {"type": "LineString", "coordinates": coords}}]})
 
     router = GraphHopperRouter("http://router.example.org:8989/", client=httpx.Client(transport=httpx.MockTransport(handler)))
-    turn = router.preview(HOBART)["turns_back"]
+    # The router turns round 1 km past the start and finish: no point is near the turn, so the message is general.
+    turn = router.preview([Waypoint(lon=147.301, lat=-42.8), Waypoint(lon=147.305, lat=-42.8)])["turns_back"]
     assert [turn["lon"], turn["lat"]] == [147.319, -42.8]
     assert turn["retraced_m"] == pytest.approx(0.009 * 111_320 * np.cos(np.radians(42.8)), rel=0.01)
     assert re.search(r" along and drives 73\d m of road twice\. ", turn["message"])
+
+
+# -- naming the point the route turns back at ------------------------------------------------------------------------
+
+def test_the_message_names_the_point_and_its_side_street():
+    assert route_stage.turns_back_message(64.7, 3298.6, point=4, road="Side Street", side_street=True) == (
+        "Point 5 is in a side street (Side Street), so the route drives 65 m in and back out. Move it onto the road "
+        "you mean, or remove it.")
+    assert route_stage.turns_back_message(64.7, 3298.6, point=4, side_street=True) == (
+        "Point 5 is in a side street, so the route drives 65 m in and back out. Move it onto the road you mean, or "
+        "remove it.")
+    assert route_stage.turns_back_message(140.0, 900.0, point=2, road="Main Road") == (
+        "The route turns back on itself at point 3 (Main Road) and drives 140 m of road twice. A track can't go "
+        "back the way it came: move point 3 onto the road you mean, or remove it.")
+    assert route_stage.turns_back_message(0.0, 80.0, point=1).startswith("The route turns back on itself at point 2. ")
+    # No point near the turn: the general words, as before.
+    assert route_stage.turns_back_message(64.7, 3298.6, **{}) == route_stage.turns_back_message(64.7, 3298.6)
+
+
+def side_street_graph() -> graph.RoadGraph:
+    """A road east along y = 0 with a junction at 100 m, and a 60 m side street north from it."""
+    return graph.build({"elements": [
+        *({"type": "node", "id": i, "lon": x, "lat": y} for i, (x, y) in
+          {1: (0, 0), 2: (100, 0), 3: (200, 0), 4: (100, 60)}.items()),
+        {"type": "way", "id": 10, "nodes": [1, 2, 3], "tags": {"highway": "secondary", "name": "Main Road"}},
+        {"type": "way", "id": 11, "nodes": [2, 4], "tags": {"highway": "residential", "name": "Side Street"}},
+    ]}, IDENT)
+
+
+def test_turn_back_place_finds_the_point_in_a_side_street():
+    points = np.array([[0.0, 0.0], [95.0, 55.0], [200.0, 0.0]])  # the second a few metres off the side street
+    r = graph.route(side_street_graph(), points)
+    back, retraced_m = route_stage.turn_back(r.xy)
+    names = route_stage.segment_names(r)
+    assert route_stage.turn_back_place(r.xy, back, retraced_m, points, names) == {
+        "point": 1, "road": "Side Street", "side_street": True}
+    # Without the roads' names it still names the point, but can't say it's a side street.
+    assert route_stage.turn_back_place(r.xy, back, retraced_m, points) == {"point": 1}
+    # Nor when the route doesn't come back onto the road it left.
+    other = list(names)
+    other[-1] = "Far Road"
+    assert route_stage.turn_back_place(r.xy, back, retraced_m, points, other)["side_street"] is False
+    # No point near the turn: none named, and the message keeps its general words.
+    far = np.array([[0.0, 0.0], [200.0, 0.0]])
+    assert route_stage.turn_back_place(r.xy, back, retraced_m, far, names) == {}
+    assert route_stage.turn_back_place(r.xy, back, retraced_m, None, names) == {}
+
+
+SIDE_STREET_LON = 147.310  # node 6 of straight_road; the side street runs about 55 m north from it
+
+
+def road_with_side_street() -> dict:
+    data = straight_road()
+    data["elements"][-1]["tags"]["name"] = "Main Road"
+    return {"elements": [*data["elements"],
+                         {"type": "node", "id": 50, "lon": SIDE_STREET_LON, "lat": -42.7995},
+                         {"type": "way", "id": 101, "nodes": [6, 50],
+                          "tags": {"highway": "residential", "name": "Side Street"}}]}
+
+
+INTO_THE_SIDE_STREET = [Waypoint(lon=147.301, lat=-42.80), Waypoint(lon=SIDE_STREET_LON, lat=-42.7995),
+                        Waypoint(lon=147.319, lat=-42.80)]
+
+
+def test_the_build_names_the_point_in_a_side_street(tmp_path, monkeypatch):
+    monkeypatch.setattr(route_stage.osm_roads, "for_bbox", lambda bbox, settings: road_with_side_street())
+    with pytest.raises(route_stage.RouteTurnsBack, match=r"^Point 2 is in a side street \(Side Street\), so the "
+                                                         r"route drives 5\d m in and back out\. Move it onto the "
+                                                         r"road you mean, or remove it\.$") as exc:
+        route_stage.run(Job(track_id="side", waypoints=INTO_THE_SIDE_STREET), config.load(), WorkDir(tmp_path / "w"))
+    assert worker.public_error(exc.value) == str(exc.value)
+
+
+def test_dev_router_preview_names_the_point_in_a_side_street():
+    turn = DevRouter(settings=OVERPASS, fetch=lambda q, s: road_with_side_street()).preview(
+        INTO_THE_SIDE_STREET)["turns_back"]
+    assert [turn["lon"], turn["lat"]] == pytest.approx([SIDE_STREET_LON, -42.7995], abs=1e-6)
+    assert re.match(r"^Point 2 is in a side street \(Side Street\), so the route drives 5\d m in and back out\.",
+                    turn["message"])
+
+
+def test_graphhopper_preview_names_the_point_from_its_street_names():
+    # Out along Main Road, 55 m up Side Street to the second point and back, then on along Main Road.
+    coords = [[147.301, -42.8], [147.31, -42.8], [147.31, -42.7995], [147.31, -42.8], [147.319, -42.8]]
+    names = [[0, 1, "Main Road"], [1, 3, "Side Street"], [3, 4, "Main Road"]]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"paths": [{"distance": 1600.0, "details": {"street_name": names},
+                                                    "points": {"type": "LineString", "coordinates": coords}}]})
+
+    router = GraphHopperRouter("http://router.example.org:8989/", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    points = [Waypoint(lon=147.301, lat=-42.8), Waypoint(lon=147.3101, lat=-42.7995), Waypoint(lon=147.319, lat=-42.8)]
+    turn = router.preview(points)["turns_back"]
+    assert [turn["lon"], turn["lat"]] == [147.31, -42.7995]
+    assert re.match(r"^Point 2 is in a side street \(Side Street\), so the route drives 5\d m in and back out\. "
+                    r"Move it onto the road you mean, or remove it\.$", turn["message"])
 
 
 # -- a U-turn through a divided road's median ------------------------------------------------------------------------

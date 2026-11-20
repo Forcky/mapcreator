@@ -23,7 +23,9 @@ exception here carries a message that is safe to show the person using the map.
 
 from __future__ import annotations
 
+import logging
 import re
+import time
 from collections.abc import Callable, Sequence
 from typing import NotRequired, Protocol, TypedDict
 
@@ -41,12 +43,20 @@ from mapcreator.providers.osm import overpass
 from mapcreator.providers.osm import roads as osm_roads
 from mapcreator.regions import REGIONS, OutOfArea, Region, job_region, region_for
 
+log = logging.getLogger(__name__)
+
 __all__ = ["DevRouter", "GraphHopperRouter", "NoRoute", "OutOfArea", "RoutePreview", "Router", "RouterUnavailable",
            "RoutingError", "check_region", "supported_regions"]
 
 
 class RoutingError(Exception):
-    """A routing problem whose message can be shown to the user as is."""
+    """A routing problem whose message can be shown to the user as is. `reason` says what went wrong for the
+    service's log (a status code or an exception's type, never the router's own words, which can carry the points'
+    coordinates)."""
+
+    def __init__(self, message: str = "", *, reason: str | None = None):
+        super().__init__(message)
+        self.reason = reason
 
 
 class NoRoute(RoutingError):
@@ -116,11 +126,12 @@ def check_region(waypoints: Sequence[Waypoint]) -> Region:
 
 def _preview(lon: Sequence[float], lat: Sequence[float], length_m: float, xy: np.ndarray,
              rings: Sequence[dict] = (), names: Sequence[str | None] | None = None,
-             tunnels: Sequence[tuple[float, float]] = ()) -> RoutePreview:
+             tunnels: Sequence[tuple[float, float]] = (), points_xy: np.ndarray | None = None) -> RoutePreview:
     """The preview for the page; `xy` is the same line in the region's metres, to measure any road driven twice.
     `rings`: the roundabouts it drives, as `roundabouts.preview_notes` takes them (`from_m`, `to_m` along `xy`,
     `radius_m`). `names`: the road each segment of `xy` is on, where the router says (`route_stage.u_turn`).
-    `tunnels`: the stretches through a tunnel (from, to, in metres along `xy`)."""
+    `tunnels`: the stretches through a tunnel (from, to, in metres along `xy`). `points_xy`: the person's points in
+    the same metres, so a turn back at one of them names it (`route_stage.turn_back_place`)."""
     out: RoutePreview = {"coordinates": [[round(float(a), 6), round(float(b), 6)] for a, b in zip(lon, lat)],
                          "length_m": round(float(length_m), 1)}
     if rings:
@@ -143,7 +154,9 @@ def _preview(lon: Sequence[float], lat: Sequence[float], length_m: float, xy: np
         along_m = float(cumulative(xy)[back])
         out["turns_back"] = {"lon": round(float(lon[back]), 6), "lat": round(float(lat[back]), 6),
                              "along_m": round(along_m, 1), "retraced_m": round(retraced_m, 1),
-                             "message": route_stage.turns_back_message(retraced_m, along_m)}
+                             "message": route_stage.turns_back_message(
+                                 retraced_m, along_m,
+                                 **route_stage.turn_back_place(xy, back, retraced_m, points_xy, names))}
         return out
     # A U-turn through a divided road's median: refused the same way, though no road is driven twice.
     u = route_stage.u_turn(xy, [(r["from_m"], r["to_m"]) for r in rings], names)
@@ -195,32 +208,37 @@ class DevRouter:
 
     def preview(self, waypoints: Sequence[Waypoint]) -> RoutePreview:
         region = check_region(waypoints)
+        return _logged(waypoints, lambda: self._route(waypoints, region))
+
+    def _route(self, waypoints: Sequence[Waypoint], region: Region) -> RoutePreview:
         lons = [w.lon for w in waypoints]
         lats = [w.lat for w in waypoints]
         if max(lons) - min(lons) > self.MAX_SPAN_DEG or max(lats) - min(lats) > self.MAX_SPAN_DEG:
-            raise NoRoute("The points are too far apart for a preview.")
+            raise NoRoute("The points are too far apart for a preview.", reason="points too far apart")
         m = self.MARGIN_DEG
         bbox = (min(lons) - m, min(lats) - m, max(lons) + m, max(lats) + m)
         settings = self._settings or config.load()
         try:
             data = osm_roads.for_bbox(bbox, settings, fetch=self._fetch)
         except httpx.HTTPError as e:
-            raise RouterUnavailable("The map data service didn't answer. Try again in a minute.") from e
+            raise RouterUnavailable("The map data service didn't answer. Try again in a minute.",
+                                    reason=f"map data: {_failure(e)}") from e
         except osm_roads.INDEX_ERRORS as e:
-            raise RouterUnavailable("The map data isn't available right now. Try again later.") from e
+            raise RouterUnavailable("The map data isn't available right now. Try again later.",
+                                    reason=f"map data: {type(e).__name__}") from e
         to_xy = region.to_xy()
         wx, wy = to_xy.transform(lons, lats)
         try:
             graph = osm_graph.build(data, to_xy)
             route = osm_graph.route(graph, np.column_stack([wx, wy]))
         except osm_graph.RouteError as e:
-            raise NoRoute(_sentence(str(e))) from e
+            raise NoRoute(_sentence(str(e)), reason="no route in the OSM graph") from e
         lon, lat = region.to_lonlat().transform(route.xy[:, 0], route.xy[:, 1])
         # The roundabouts it drives, as the build's route stage records them (`core.junctions`).
         rings = [{"from_m": r["route_from_m"], "to_m": r["route_to_m"], "radius_m": r["radius_m"]}
                  for r in junctions_core.find(graph, route.xy)["roundabouts"] if r["on_route"]]
         return _preview(lon, lat, cumulative(route.xy)[-1], route.xy, rings, route_stage.segment_names(route),
-                        route_stage.tunnel_spans(route))
+                        route_stage.tunnel_spans(route), np.column_stack([wx, wy]))
 
 
 # GraphHopper names the reason for a 400 in hints[].details (Java exception class names).
@@ -254,6 +272,9 @@ class GraphHopperRouter:
 
     def preview(self, waypoints: Sequence[Waypoint]) -> RoutePreview:
         region = check_region(waypoints)
+        return _logged(waypoints, lambda: self._route(waypoints, region))
+
+    def _route(self, waypoints: Sequence[Waypoint], region: Region) -> RoutePreview:
         body = {
             "points": [[w.lon, w.lat] for w in waypoints],  # GraphHopper's POST body takes [lon, lat]
             "profile": self._profile,
@@ -268,12 +289,14 @@ class GraphHopperRouter:
                 self._details = [d for d in self._details if d not in missing] if missing else []
                 r = self._client.post(self._url, json={**body, "details": self._details} if self._details else body)
         except httpx.HTTPError as e:
-            raise RouterUnavailable("The route preview service didn't answer. Try again in a minute.") from e
+            raise RouterUnavailable("The route preview service didn't answer. Try again in a minute.",
+                                    reason=f"router: {_failure(e)}") from e
         if r.status_code == 200:
-            return self._parse(r, region)
+            return self._parse(r, region, waypoints)
         if 400 <= r.status_code < 500:
             raise self._error(r)
-        raise RouterUnavailable("The route preview service is having trouble. Try again in a minute.")
+        raise RouterUnavailable("The route preview service is having trouble. Try again in a minute.",
+                                reason=f"router answered HTTP {r.status_code}")
 
     @staticmethod
     def _lacks_detail(r: httpx.Response) -> bool:
@@ -290,7 +313,7 @@ class GraphHopperRouter:
         return {d.strip() for d in m.group(1).split(",") if d.strip()} if m else set()
 
     @staticmethod
-    def _parse(r: httpx.Response, region: Region) -> RoutePreview:
+    def _parse(r: httpx.Response, region: Region, waypoints: Sequence[Waypoint] = ()) -> RoutePreview:
         try:
             path = r.json()["paths"][0]
             coords = path["points"]["coordinates"]
@@ -298,13 +321,17 @@ class GraphHopperRouter:
             lon = [float(c[0]) for c in coords]
             lat = [float(c[1]) for c in coords]  # a third value, if present, is elevation
         except (ValueError, KeyError, IndexError, TypeError) as e:
-            raise RouterUnavailable("The route preview service sent an answer we couldn't read.") from e
+            raise RouterUnavailable("The route preview service sent an answer we couldn't read.",
+                                    reason=f"router's answer unreadable ({type(e).__name__})") from e
         if len(lon) < 2:
-            raise NoRoute("No drivable route connects these points.")
-        x, y = region.to_xy().transform(lon, lat)
+            raise NoRoute("No drivable route connects these points.", reason="router's path has under 2 points")
+        to_xy = region.to_xy()
+        x, y = to_xy.transform(lon, lat)
         xy = np.column_stack([x, y])
+        points_xy = (np.column_stack(to_xy.transform([w.lon for w in waypoints], [w.lat for w in waypoints]))
+                     if waypoints else None)
         return _preview(lon, lat, length, xy, GraphHopperRouter._rings(path, xy),
-                        GraphHopperRouter._names(path, len(xy) - 1), GraphHopperRouter._tunnels(path, xy))
+                        GraphHopperRouter._names(path, len(xy) - 1), GraphHopperRouter._tunnels(path, xy), points_xy)
 
     @staticmethod
     def _tunnels(path: dict, xy: np.ndarray) -> list[tuple[float, float]]:
@@ -371,8 +398,41 @@ class GraphHopperRouter:
                 if details.endswith(name):
                     index = hint.get("point_index")
                     which = f"Point {index + 1}" if isinstance(index, int) else "One of the points"
-                    return kind(text.format(which=which))
-        return NoRoute("The router couldn't find a route between these points.")
+                    error = kind(text.format(which=which))  # OutOfArea isn't a RoutingError: no reason=
+                    error.reason = f"router answered HTTP {r.status_code}, {name}"
+                    return error
+        return NoRoute("The router couldn't find a route between these points.",
+                       reason=f"router answered HTTP {r.status_code}")
+
+
+def _logged(waypoints: Sequence[Waypoint], route: Callable[[], RoutePreview]) -> RoutePreview:
+    """`route()`, with a WARNING in the service's log when it fails: what went wrong, how long it took, and how
+    many points over how far. Never the points themselves, which can place a person; a preview that works isn't
+    logged at all."""
+    started = time.monotonic()
+    try:
+        return route()
+    except (RoutingError, OutOfArea) as e:  # OutOfArea here is the router's: the region check came first
+        log.warning("route preview failed: %s (%s) after %.1f s; %d points, %.1f km point to point",
+                    type(e).__name__, getattr(e, "reason", None) or "no reason given",
+                    time.monotonic() - started, len(waypoints), _point_to_point_m(waypoints) / 1000)
+        raise
+
+
+def _failure(e: Exception) -> str:
+    """An HTTP client failure for the log, by kind: no URL, which can carry the points."""
+    return "timed out" if isinstance(e, httpx.TimeoutException) else f"no answer ({type(e).__name__})"
+
+
+def _point_to_point_m(waypoints: Sequence[Waypoint]) -> float:
+    """The straight-line distance from each point to the next, added up (metres, on a sphere)."""
+    if len(waypoints) < 2:
+        return 0.0
+    lon = np.radians([w.lon for w in waypoints])
+    lat = np.radians([w.lat for w in waypoints])
+    a = (np.sin(np.diff(lat) / 2) ** 2
+         + np.cos(lat[:-1]) * np.cos(lat[1:]) * np.sin(np.diff(lon) / 2) ** 2)
+    return float((2 * 6_371_008.8 * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))).sum())
 
 
 def _sentence(text: str) -> str:

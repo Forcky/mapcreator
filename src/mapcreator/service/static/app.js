@@ -639,6 +639,8 @@
     state.turnMarker = new maplibregl.Marker({ element: node, anchor: "bottom-left", offset: [6, -6] })
       .setLngLat([turn.lon, turn.lat])
       .addTo(state.map);
+    // Take the person there, as for a tight bend: the spot is often a short way down a side street.
+    state.map.flyTo({ center: [turn.lon, turn.lat], zoom: Math.max(state.map.getZoom(), 15) });
   }
 
   // Warn before anyone submits if no builder has been heard from lately. Nothing to say if this fails.

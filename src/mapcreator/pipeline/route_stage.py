@@ -200,11 +200,81 @@ def u_turn_message(along_m: float) -> str:
             "the road as the route, or finish the track before it turns.")
 
 
-def turns_back_message(retraced_m: float, along_m: float) -> str:
-    """What to tell the person, in the build's words and the preview's."""
+def turns_back_message(retraced_m: float, along_m: float, *, point: int | None = None, road: str | None = None,
+                       side_street: bool = False) -> str:
+    """What to tell the person, in the build's words and the preview's. `point`, `road` and `side_street` are
+    `turn_back_place`'s: with a point, the message names it (1-based, as the map numbers them), so the person
+    knows which one to move."""
     twice = f" and drives {_distance(retraced_m)} of road twice" if retraced_m > RETRACE_LIMIT_M else ""
-    return (f"The route turns back on itself {_distance(along_m)} along{twice}. A track can't go back the way it "
-            "came: move the point near there onto the road you mean, or finish the track before it turns.")
+    if point is None:
+        return (f"The route turns back on itself {_distance(along_m)} along{twice}. A track can't go back the way it "
+                "came: move the point near there onto the road you mean, or finish the track before it turns.")
+    n = point + 1
+    if side_street:
+        street = f" ({road})" if road else ""
+        amount = f" {_distance(retraced_m)}" if retraced_m > RETRACE_LIMIT_M else ""
+        return (f"Point {n} is in a side street{street}, so the route drives{amount} in and back out. Move it onto "
+                "the road you mean, or remove it.")
+    on = f" ({road})" if road else ""
+    return (f"The route turns back on itself at point {n}{on}{twice}. A track can't go back the way it came: move "
+            f"point {n} onto the road you mean, or remove it.")
+
+
+# A point is where the route turns back when the router put it this close to the turn. The router puts each point
+# on the route itself (the build's graph splices it in), so a point in a side street is the turn's very node.
+NEAR_POINT_M = 20.0
+# A side street's junction is this much further from the turn than the road driven twice, at most.
+SIDE_STREET_SLACK_M = 25.0
+
+
+def turn_back_place(xy: np.ndarray, back: int, retraced_m: float, points_xy: np.ndarray | None = None,
+                    names: Sequence[str | None] | None = None) -> dict:
+    """Which of the person's points the route turns back at (`turn_back`'s index `back`), for
+    `turns_back_message`: `point` (0-based), the `road` it's on, and whether that's a `side_street`, the route
+    leaving a road for it and coming straight back onto the same road. Empty when no point is near the turn.
+
+    `points_xy`: the points as the person placed them, in `xy`'s metres. Each is where the router put it, the
+    nearest place on the route, so the nearest place to a point is where the route passes through it.
+    `names`: the road each segment of `xy` is on, where known (OSM names, or GraphHopper's `street_name`)."""
+    xy = np.asarray(xy, dtype=float)
+    if points_xy is None or len(points_xy) == 0 or len(xy) < 2:
+        return {}
+    turn = xy[back]
+    on_route = _nearest_on_line(np.asarray(points_xy, dtype=float), xy)
+    gap = np.hypot(*(on_route - turn).T)
+    point = int(np.argmin(gap))
+    if gap[point] > NEAR_POINT_M:
+        return {}
+    out: dict = {"point": point}
+    if names is None or len(names) != len(xy) - 1:
+        return out
+    names = [n or None for n in names]  # GraphHopper names an unnamed road ""
+    road = names[back - 1] if back > 0 else names[0]
+    out["road"] = road
+    # Back from the turn to where the route came onto this road, and on to where it leaves it.
+    s = cumulative(xy)
+    j0 = back - 1
+    while j0 >= 0 and names[j0] == road:
+        j0 -= 1
+    j1 = back
+    while j1 < len(names) and names[j1] == road:
+        j1 += 1
+    window = retraced_m + SIDE_STREET_SLACK_M
+    came_on = j0 >= 0 and s[back] - s[j0 + 1] <= window
+    went_off = j1 < len(names) and s[j1] - s[back] <= window
+    out["side_street"] = bool(came_on and went_off and names[j0] == names[j1])
+    return out
+
+
+def _nearest_on_line(points: np.ndarray, line: np.ndarray) -> np.ndarray:
+    """The nearest place on the polyline `line` to each of `points`."""
+    a, b = line[:-1], line[1:]
+    ab = b - a
+    length2 = np.maximum((ab * ab).sum(axis=1), 1e-12)
+    t = np.clip(((points[:, None, :] - a[None]) * ab[None]).sum(axis=2) / length2, 0.0, 1.0)  # (points, segments)
+    proj = a[None] + t[..., None] * ab[None]
+    best = np.argmin(np.hypot(*(proj - points[:, None, :]).transpose(2, 0, 1)), axis=1)
+    return proj[np.arange(len(points)), best]
 
 
 def _distance(m: float) -> str:
@@ -254,7 +324,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         raise RouteTooLong(f"The route is {length / 1000:.1f} km; the limit is {job.max_length_km:g} km.")
     back = turn_back(route.xy)
     if back is not None:
-        raise RouteTurnsBack(turns_back_message(back[1], float(cumulative(route.xy)[back[0]])))
+        place = turn_back_place(route.xy, back[0], back[1], np.column_stack([wx, wy]), segment_names(route))
+        raise RouteTurnsBack(turns_back_message(back[1], float(cumulative(route.xy)[back[0]]), **place))
     u = u_turn(route.xy, ring_spans(route), segment_names(route))
     if u is not None:
         raise RouteTurnsBack(u_turn_message(float(cumulative(route.xy)[u])))
