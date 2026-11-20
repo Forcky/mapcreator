@@ -129,3 +129,64 @@ def test_out_of_area_is_rejected_before_any_request():
     with pytest.raises(OutOfArea):
         DevRouter(settings=OVERPASS, fetch=lambda q, s: calls.append(q)).preview([MELBOURNE, HOBART[0]])
     assert calls == []
+
+
+# -- the service's log of previews that fail ---------------------------------------------------------------------
+
+def _router(handler) -> GraphHopperRouter:
+    return GraphHopperRouter("http://router.example.org:8989/", client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+
+def _preview_warnings(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records
+            if r.name == "mapcreator.service.routing" and r.levelname == "WARNING"]
+
+
+def _raise(error):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise error(request)
+    return handler
+
+
+@pytest.mark.parametrize("handler, kind, reason", [
+    (lambda req: httpx.Response(503, text="busy"), RouterUnavailable, "router answered HTTP 503"),
+    (_raise(lambda req: httpx.ReadTimeout("slow", request=req)), RouterUnavailable, "router: timed out"),
+    (_raise(lambda req: httpx.ConnectError("refused", request=req)), RouterUnavailable,
+     "router: no answer (ConnectError)"),
+    (lambda req: httpx.Response(400, json={"message": "Cannot find point 1: -42.8001,147.301", "hints": [
+        {"details": "com.graphhopper.util.exceptions.PointNotFoundException", "point_index": 0}]}),
+     NoRoute, "router answered HTTP 400, PointNotFoundException"),
+    (lambda req: httpx.Response(200, text="not json"), RouterUnavailable, "router's answer unreadable"),
+], ids=["5xx", "timeout", "no connection", "router error", "unreadable"])
+def test_a_failed_preview_is_logged_without_the_points(caplog, handler, kind, reason):
+    with caplog.at_level("WARNING", logger="mapcreator.service.routing"), pytest.raises(kind):
+        _router(handler).preview(HOBART)
+    [line] = _preview_warnings(caplog)
+    assert line.startswith(f"route preview failed: {kind.__name__} ({reason}")
+    assert "; 2 points, 1.5 km point to point" in line
+    # Nothing that could place the person: no coordinates (the router's own message carries them), no URL.
+    assert not any(c in line for c in ("147.", "42.", "router.example.org"))
+
+
+def test_a_preview_that_works_isnt_logged(caplog):
+    coords = [[147.301, -42.8], [147.319, -42.8]]
+    with caplog.at_level("DEBUG", logger="mapcreator.service.routing"):
+        _router(lambda req: httpx.Response(200, json={"paths": [{"distance": 1470.0, "points": {
+            "type": "LineString", "coordinates": coords}}]})).preview(HOBART)
+    assert [r for r in caplog.records if r.name == "mapcreator.service.routing"] == []
+
+
+def test_dev_router_failures_are_logged_too(caplog):
+    def offline(query, settings):
+        raise httpx.ConnectError("offline")
+
+    with caplog.at_level("WARNING", logger="mapcreator.service.routing"), pytest.raises(RouterUnavailable):
+        DevRouter(settings=OVERPASS, fetch=offline).preview(HOBART)
+    [line] = _preview_warnings(caplog)
+    assert line.startswith("route preview failed: RouterUnavailable (map data: no answer (ConnectError))")
+
+
+def test_a_point_out_of_area_is_not_a_router_failure(caplog):
+    with caplog.at_level("WARNING", logger="mapcreator.service.routing"), pytest.raises(OutOfArea):
+        _router(lambda req: httpx.Response(200)).preview([HOBART[0], AUCKLAND])
+    assert _preview_warnings(caplog) == []
