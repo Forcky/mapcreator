@@ -661,3 +661,126 @@ def test_a_pier_keeps_off_a_side_road_s_stub_and_a_roundabout_s_ring():
     assert moved["row"] != pier["row"]
     clear = shapely.Polygon(stub).buffer(cr.PIER_R + cr.PIER_OFF_ROADS_M)
     assert not shapely.intersects_xy(clear, *np.asarray(moved["columns"]).T).any()
+
+
+# -- what a deck's piers and abutments keep off (19 Nov 2026) ----------------------------------------------------------
+
+LONG = [(0.0, 115.0, False), (115.0, 185.0, True), (185.0, 300.0, False)]  # a 70 m bridge: 14 m past each face
+
+
+def box(x0, y0, x1, y1):
+    return np.asarray(shapely.box(x0, y0, x1, y1).exterior.coords)[:-1]
+
+
+def end_of(d, a):
+    """An abutment's ground, its face to where its wing walls stop."""
+    xy = np.asarray(d["rows"]["xy"], float)
+    lo, hi = sorted((a["face_row"], a["end_row"]))
+    return shapely.LineString(xy[lo:hi + 1]).buffer(d["deck_half_m"], cap_style="flat")
+
+
+def test_an_abutment_moves_out_along_the_bridge_off_a_slip_ramp_and_a_road_there_passes_under_its_span():
+    c, sec = road(z=0.0)
+    (before,) = cr.plan([crossing("over", bridge=True, road_ways=LONG)], c, sec, embankment())["decks"]
+    xy = np.asarray(before["rows"]["xy"])
+    assert [xy[a["face_row"], 1] for a in before["abutments"]] == pytest.approx([-21.0, 21.0])
+    # A slip ramp's paved outline beside the route, under the deck just past its north face.
+    ramp = box(480.0, 21.5, 520.0, 24.0)
+    p = cr.plan([crossing("over", bridge=True, road_ways=LONG)], c, sec, embankment(), keep_off=[ramp])
+    (d,) = p["decks"]
+    south, north = d["abutments"]
+    assert south == before["abutments"][0]  # the other end is as it was
+    assert north["end_row"] == len(xy) - 1 and xy[north["face_row"], 1] == pytest.approx(25.0)
+    # The deck's end stands clear of the ramp by OFF_ROADS_M; the ramp is now under its open span.
+    assert not end_of(d, north).intersects(shapely.Polygon(ramp).buffer(cr.OFF_ROADS_M))
+    assert shapely.LineString(xy).buffer(d["deck_half_m"], cap_style="flat").intersects(shapely.Polygon(ramp))
+    assert d["clearance_m"] == pytest.approx(before["clearance_m"])
+
+
+def test_a_deck_with_no_room_for_an_abutment_clear_of_a_road_at_its_end_is_left_out_with_a_warning():
+    c, sec = road(z=0.0)
+    ramp = box(480.0, 21.5, 520.0, 40.0)  # under the whole of the deck's north end, and past it
+    p = cr.plan([crossing("over", bridge=True, road_ways=LONG)], c, sec, embankment(), keep_off=[ramp])
+    assert p["decks"] == [] and p["roads"] == []
+    (k,) = p["skipped"]
+    assert k["reason"] == "no_room" and k["crossings"] == [0]
+    assert cr.warnings(p) == ["Cross Road (secondary) over the route at 0.50 km: one end of its bridge would stand on "
+                              "a road beside the route there (a slip ramp, a side road or a road under the route's "
+                              "bridge), with no room for an abutment clear of it, so its deck is left out."]
+
+
+def two_bridges(other="secondary"):
+    """Cross Road's 70 m bridge, and Other Road's over the route 40 m on at 135 degrees, its north approach passing
+    over Cross Road's north end."""
+    c, sec = road(z=0.0)
+    a = crossing("over", bridge=True, road_ways=LONG)
+    b = crossing("over", x=540.0, deg=135.0, bridge=True, cid=1, way_id=20, name="Other Road", highway=other,
+                 road_ways=[(0.0, 125.0, False), (125.0, 175.0, True), (175.0, 300.0, False)])
+    ground = [embankment(), embankment(x=540.0, deg=135.0, half_gap=14.0)]
+    return cr.plan([a, b], c, sec, lambda x, y: np.maximum(*(g(x, y) for g in ground)))
+
+
+def test_an_abutment_s_wing_walls_stop_short_of_another_bridge_s_approach_drawn_before_or_with_its_own():
+    p = two_bridges()
+    cross, other = p["decks"]
+    assert (cross["name"], other["name"]) == ("Cross Road", "Other Road")
+    north = cross["abutments"][1]
+    xy = np.asarray(cross["rows"]["xy"])
+    assert xy[north["face_row"], 1] == pytest.approx(21.0)  # its face where the ground comes up, as alone
+    assert north["end_row"] < len(xy) - 1  # its walls stop short of the bridge's end
+    approaches = shapely.union_all([shapely.Polygon(r["outline"]) for r in p["roads"] if r["deck"] == other["id"]])
+    assert end_of(cross, north).distance(approaches) > cr.OFF_ROADS_M
+    # A road drawn after it (a minor road) doesn't move it: its approach keeps off the deck's walls instead (`build`).
+    cross, _ = two_bridges("tertiary")["decks"]
+    assert cross["abutments"][1]["end_row"] == len(xy) - 1
+
+
+def test_a_minor_road_s_approach_is_cut_either_side_of_another_bridge_s_abutment():
+    import copy
+
+    c, sec = road(z=0.0)
+    p = over_plan(bridge=(115.0, 185.0))
+    (d,) = p["decks"]
+    # A lane at the abutments' level, east to west across the deck's south end, between its face and its end.
+    lane = copy.deepcopy(p["roads"][0])
+    n = len(lane["rows"]["xy"])
+    xy = np.column_stack([np.linspace(480.0, 520.0, n), np.full(n, -27.0)])
+    lane["rows"] |= {"xy": xy.tolist(), "heading": [0.0] * n}
+    lane |= {"id": 2, "deck": None, "highway": "residential", "rank": cr._rank("residential"), "name": "Side Lane",
+             "way_id": 99, "outline": box(480.0, -27.0 - 3.2, 520.0, -27.0 + 3.2).tolist()}
+    q = dict(p, roads=p["roads"] + [lane])
+    _, ground = route_ground(c, sec, embankment())
+    b = cr.build(q, ground, FRAME, embankment(), skirt=True, others_xy=c["xy"])
+    pieces = [piece for piece in b.pieces if piece["road"] == 2]
+    assert [piece["rows"] for piece in pieces] == [[0, 7], [13, 20]]
+    assert not any(shapely.Polygon(piece["outline"]).intersects(cr.structure(d)) for piece in pieces)
+    # Too short to be drawn either side: left out, saying why.
+    lane = copy.deepcopy(lane)
+    keep = slice(4, 17)
+    lane["rows"] = {k: v[keep] for k, v in lane["rows"].items()}
+    lane["outline"] = box(488.0, -27.0 - 3.2, 512.0, -27.0 + 3.2).tolist()
+    b = cr.build(dict(p, roads=p["roads"] + [lane]), ground, FRAME, embankment(), skirt=True, others_xy=c["xy"])
+    assert all(piece["road"] != 2 for piece in b.pieces)
+    (gone,) = b.left_out
+    assert gone["why"] == "it would run into another bridge's abutment or pier"
+
+
+def test_the_section_stage_keeps_a_deck_s_piers_and_abutments_off_the_slip_ramps_planned_before_it(tmp_path):
+    work = _work(tmp_path, [crossing("over", bridge=True, road_ways=LONG)])
+    job = Job(track_id="t", waypoints=[{"lon": 147.301, "lat": -42.8001}, {"lon": 147.319, "lat": -42.7999}],
+              junctions="none")
+    c, sec = road(z=0.0)
+    section_stage._crossing_roads(work, job, _Region(), c, sec, _Dem())
+    (before,) = section_stage.crossing_roads(work)["decks"]
+    (pier,) = before["piers"]
+    cols = np.asarray(pier["columns"])
+    # A ramp paved where the pier stands, its nose island just past the deck's north face.
+    ramp = {"outline": box(*(cols.min(axis=0) - 1.0), *(cols.max(axis=0) + 1.0)).tolist(),
+            "island": {"outline": box(480.0, 21.5, 520.0, 24.0).tolist()}}
+    section_stage._crossing_roads(work, job, _Region(), c, sec, _Dem(), ramps_planned=[ramp])
+    (d,) = section_stage.crossing_roads(work)["decks"]
+    (moved,) = d["piers"]
+    clear = shapely.Polygon(ramp["outline"]).buffer(cr.PIER_R + cr.PIER_OFF_ROADS_M)
+    assert not shapely.intersects_xy(clear, *np.asarray(moved["columns"]).T).any()
+    assert d["abutments"][0] == before["abutments"][0] and d["abutments"][1] != before["abutments"][1]
+    assert not end_of(d, d["abutments"][1]).intersects(shapely.Polygon(ramp["island"]["outline"]))

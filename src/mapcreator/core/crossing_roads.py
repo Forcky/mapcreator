@@ -41,6 +41,15 @@ stops short of today's embankment either side of it (the route's own open deck, 
 1's work; where the route's ground leaves room under the deck, the road carries on under it). A deck is its own
 visual meshes, `BRIDGE_X<k>_*`, and its colliders, `1WALL_PIER_X<k>` and `1WALL_ABUT_X<k>`. The ground under a deck
 is held below its underside (`GroundUnderDecks`), as `water.lowered` holds it under water.
+
+**What a deck's structure keeps off** (19 Nov 2026; before, an abutment could stand on another road, and the build
+failed validation, or a slip ramp under the deck was left out): the plan places a deck after the side roads' stubs,
+the roundabouts, the slip ramps and the forks' gores, and keeps its piers and abutments off them and off the other
+crossing roads (OFF_ROADS_M). A deck's end, from its abutment's face to the bridge's end, is where the ground rises
+into it, so it keeps off the roads at the route's level (the stubs, rings, ramps and gores, and the roads under the
+route's bridges): its face moves out along the bridge, and a road there passes under its open span. A deck can't
+end on one, so if the face would have to reach the bridge's end, it's left out (`no_room`). Its walls keep off the
+other bridges' approaches, which run at its own level beside it: its wing walls stop short of the bridge's end.
 """
 
 from __future__ import annotations
@@ -101,6 +110,8 @@ MIN_DEPTH_M = 0.5  # a deck drawn at a signed height under CLEARANCE_M is at lea
 MAX_RAISE_M = 2.0  # nor is it raised more than this over the road's own heights to reach its signed height
 MAX_EASE_GRADE = 0.25  # nor made to ease back to them more steeply than this
 PIER_OFF_ROADS_M = 0.5  # a pier's columns stand at least this far off a side road's stub or a roundabout's ring
+OFF_ROADS_M = 0.25  # and an abutment this far off any other road: off it, as the validator asks, with a margin for
+# the built road's few centimetres from its plan (today's abutments stand 0.3 m and more from the roads beside them)
 CLEAR_M = 0.5  # between a crossing road's ground and the route's, a stub's, or another crossing road's, as a stub's
 WINDOW_M = 400.0  # crossing roads' meshes are packed by material per this much of the route, as the stubs' are
 MATCH_M = 50.0  # a crossing is found on the smoothed centreline within this of where its route distance falls
@@ -122,6 +133,8 @@ REASONS = {
     "not_a_bridge": "it isn't mapped as a bridge",
     "long_bridge": "its bridge runs on further than the road data is followed",
     "short": "there's too little of it to draw",
+    "no_room": "one end of its bridge would stand on a road beside the route there (a slip ramp, a side road or a road "
+               "under the route's bridge), with no room for an abutment clear of it",
     "no_elevation": "there's no elevation data along it",
 }
 LEFT_OUT = {"over": "its deck is left out", "under": "the road under it is left out"}
@@ -390,8 +403,11 @@ def _deck_points(xy: np.ndarray, heading: np.ndarray, half: float, step: float =
 
 
 def _over(group: list[dict], route: _Route, ats: list[float], dem_sample, width_factor: float, did: int, rid: int,
-          verdicts: dict | None = None, keep_off: shapely.Geometry | None = None):
-    """A road's bridge over the route, and its approaches, or why it isn't drawn."""
+          verdicts: dict | None = None, keep_off: shapely.Geometry | None = None,
+          beside: shapely.Geometry | None = None, level: shapely.Geometry | None = None):
+    """A road's bridge over the route, and its approaches, or why it isn't drawn. `keep_off`: the ground no pier's
+    column stands on; `beside`: the roads at the route's level, which no deck's end stands on; `level`: the other
+    bridges' approaches, which its abutments' walls keep off (each grown by its clearance, `plan`)."""
     crossing = group[0]
     at = ats[0]
     ids = [c.get("id") for c in group]
@@ -499,6 +515,14 @@ def _over(group: list[dict], route: _Route, ats: list[float], dem_sample, width_
     fa, fb = faces
     if fb - fa < 2:
         fa, fb = 0, len(ss) - 1
+    # Each abutment clear of the other roads: its face moved out along the bridge, its wing walls cut short.
+    abutments = []
+    for end, face, last in (("start", fa, 0), ("end", fb, len(ss) - 1)):
+        fit = _abutment(xy, hd, half, face, last, beside, level)
+        if fit is None:
+            return None, [], _skip(crossing, at, "no_room", crossings=ids)
+        abutments.append({"end": end, "face_row": fit[0], "end_row": fit[1]})
+    fa, fb = abutments[0]["face_row"], abutments[1]["face_row"]
     # Piers: over PIER_SPAN_M between the faces, evenly, each moved along to clear the route's road.
     piers = []
     span_m = float(ss[fb] - ss[fa])
@@ -536,8 +560,7 @@ def _over(group: list[dict], route: _Route, ats: list[float], dem_sample, width_
             "deck_half_m": round(half, 3), "depth_m": round(depth, 3), "clearance_m": round(clearance, 2),
             "required_clearance_m": needed, **signed_rec,
             "dem_gap_m": round(dem_gap, 2), "length_m": round(float(b1 - b0), 1), "rows": deck_rows,
-            "abutments": [{"end": "start", "face_row": fa, "end_row": 0},
-                          {"end": "end", "face_row": fb, "end_row": len(ss) - 1}],
+            "abutments": abutments,
             "piers": piers, "approaches": [], "outline": outline}
     approaches = []
     for a, b in ((max(b0 - REACH_M, 0.0), b0), (b1, min(b1 + REACH_M, float(line.s[-1])))):
@@ -556,6 +579,34 @@ def _over(group: list[dict], route: _Route, ats: list[float], dem_sample, width_
     return deck, approaches, None
 
 
+def _end(xy: np.ndarray, hd: np.ndarray, half: float, a: int, b: int) -> shapely.Geometry:
+    """A deck's plan from row `a` to row `b`; at one row, its end across."""
+    lo, hi = sorted((a, b))
+    if hi > lo:
+        return shapely.LineString(xy[lo:hi + 1]).buffer(half, cap_style="flat")
+    n = cl.normals(np.array([hd[lo]]))[0]
+    return shapely.LineString([xy[lo] - n * half, xy[lo] + n * half]).buffer(ROW_M / 2, cap_style="flat")
+
+
+def _abutment(xy: np.ndarray, hd: np.ndarray, half: float, face: int, last: int, beside: shapely.Geometry | None,
+              level: shapely.Geometry | None) -> tuple[int, int] | None:
+    """Where an abutment fits, as (face row, end row), its face first at `face` and its wing walls running to the
+    bridge's end (`last`). The deck's end, from its face to the bridge's end, keeps off `beside`: the face moves out
+    along the bridge, but not to its end unless it was there already (a deck can't end on a road at the route's
+    level), so None if it can't. The face and wing walls keep off `level`: the wings stop short of the bridge's end,
+    the face moving out only where even the shortest won't fit (at the bridge's end there are no walls)."""
+    out = 1 if last > face else -1
+    for f in range(face, last + out, out) if face != last else [last]:
+        if beside is not None and (f != last or face != last) and beside.intersects(_end(xy, hd, half, f, last)):
+            continue
+        if f == last:
+            return f, last
+        for g in range(last, f, -out):
+            if level is None or not level.intersects(_end(xy, hd, half, f, g)):
+                return f, g
+    return None
+
+
 def plan(crossings: list[dict], c, section, dem_sample, *, width_factor: float = 1.0,
          route_length_m: float | None = None, dem_ages: dict | None = None,
          keep_off: list[np.ndarray] | None = None) -> dict:
@@ -564,39 +615,65 @@ def plan(crossings: list[dict], c, section, dem_sample, *, width_factor: float =
     cross-section's arrays; `route_length_m` the routed polyline's length, to find each crossing on the smoothed
     centreline (its stations drift from the routed line's). `dem_ages`: the profile stage's verdicts on the bridges
     (`core.dem_age`, `02_profile/dem_age.json`). A bridge the elevation data doesn't hold is left out on its word;
-    without a verdict the plan measures the DEM itself. `keep_off`: the side roads' stubs' and the roundabouts' rings'
-    paved outlines (n, 2), which no pier stands on (PIER_OFF_ROADS_M and its radius clear)."""
+    without a verdict the plan measures the DEM itself. `keep_off`: the paved outlines (n, 2) of the roads at the
+    route's level beside it, planned before the crossing roads: the side roads' stubs, the roundabouts' rings, and the
+    slip ramps and the forks' gores with their nose islands. No pier stands on them (PIER_OFF_ROADS_M and its radius
+    clear), nor any deck's end (OFF_ROADS_M clear); nor on the roads under the route's bridges, planned here first.
+    The piers and the abutments' walls keep off the other bridges' approaches too (`_abutment`)."""
     route = _Route(c, section)
     verdicts = {i: b for b in (dem_ages or {}).get("bridges") or [] for i in b.get("crossings") or []}
-    avoid = None
-    if keep_off:
-        avoid = shapely.union_all([shapely.Polygon(o).buffer(PIER_R + PIER_OFF_ROADS_M) for o in keep_off
-                                   if len(o) >= 3])
-        shapely.prepare(avoid)
     scale = float(route.s[-1]) / route_length_m if route_length_m else 1.0
-    roads, decks, skipped = [], [], []
+    under, under_skipped = [], []
     groups: dict[int, list[tuple[dict, float]]] = {}
     for cr in crossings:
         at = route.station(cr, scale)
         if cr.get("relation") == "under":
-            road, skip = _under(cr, route, at, dem_sample, width_factor, len(roads), verdicts)
-            (roads.append(road) if road is not None else skipped.append(skip))
+            road, skip = _under(cr, route, at, dem_sample, width_factor, len(under), verdicts)
+            (under.append(road) if road is not None else under_skipped.append(skip))
         elif cr.get("relation") == "over" and not (cr.get("route") or {}).get("tunnel"):
             groups.setdefault(cr.get("way_id"), []).append((cr, at))
-    for group in groups.values():
-        deck, approaches, skip = _over([g[0] for g in group], route, [g[1] for g in group], dem_sample, width_factor,
-                                       len(decks), len(roads), verdicts, keep_off=avoid)
-        if deck is None:
-            skipped.append(skip)
-            continue
-        decks.append(deck)
-        roads += approaches
+    beside = [np.asarray(o, float) for o in keep_off or [] if len(o) >= 3]
+    beside += [np.asarray(r["outline"], float) for r in under]
+    at_level = _grown(beside, OFF_ROADS_M)
+    # The decks planned once without the other bridges' approaches, then again keeping off those of the decks drawn,
+    # until the decks drawn are the same (an approach's place doesn't depend on its deck's abutments). A deck keeps
+    # off the approaches of the roads the mesh stage draws before or with its own (major roads first); those drawn
+    # after keep off its piers and abutments there (`build`).
+    drawn: dict = {}
+    for _ in range(len(groups) + 1):  # bounded, should two decks' approaches keep each other out by turns
+        roads, decks, skipped = list(under), [], list(under_skipped)
+        for key, group in groups.items():
+            rank = _rank(group[0][0].get("highway"))
+            others = [o for k, (r, outlines) in drawn.items() if k != key and r <= rank for o in outlines]
+            deck, approaches, skip = _over([g[0] for g in group], route, [g[1] for g in group], dem_sample,
+                                           width_factor, len(decks), len(roads), verdicts,
+                                           keep_off=_grown(beside + others, PIER_R + PIER_OFF_ROADS_M),
+                                           beside=at_level, level=_grown(others, OFF_ROADS_M))
+            if deck is None:
+                skipped.append(skip)
+                continue
+            decks.append(deck)
+            roads += approaches
+        now = {d["way_id"]: (_rank(d["highway"]), [np.asarray(r["outline"], float) for r in roads
+                                                  if r.get("deck") == d["id"]]) for d in decks}
+        if now.keys() == drawn.keys():
+            break
+        drawn = now
     return {"version": FORMAT_VERSION,
             "rule": {"reach_m": REACH_M, "deck_edge_m": DECK_EDGE_M, "row_m": ROW_M, "min_gap_m": MIN_GAP_M,
                      "clearance_m": CLEARANCE_M, "deck_depth_m": DECK_DEPTH_M, "kerb_m": KERB_M,
                      "parapet_m": [PARAPET_W, PARAPET_H], "rail_top_m": RAIL_TOP, "pier_span_m": PIER_SPAN_M,
                      "pier_clear_m": PIER_CLEAR_M, "abutment_gap_m": ABUT_GAP_M, "width_factor": width_factor},
             "roads": roads, "decks": decks, "skipped": sorted(skipped, key=lambda k: (k["station_m"], k["crossing"]))}
+
+
+def _grown(outlines: list[np.ndarray], by: float) -> shapely.Geometry | None:
+    """The polygons `outlines` grown by `by`, as one prepared geometry; None with none."""
+    if not outlines:
+        return None
+    geom = shapely.union_all([shapely.Polygon(o).buffer(by) for o in outlines])
+    shapely.prepare(geom)
+    return geom
 
 
 def summary(doc: dict) -> dict:
@@ -796,6 +873,7 @@ def build(doc: dict, taken: shapely.Geometry, frame: LocalFrame, ground_sample, 
 
     roads = sorted(doc["roads"], key=lambda r: (r["rank"], -r["length_m"], r["id"]))
     centres = {r["id"]: np.asarray(r["rows"]["xy"], float) for r in roads}
+    standing = {d["id"]: structure(d) for d in doc.get("decks") or []}
     taken = taken if taken is not None and not taken.is_empty else shapely.Polygon()
     shapely.prepare(taken)
     obstacles = taken
@@ -817,15 +895,25 @@ def build(doc: dict, taken: shapely.Geometry, frame: LocalFrame, ground_sample, 
         shapely.prepare(obstacles)
         sections = shapely.buffer(segs, ROW_M / 2 + CLEAR_M, cap_style="flat")
         blocked = shapely.intersects(sections, obstacles)
+        # An approach keeps its road off the other bridges' piers and abutments: a deck keeps off only the approaches
+        # of the roads drawn before or with its own (`plan`).
+        walled = np.zeros(len(xy), bool)
+        near = [g for k, g in standing.items() if k != r.get("deck") and g is not None]
+        if r["kind"] == "approach" and near:
+            across = shapely.buffer(shapely.linestrings(np.stack([xy - nrm * half, xy + nrm * half], axis=1)),
+                                    ROW_M / 2, cap_style="flat")
+            paved = shapely.intersection(across, shapely.Polygon(r["outline"]).buffer(0))
+            walled = shapely.intersects(paved, shapely.union_all(near)) & ~blocked
         others = [centres[o] for o in centres if o != r["id"]]
         if others_xy is not None and len(others_xy):
             others.append(np.asarray(others_xy, float))
         others_pts = np.vstack(others) if others else np.zeros((0, 2))
         by_route = shapely.intersects(sections, taken)
         why = ("it runs too close beside another road drawn there" if (blocked & ~by_route).any()
+               else "it would run into another bridge's abutment or pier" if walled.any()
                else "there's no room for it beside the route's own ground")
         drawn = False
-        for a, b in _runs(~blocked):
+        for a, b in _runs(~(blocked | walled)):
             if b - a < MIN_ROWS:
                 continue
             sel = slice(a, b)
@@ -878,6 +966,17 @@ def build(doc: dict, taken: shapely.Geometry, frame: LocalFrame, ground_sample, 
              "vertices": int(sum(len(m.positions) for m in meshes)),
              "length_m": round(sum(p["length_m"] for p in pieces), 1)}
     return Built(meshes, ribbons, edges, pieces, left_out, stats)
+
+
+def structure(d: dict) -> shapely.Geometry | None:
+    """The ground a deck's piers and abutments stand on, with their clearance from other roads: each abutment's end
+    (from its face to where its wing walls stop) OFF_ROADS_M round, each pier's column its radius and
+    PIER_OFF_ROADS_M round. None with neither."""
+    xy = np.asarray(d["rows"]["xy"], float)
+    parts = [shapely.LineString(xy[lo:hi + 1]).buffer(float(d["deck_half_m"]) + OFF_ROADS_M, cap_style="flat")
+             for lo, hi in (sorted((int(a["face_row"]), int(a["end_row"]))) for a in d["abutments"]) if hi > lo]
+    parts += [shapely.Point(col).buffer(PIER_R + PIER_OFF_ROADS_M) for p in d["piers"] for col in p["columns"]]
+    return shapely.union_all(parts) if parts else None
 
 
 def _piece(r: dict, a: int, b: int) -> dict:

@@ -112,23 +112,20 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             stub_summary["in_clusters"] = in_clusters
     else:
         (work.stage(STAGE) / STUBS).unlink(missing_ok=True)  # no junctions, or built without them
-    cross_summary = _crossing_roads(work, job, region, c, section, dem)
-    # Slip ramps (`core.ramps`), planned after the stubs, rings and crossing roads: each keeps off the stubs and rings,
-    # so none of those changes, and off the piers and abutments of the bridges over the route.
+    # Slip ramps (`core.ramps`), planned after the stubs and rings: each keeps off them, so none of those changes.
     ramp_summary, ramp_plan, fork_summary = None, None, None
     ramp_list = route_stage.ramps(work, job)
     if ramp_list:
         ramp_plan = ramps_core.plan(ramp_list, c, section, dem.sample, width_factor=job.width.factor, layouts=layouts,
                                     junctions=found, stubs_plan=plan["stubs"] if found else [],
-                                    rings=ring_plan["roundabouts"] if rings else [], crossing=crossing_roads(work))
+                                    rings=ring_plan["roundabouts"] if rings else [])
         ramp_summary = {"ramps": len(ramp_plan["ramps"]), "skipped": {}}
         for sk in ramp_plan["skipped"]:
             ramp_summary["skipped"][sk["reason"]] = ramp_summary["skipped"].get(sk["reason"], 0) + 1
     # Shallow forks (`core.forks`): a gore stub, drawn as a slip ramp is, for each side road under 15 degrees and each
-    # whose stub was too skewed to flare; planned last, keeping off everything above, so none of it changes.
+    # whose stub was too skewed to flare; keeping off everything above, so none of it changes.
     fork_plan = forks_core.plan(found, plan if found else None, c, section, dem.sample, width_factor=job.width.factor,
                                 layouts=layouts, rings=ring_plan["roundabouts"] if rings else [],
-                                crossing=crossing_roads(work),
                                 ramps_planned=ramp_plan["ramps"] if ramp_plan is not None else [])
     doc = forks_core.merged(ramp_plan, fork_plan)
     if doc is not None:
@@ -137,6 +134,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             fork_summary = forks_core.summary(doc)
     else:
         (work.stage(STAGE) / RAMPS).unlink(missing_ok=True)
+    # The roads crossing the route, planned last (19 Nov 2026): the bridges' piers and abutments keep off everything
+    # above, so a slip ramp or a gore under a deck is drawn, and the deck stands clear of it.
+    cross_summary = _crossing_roads(work, job, region, c, section, dem,
+                                    ramps_planned=doc["ramps"] if doc is not None else [])
     sources: dict[str, float] = {}
     inherited: dict[str, float] = {}
     for r, run, m in zip(per_run, runs, lengths):
@@ -166,9 +167,11 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         {"forks": fork_summary} if fork_summary is not None else {})
 
 
-def _crossing_roads(work: WorkDir, job: Job, region, c, section: dict, dem) -> dict | None:
+def _crossing_roads(work: WorkDir, job: Job, region, c, section: dict, dem,
+                    ramps_planned: list[dict] = ()) -> dict | None:
     """Plan the roads crossing the route to draw (`core.crossing_roads`), whatever the job's junctions option: they
-    aren't side roads. Writes crossing_roads.json, or removes a stale one when there's nothing to draw or say."""
+    aren't side roads. Writes crossing_roads.json, or removes a stale one when there's nothing to draw or say.
+    `ramps_planned`: the slip ramps and forks' gores (ramps.json's), which the bridges' structures keep off."""
     path = work.stage(STAGE) / CROSSING_ROADS
     found = route_stage.crossings(work)
     if not found:
@@ -177,8 +180,11 @@ def _crossing_roads(work: WorkDir, job: Job, region, c, section: dict, dem) -> d
     route_xy = np.load(work.root / route_stage.STAGE / "route.npz")["xy"]
     # The profile stage's verdicts on the bridges (`core.dem_age`): one the elevation data doesn't hold isn't drawn.
     ages = work.root / profile_stage.STAGE / dem_age.FILE
-    # Piers keep off the side roads' stubs and the roundabouts' rings, planned before them.
+    # Piers and abutments keep off the side roads' stubs, the roundabouts' rings, the slip ramps and the forks' gores
+    # (with their nose islands), planned before them.
     keep_off = [np.asarray(x["outline"], float) for x in stubs(work, job) + roundabouts(work, job) if x.get("outline")]
+    keep_off += [np.asarray(o, float) for r in ramps_planned
+                 for o in (r.get("outline"), (r.get("island") or {}).get("outline")) if o]
     verdicts = work.read_json(profile_stage.STAGE, dem_age.FILE) if ages.exists() else None
     doc = crossing_roads_core.plan(found, c, section, dem.sample, width_factor=job.width.factor,
                                    route_length_m=float(cl.cumulative(route_xy)[-1]), dem_ages=verdicts,
