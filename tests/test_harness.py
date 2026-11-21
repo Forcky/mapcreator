@@ -192,3 +192,22 @@ def test_watch_report_checks_the_grid_and_finds_where_each_car_stopped(tmp_path,
     grid["cars"][1] = car(1, 34, 2, 0, valid=False)  # a wheel off the road on the grid
     watch.write_text(json.dumps({"csp": 1, "samples": [grid, run, rest]}), encoding="utf-8")
     assert ac_harness.watch_report(tmp_path / "track", "", watch) == 1
+
+
+def test_the_layout_defaults_to_forward_or_the_single_layout(tmp_path):
+    two, one = tmp_path / "two", tmp_path / "one"
+    (two / "forward").mkdir(parents=True)
+    (two / "reverse").mkdir()
+    (one / "data").mkdir(parents=True)
+    assert ac_harness.resolve_layout(None, two) == "forward"
+    assert ac_harness.resolve_layout(None, one) == ""
+    assert ac_harness.resolve_layout("reverse", two) == "reverse"
+    assert ac_harness.resolve_layout("", two) == ""
+
+
+def test_probe_points_find_a_single_layout_tracks_line_without_being_told(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(ac_harness, "probe_points", lambda d, layout, *a: seen.setdefault("layout", layout))
+    (tmp_path / "data").mkdir()
+    assert ac_harness.main(["probe-points", str(tmp_path)]) == 0
+    assert seen["layout"] == ""
