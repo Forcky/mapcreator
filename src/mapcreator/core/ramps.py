@@ -42,7 +42,9 @@ face approaching traffic. A 100 mm line along the ramp's inner edge outlines the
 road's edge line carries on along the taper's outer edge, at the ramp texture's own line offset so both meet the ramp
 stub's lines. The road's own edge line breaks across the taper and stays solid beside the gore. The paint is cut into
 the throat's surface as polygons with texture coordinates on the white of the texture's edge line: one material, no
-decal. None on gravel or an unmarked road.
+decal. None on gravel or an unmarked road. The mesh stage draws each planned polygon that fits the throat as built;
+one that doesn't is cut to fit, or left out on its own, with a warning naming the ramp and a count in the stats
+(`paint_clipped`, `paint_dropped`); `painted` counts the ramps with paint as built (`_paint_parts`).
 
 A ramp whose taper, gore or nose can't be drawn, that would overlap a side road's stub, a roundabout or another ramp,
 or whose mouth would leave a timing gate nowhere to stand is left out, listed in `skipped` with the reason, and the
@@ -110,6 +112,8 @@ RAMP_ID_BASE = 200000  # ramps' ids, apart from junctions' (0 up) and roundabout
 BAR_W_M = 1.0
 OUTLINE_GAP_M = 0.1
 PAINT_CLEAR_M = 0.05  # paint keeps this far inside the throat's outline, so the outline's vertices stay the road's
+PAINT_PART_CLEAR_M = 0.01  # the mesh stage keeps a planned polygon as it is this far inside the throat as built
+PAINT_MIN_AREA_M2 = 0.01  # a piece of paint smaller than this isn't drawn
 SPACING_SLOW_M, SPACING_M, SPACING_FAST_M = 6.0, 12.0, 24.0
 SLOW_KMH, FAST_KMH = 70.0, 100.0
 CLASS_KMH = {"motorway": 110.0, "trunk": 100.0}  # an untagged road's speed, for the spacing; others count as 80
@@ -638,7 +642,7 @@ def _paint(throat, rows_xy, rows_n, w, es_in, es_out, k, d_split, chain, m, near
     paint_geom = shapely.unary_union([bars_geom, in_strip, out_strip]).intersection(allowed)
     out = []
     for part in shapely.get_parts(paint_geom):
-        if part.geom_type != "Polygon" or part.area < 0.01:
+        if part.geom_type != "Polygon" or part.area < PAINT_MIN_AREA_M2:
             continue
         part = shapely.Polygon(np.round(np.asarray(part.exterior.coords), 3),
                                [np.round(np.asarray(h.coords), 3) for h in part.interiors])
@@ -922,6 +926,9 @@ class Built:
     # The ramps' first rows' inner verge and skirt points, on the nose between the throat and the island: they face
     # no terrain (`mesh.Footprint(interior=)`), or the terrain could triangulate slivers along the nose.
     interior: set = field(default_factory=set)
+    # Each built ramp's paint, by its id: the plan's polygons ("planned"), and of them those kept as planned or cut
+    # ("kept" counts the pieces drawn), "clipped" and "dropped" (`_paint_parts`).
+    paint: dict = field(default_factory=dict)
 
 
 def _cdt(poly: shapely.Polygon) -> np.ndarray:
@@ -1075,7 +1082,7 @@ def _build_one(r: dict, rb: mesh.Ribbon, frame: LocalFrame, dem_sample, skirt: b
         return np.column_stack([u0 + (u1 - u0) * stubs._tri_wave(lateral / band), along / tile])
 
     road_pieces = []
-    painted = _paint_parts(r, throat, heights)
+    painted, paint = _paint_parts(r, throat, heights)
     if painted:
         holes = [p.exterior.coords for p in painted]
         plain = shapely.Polygon(throat.exterior.coords, holes)
@@ -1153,7 +1160,7 @@ def _build_one(r: dict, rb: mesh.Ribbon, frame: LocalFrame, dem_sample, skirt: b
     lo, hi = r["mouth"]["rows"]
     br0, br1 = r["taper"]["edge_break_rows"]
     interior = {(float(sb.e[0, cc]), float(sb.n[0, cc])) for cc in [in_verge] + in_skirt}
-    return meshes, sb, own_cut, patches, edges, (side, lo, hi, br0, br1), interior
+    return meshes, sb, own_cut, patches, edges, (side, lo, hi, br0, br1), interior, paint | {"kept": len(painted)}
 
 
 def mesh_tag(r: dict) -> str:
@@ -1177,27 +1184,82 @@ def _paint_u(material: str) -> float:
     return textures.EDGE_INSET_M / stubs.TEXTURE_WIDTH_M[material]
 
 
-def _paint_parts(r: dict, throat: shapely.Polygon, heights: dict) -> list[shapely.Polygon]:
-    """The gore's paint as built: each polygon inside the throat as built, apart from the others; none at all if any
-    isn't (the throat is then plain). Their vertices' heights go into `heights`."""
+def _paint_parts(r: dict, throat: shapely.Polygon, heights: dict) -> tuple[list[shapely.Polygon], dict]:
+    """The gore's paint as built, and what became of the plan's polygons ({"planned", "clipped", "dropped"}).
+
+    Each polygon inside the throat as built (PAINT_PART_CLEAR_M in from its outline) is kept as planned. One that
+    reaches past that is cut to PAINT_CLEAR_M inside the throat, as the plan cut it (`_clipped`); one that's invalid,
+    left with nothing worth painting, or overlapping one already kept is dropped. Only that one goes: the rest of the
+    gore keeps its paint. The kept polygons' vertices' heights go into `heights`."""
+    report = {"planned": 0, "clipped": 0, "dropped": 0}
     if r["gore"]["paint"] == "none" or r["style"] not in ("road", "road_plain"):
-        return []
-    inside = throat.buffer(-0.01)
-    out, found = [], {}
+        return [], report
+    # Inside it, and that far from its outline: measured, rather than tested against an inward buffer of the throat
+    # (a constructed approximation, whose arcs and joins depend on the GEOS it was built with).
+    shapely.prepare(throat)
+
+    def fits(poly):
+        return throat.contains(poly) and throat.exterior.distance(poly) >= PAINT_PART_CLEAR_M
+
+    allowed = None
+    out: list[shapely.Polygon] = []
     for rec in r["gore"]["polygons"]:
+        report["planned"] += 1
         ext = np.asarray(rec["exterior"], float)
         holes = [np.asarray(h, float) for h in rec.get("holes", [])]
         poly = shapely.Polygon(ext[:, :2], [h[:, :2] for h in holes])
-        if not poly.is_valid or not inside.contains(poly):
-            return []
-        for ring in [ext] + holes:
-            for x, y, h in ring.tolist():
-                found[(x, y)] = h
-        out.append(poly)
-    if out and abs(shapely.unary_union(out).area - sum(p.area for p in out)) > 1e-4:
+        found = {(x, y): h for ring in [ext] + holes for x, y, h in ring.tolist()}
+        if not poly.is_valid:
+            report["dropped"] += 1
+            continue
+        parts = [poly]
+        if not fits(poly):
+            if allowed is None:
+                allowed = throat.buffer(-PAINT_CLEAR_M)
+            parts = [p for p in _clipped(poly, allowed, found) if fits(p)]
+            if not parts:
+                report["dropped"] += 1
+                continue
+            report["clipped"] += 1
+        kept = shapely.unary_union(out) if out else None
+        if kept is not None and any(shapely.intersection(p, kept).area > 1e-4 for p in parts):
+            report["dropped"] += 1
+            continue
+        heights.update(found)
+        out += parts
+    return out, report
+
+
+def _clipped(poly: shapely.Polygon, allowed: shapely.Geometry, found: dict) -> list[shapely.Polygon]:
+    """`poly` cut to `allowed`: its parts of at least PAINT_MIN_AREA_M2, each valid, or none. The new vertices' heights
+    go into `found`, interpolated over `poly`'s own triangles from its vertices' (in `found`)."""
+    cut = shapely.intersection(poly, allowed)
+    parts = [p for p in shapely.get_parts(cut) if p.geom_type == "Polygon" and p.is_valid
+             and p.area >= PAINT_MIN_AREA_M2]
+    if not parts:
         return []
-    heights.update(found)
-    return out
+    tris = _cdt(poly)
+    corner_h = np.array([[found[(x, y)] for x, y in t] for t in tris.tolist()])
+    a, b, c = tris[:, 0], tris[:, 1], tris[:, 2]
+    v0, v1 = b - a, c - a
+    den = v0[:, 0] * v1[:, 1] - v1[:, 0] * v0[:, 1]
+    den = np.where(np.abs(den) < 1e-12, 1e-12, den)
+    for part in parts:
+        for ring in [part.exterior] + list(part.interiors):
+            for x, y in np.asarray(ring.coords)[:-1].tolist():
+                if (x, y) in found:
+                    continue
+                d = np.array([x, y]) - a
+                u = (d[:, 0] * v1[:, 1] - v1[:, 0] * d[:, 1]) / den
+                v = (v0[:, 0] * d[:, 1] - d[:, 0] * v0[:, 1]) / den
+                # The triangle it's in (the least outside of them, for a point on an edge to rounding error).
+                j = int(np.argmax(np.minimum(np.minimum(u, v), 1.0 - u - v)))
+                uu, vv = float(np.clip(u[j], 0.0, 1.0)), float(np.clip(v[j], 0.0, 1.0))
+                if uu + vv > 1.0:
+                    uu, vv = uu / (uu + vv), vv / (uu + vv)
+                h = corner_h[j]
+                found[(x, y)] = float(h[0] + uu * (h[1] - h[0]) + vv * (h[2] - h[0]))
+    return parts
 
 
 def build(ramps: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, dem_sample, *, skirt: bool,
@@ -1218,7 +1280,7 @@ def build(ramps: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
         tag = mesh_tag(r)
         rest = centres([q for q in ramps if q is not r])
         try:
-            meshes, sb, own_cut, patches, edges, (side, lo, hi, br0, br1), interior = _build_one(
+            meshes, sb, own_cut, patches, edges, (side, lo, hi, br0, br1), interior, paint = _build_one(
                 r, rb, frame, dem_sample, skirt, np.vstack([others, rest]), tag)
         except (ValueError, KeyError, IndexError, shapely.errors.GEOSException) as e:
             out.failed[r["junction"]] = f"{type(e).__name__}: {e}"
@@ -1231,16 +1293,36 @@ def build(ramps: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
         out.patches += patches
         out.edges += edges
         out.interior |= interior
+        out.paint[r["junction"]] = paint
     built = [r for r in ramps if r["junction"] not in out.failed]
     out.stats = {"ramps": len(built), "meshes": len(out.meshes),
                  "vertices": int(sum(len(m.positions) for m in out.meshes)),
                  "triangles": int(sum(len(m.triangles) for m in out.meshes)),
                  "length_m": round(sum(r["length_m"] - r["ribbon_from_m"] for r in built), 1),
-                 "painted": sum(r["gore"]["paint"] != "none" for r in built)}
+                 "painted": sum(p["kept"] > 0 for p in out.paint.values())}  # with paint as built, not as planned
+    for key in ("clipped", "dropped"):  # the planned polygons cut to the throat as built, or left out of it
+        n = sum(p[key] for p in out.paint.values())
+        if n:
+            out.stats[f"paint_{key}"] = n
     gores = sum(bool(r.get("fork")) for r in built)
     if gores:  # of them, the shallow forks' gore stubs (`core.forks`)
         out.stats["gores"] = gores
     return out
+
+
+def log_paint(built: Built | None, ramps: list[dict], log) -> None:
+    """A warning for each of `ramps` (the ones kept) whose gore lost paint as `build` drew it (`_paint_parts`)."""
+    if built is None:
+        return
+    for r in ramps:
+        p = built.paint.get(r["junction"])
+        if p is None or not (p["dropped"] or p["clipped"]):
+            continue
+        log.warning("%s's gore paint doesn't all fit its throat as built: %s (%s) at %.0f m: of %d polygons, "
+                    "%d left out and %d cut to fit%s", "shallow fork" if r.get("fork") else "slip ramp",
+                    r.get("name") or ("an unnamed road" if r.get("fork") else "an unnamed ramp"), r["junction"],
+                    r["station_m"], p["planned"], p["dropped"], p["clipped"],
+                    "; no paint left" if not p["kept"] else "")
 
 
 def footprint(base: mesh.Footprint | None, built: Built, rows: int) -> mesh.Footprint:
