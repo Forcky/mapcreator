@@ -17,7 +17,7 @@ It goes through **Content Manager (CM)**, which most players use to install and 
    - `.venv\Scripts\python harness/ac_harness.py install-cm out/grasstree_hill/05_track/grasstree_hill.zip` makes CM ask to install it, the way users will.
 
    CM should list "Grasstree Hill Road (north-east)" and "(south-west)". The north-east layout should be the default, with preview and outline and no red warnings.
-4. **Drive:** `.venv\Scripts\python harness/ac_harness.py launch grasstree_hill --layout forward`, or pick it in CM's Quick Drive. Press Drive in the pits menu.
+4. **Drive:** `.venv\Scripts\python harness/ac_harness.py launch grasstree_hill`, or pick it in CM's Quick Drive. Press Drive in the pits menu. `--layout` defaults to `forward` where the track has it, else its single layout (a single-layout track has no layout folder, and asking CSP for `forward` there leaves acs.exe hung).
    - AC opens a UDP telemetry port, so Windows Firewall may ask about `acs.exe` on the first launch. Answer it before scripting any input: the prompt keeps the keyboard and mouse focus, and synthetic clicks never reach AC.
    - With no wheel to hand, press Ctrl+C in the session: AC's AI then drives your car along the AI line to the finish. Ctrl+G toggles the automatic gearbox. Content Manager rewrites `assists.ini` on every launch, so set assists in CM or in the session, not in the file.
 5. **While on track:** `.venv\Scripts\python harness/ac_harness.py probe` should show:

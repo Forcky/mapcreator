@@ -7,7 +7,7 @@ Content Manager (CM) is the preferred way in:
     python harness/ac_harness.py showroom out/<id>/05_track/<id>/<id>_forward.kn5   # look at the model first
     python harness/ac_harness.py install out/<id>/05_track/<id>          # copy into content/tracks
     python harness/ac_harness.py install-cm out/<id>/05_track/<id>.zip   # or let CM install the zip
-    python harness/ac_harness.py launch <id> --layout forward            # practice session via CM
+    python harness/ac_harness.py launch <id>                             # practice session via CM (forward, or the single layout)
     python harness/ac_harness.py probe                                   # while driving: wheels, position
     python harness/ac_harness.py results                                 # after the session: race_out.json
     python harness/ac_harness.py check-log <id>                          # after AC closes: log.txt + CSP log
@@ -504,6 +504,14 @@ def watch_report(track_dir: Path, layout: str, watch: Path | None = None) -> int
     return 0 if ok else 1
 
 
+def resolve_layout(layout: str | None, track_dir: Path) -> str:
+    """The layout to use: the one asked for, else `forward` where the track has that folder, else "" (a single-layout
+    track, whose files sit in the track's own folder; asking CSP for `forward` there fails and leaves acs.exe hung)."""
+    if layout is not None:
+        return layout
+    return "forward" if (track_dir / "forward").is_dir() else ""
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="ac_harness")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -516,7 +524,7 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("prepare", "launch"):
         p = sub.add_parser(name)
         p.add_argument("track_id")
-        p.add_argument("--layout", default="forward", help="layout folder; empty string for single-layout tracks")
+        p.add_argument("--layout", default=None, help="layout folder (default: forward where the track has one, else its single layout)")
         p.add_argument("--car", default="abarth500")
     sub.add_parser("restore")
     p = sub.add_parser("check-log")
@@ -526,7 +534,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("probe-install")
     p = sub.add_parser("probe-points")
     p.add_argument("track_dir", type=Path)
-    p.add_argument("--layout", default="forward")
+    p.add_argument("--layout", default=None, help="layout folder (default: forward where the track has one, else its single layout)")
     p.add_argument("--every", type=float, default=200.0, help="metres between probe points")
     p.add_argument("--quit", action="store_true", help="quit AC when the probe finishes")
     p.add_argument("--screenshots-every", type=int, default=0, help="screenshot every Nth point (0 = none)")
@@ -535,15 +543,18 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("probe-report")
     p = sub.add_parser("race")
     p.add_argument("track_id")
-    p.add_argument("--layout", default="forward", help="layout folder; empty string for single-layout tracks")
+    p.add_argument("--layout", default=None, help="layout folder (default: forward where the track has one, else its single layout)")
     p.add_argument("--car", default="abarth500")
     p.add_argument("--cars", type=int, default=8, help="cars in all, the player's included")
     p.add_argument("--session", choices=("race", "practice"), default="race")
     p = sub.add_parser("watch-report")
     p.add_argument("track_dir", type=Path)
-    p.add_argument("--layout", default="forward")
+    p.add_argument("--layout", default=None, help="layout folder (default: forward where the track has one, else its single layout)")
     p.add_argument("--watch", type=Path, default=None, help="a saved watch.json (default: the latest)")
     args = ap.parse_args(argv)
+    if getattr(args, "layout", "") is None:
+        base = args.track_dir if hasattr(args, "track_dir") else ac_root() / "content" / "tracks" / args.track_id
+        args.layout = resolve_layout(None, base)
     if args.cmd == "race":
         race(args.track_id, args.layout, args.car, args.cars, args.session)
         return 0
