@@ -415,6 +415,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         else:
             rb, built, water, meshes, closed = build(plan)
     ramps_now, ramp_built = ramp_state["ramps"], ramp_state["built"]
+    ramps_core.log_paint(ramp_built, ramps_now, log)  # once, for the ramps as settled
     (out / BRIDGES).unlink(missing_ok=True)
     if decks and decks.bridges:
         work.write_json(STAGE, BRIDGES, {"version": bridges_core.FORMAT_VERSION, "crs": f"EPSG:{region.epsg}",

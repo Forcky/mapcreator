@@ -5,6 +5,7 @@ or an overlap, the paint cut into it, the road's verge cut and its edge line bro
 fitted round it with no hole), the closures on it, validation, the masks and gates, and the section stage (the road's
 half widths, and so the AI line, unchanged)."""
 
+import logging
 import math
 
 import numpy as np
@@ -444,6 +445,116 @@ def test_the_terrain_fits_round_the_ramp_and_its_island_with_no_gap_and_nothing_
     # The ramp's first row's inner verge and skirt, on the nose between the throat and the island, face no terrain.
     fp = ramps.footprint(None, b, len(c["s"]))
     assert len(b.interior) >= 2 and b.interior <= fp.interior
+
+
+def painted_ramp(edit=None):
+    """A painted diverge built from its plan, with `edit(record)` applied to the plan's record first: (the record as
+    built from, the build, the paint's and the rest of the throat's triangles, in AC coordinates)."""
+    c, sec = road()
+    (r,) = ramps.plan([ramp(400.0, 6.0, main={"highway": "trunk", "maxspeed": "60"})], c, sec, flat())["ramps"]
+    if edit is not None:
+        r = edit(r)
+    rb = mesh.build_ribbon(c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
+                           sec["slope_left"], sec["slope_right"], flat())
+    b = ramps.build([r], rb, c["s"], FRAME, flat(), skirt=True, others=c["xy"])
+    assert b.failed == {}
+    (throat,) = [m for m in b.meshes if m.name == "1ROAD_JS0_G"]
+    throat.validate()
+    tris = throat.positions.astype(float)[throat.triangles]
+    paint = np.all(np.abs(throat.uvs[:, 0][throat.triangles] - ramps._paint_u("road")) < 1e-5, axis=1)
+    return r, b, tris[paint], tris[~paint]
+
+
+def tri_area(p):
+    return 0.5 * np.abs((p[:, 1, 0] - p[:, 0, 0]) * (p[:, 2, 2] - p[:, 0, 2])
+                        - (p[:, 2, 0] - p[:, 0, 0]) * (p[:, 1, 2] - p[:, 0, 2])).sum()
+
+
+def with_polygons(polygons):
+    return lambda r: {**r, "gore": {**r["gore"], "polygons": polygons}}
+
+
+def paint_warnings(b, r, caplog):
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="test_ramps"):
+        ramps.log_paint(b, [r], logging.getLogger("test_ramps"))
+    return [x.getMessage() for x in caplog.records if x.levelname == "WARNING"]
+
+
+def test_a_ramp_with_paint_planned_has_it_in_its_throat_and_counts_as_painted(caplog):
+    r, b, paint, plain = painted_ramp()
+    assert len(r["gore"]["polygons"]) >= 2 and len(paint) and len(plain)
+    assert b.stats["painted"] == 1 and "paint_dropped" not in b.stats and "paint_clipped" not in b.stats
+    assert b.paint[r["junction"]] == {"planned": len(r["gore"]["polygons"]), "clipped": 0, "dropped": 0,
+                                      "kept": len(r["gore"]["polygons"])}
+    assert paint_warnings(b, r, caplog) == []
+
+
+def test_a_polygon_off_the_throat_is_left_out_alone_with_a_count_and_a_warning(caplog):
+    _, _, whole, _ = painted_ramp()
+    moved = []
+
+    def edit(r):
+        polygons = [dict(p) for p in r["gore"]["polygons"]]
+        polygons[0] = {"exterior": [[x, y + 50.0, h] for x, y, h in polygons[0]["exterior"]]}  # off the ramp
+        moved.append(r["gore"]["polygons"][0])
+        return with_polygons(polygons)(r)
+
+    r, b, paint, _ = painted_ramp(edit)
+    rest = sum(shapely.Polygon(np.asarray(q["exterior"])[:, :2]).area for q in r["gore"]["polygons"][1:])
+    assert tri_area(paint) == pytest.approx(rest, rel=1e-3)  # the others drawn as planned
+    assert tri_area(paint) < tri_area(whole)
+    assert b.stats["painted"] == 1 and b.stats["paint_dropped"] == 1 and "paint_clipped" not in b.stats
+    (msg,) = paint_warnings(b, r, caplog)
+    assert str(ramps.RAMP_ID_BASE) in msg and "1 left out" in msg and "no paint left" not in msg
+
+
+def test_an_invalid_or_overlapping_polygon_is_left_out_and_with_none_left_the_throat_is_plain(caplog):
+    def edit(r):
+        polygons = list(r["gore"]["polygons"])
+        p0 = np.asarray(polygons[0]["exterior"])
+        bowtie = {"exterior": [p0[0].tolist(), [p0[0][0] + 1, p0[0][1] + 1, p0[0][2]],
+                               [p0[0][0] + 1, p0[0][1], p0[0][2]], [p0[0][0], p0[0][1] + 1, p0[0][2]]]}
+        return with_polygons(polygons + [polygons[1], bowtie])(r)  # a second copy of one, and a bow tie
+
+    r, b, paint, _ = painted_ramp(edit)
+    planned = len(r["gore"]["polygons"])
+    assert b.stats["paint_dropped"] == 2 and b.paint[r["junction"]]["kept"] == planned - 2
+    assert tri_area(paint) == pytest.approx(
+        sum(shapely.Polygon(np.asarray(q["exterior"])[:, :2]).area for q in r["gore"]["polygons"][:-2]), rel=1e-3)
+
+    def nothing_fits(r):
+        return with_polygons([{"exterior": [[x, y + 50.0, h] for x, y, h in q["exterior"]]}
+                              for q in r["gore"]["polygons"]])(r)
+
+    r, b, paint, plain = painted_ramp(nothing_fits)
+    assert len(paint) == 0 and len(plain) and b.stats["painted"] == 0
+    assert b.stats["paint_dropped"] == len(r["gore"]["polygons"])
+    (msg,) = paint_warnings(b, r, caplog)
+    assert "no paint left" in msg
+
+
+def test_a_polygon_reaching_past_the_throat_s_outline_is_cut_to_fit_with_heights_from_its_own(caplog):
+    _, _, whole, plain0 = painted_ramp()
+    pts = np.concatenate([whole, plain0]).reshape(-1, 3)
+    e, n, _ = FRAME.from_ac(pts)
+    x0, x1, y0, y1 = e.min() - 5.0, e.max() + 5.0, n.min() - 5.0, n.max() + 5.0
+
+    def h(x, y):
+        return GROUND + 0.01 * (x - x0) - 0.02 * (y - y0)
+
+    sheet = {"exterior": [[x, y, h(x, y)] for x, y in [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]]}
+    r, b, paint, plain = painted_ramp(with_polygons([sheet]))  # paint over the whole throat and well past it
+    assert b.stats["painted"] == 1 and b.stats["paint_clipped"] == 1 and "paint_dropped" not in b.stats
+    assert tri_area(paint) == pytest.approx(tri_area(np.concatenate([whole, plain0])), rel=0.05)
+    assert tri_area(paint) < tri_area(np.concatenate([paint, plain]))
+    # Every vertex the cut made has the sheet's height there, and none is past the paved outline.
+    pe, pn, ph = FRAME.from_ac(paint.reshape(-1, 3))
+    assert np.allclose(ph, h(pe, pn), atol=1e-3)
+    paved = shapely.Polygon(r["outline"]).buffer(0)
+    assert shapely.contains_xy(paved.buffer(-ramps.PAINT_CLEAR_M + 1e-3), pe, pn).all()
+    (msg,) = paint_warnings(b, r, caplog)
+    assert "1 cut to fit" in msg
 
 
 def test_ramp_meshes_are_named_and_valid():
