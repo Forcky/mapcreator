@@ -1,5 +1,5 @@
-"""Drivable OSM roads in a bounding box (and the railways and paths that cross them, and the service roads and tracks
-that meet them): from the local index when one is configured, else Overpass.
+"""Drivable OSM roads in a bounding box (and the railways and paths that cross them, the service roads and tracks
+that meet them, and the tagged nodes on them): from the local index when one is configured, else Overpass.
 
 Production sets `osm_index` to a file built by `index.py` from a Geofabrik
 extract. Without one, development falls back to an Overpass server, whose
@@ -65,6 +65,24 @@ def service_ways_for_bbox(bbox: tuple[float, float, float, float], settings: Set
     west, south, east, north = bbox
     data = (fetch or overpass.fetch)(overpass.service_query_for_bbox(south, west, north, east), settings)
     return index.as_indexed(data, ("service",))
+
+
+def road_nodes_for_bbox(bbox: tuple[float, float, float, float], settings: Settings, *,
+                        fetch: Callable[[str, Settings], dict] | None = None) -> dict:
+    """Overpass-style JSON for the tagged nodes on the drivable roads crossing `bbox` (west, south, east, north,
+    WGS84), from the same source as `for_bbox`: traffic signals, crossings, stop and give-way signs and mapped signs
+    (`index.is_road_node`), with the tags the index keeps of them (`index.road_node_tags`).
+
+    From Overpass they come out of the roads query itself (its `out body` carries every node's tags), so the same
+    query is asked, and answered from the cache when `for_bbox` has asked it, then narrowed to what the index keeps
+    (`index.as_indexed_nodes`). An index built before they were kept raises `index.IndexUnavailable` (one of
+    `INDEX_ERRORS`), and the caller goes on without them.
+    """
+    if settings.osm_index:
+        return index.road_nodes(settings.osm_index, bbox)
+    west, south, east, north = bbox
+    return index.as_indexed_nodes((fetch or overpass.fetch)(overpass.query_for_bbox(south, west, north, east),
+                                                            settings))
 
 
 LINES_SELECTION = f"{overpass.RAILWAYS_FILTER} and {overpass.PATHS_FILTER}"

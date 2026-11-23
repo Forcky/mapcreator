@@ -31,17 +31,25 @@ EPSG = 28355  # MGA zone 55, the fixture is near Hobart
 # (sharing node 5), a disused railway on a bridge over Main Road, a rail trail (a cycleway with railway=abandoned: a
 # path), a platform and a tram line (not indexed), and far away a former station drawn as a closed building with
 # railway=disused (a building) and a street with railway=abandoned (a road).
+# Tagged nodes (layout 4): traffic signals facing one way on Main Road (node 2, also where a footway leaves it), a
+# give-way sign where a driveway leaves Back Street (node 4), a zebra crossing on Back Street (node 6), a stop sign at
+# the far end of a service road (node 9, not on a road), a crossing at the end of a footway (node 8, not on a road),
+# traffic signals on the far road (node 40) and a stop sign on no way at all (node 95).
 FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
 <osm version="0.6" generator="hand-written test fixture">
   <node id="1" lat="-42.8000000" lon="147.3000000"/>
-  <node id="2" lat="-42.8000000" lon="147.3050000"><tag k="highway" v="traffic_signals"/></node>
+  <node id="2" lat="-42.8000000" lon="147.3050000"><tag k="highway" v="traffic_signals"/>
+    <tag k="traffic_signals:direction" v="forward"/><tag k="button_operated" v="yes"/><tag k="source" v="survey"/>
+  </node>
   <node id="3" lat="-42.8000000" lon="147.3100000"/>
-  <node id="4" lat="-42.7980000" lon="147.3000000"/>
+  <node id="4" lat="-42.7980000" lon="147.3000000"><tag k="highway" v="give_way"/></node>
   <node id="5" lat="-42.7980000" lon="147.3050000"/>
-  <node id="6" lat="-42.7980000" lon="147.3100000"/>
+  <node id="6" lat="-42.7980000" lon="147.3100000"><tag k="highway" v="crossing"/>
+    <tag k="crossing" v="uncontrolled"/><tag k="crossing:markings" v="zebra"/><tag k="tactile_paving" v="yes"/>
+  </node>
   <node id="7" lat="-42.8000000" lon="147.3150000"/>
-  <node id="8" lat="-42.8010000" lon="147.3020000"/>
-  <node id="9" lat="-42.7990000" lon="147.3050000"/>
+  <node id="8" lat="-42.8010000" lon="147.3020000"><tag k="highway" v="crossing"/></node>
+  <node id="9" lat="-42.7990000" lon="147.3050000"><tag k="highway" v="stop"/></node>
   <node id="20" lat="-42.7995000" lon="147.3060000"/>
   <node id="21" lat="-42.7995000" lon="147.3065000"/>
   <node id="22" lat="-42.7992000" lon="147.3065000"/>
@@ -53,7 +61,7 @@ FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
   <node id="28" lat="-42.7996000" lon="147.3080000"/>
   <node id="29" lat="-42.7996000" lon="147.3085000"/>
   <node id="30" lat="-42.7993000" lon="147.3085000"/>
-  <node id="40" lat="-42.8000000" lon="147.4000000"/>
+  <node id="40" lat="-42.8000000" lon="147.4000000"><tag k="highway" v="traffic_signals"/></node>
   <node id="41" lat="-42.8000000" lon="147.4100000"/>
   <node id="50" lat="-42.8100000" lon="147.2900000"/>
   <node id="51" lat="-42.7900000" lon="147.2900000"/>
@@ -81,6 +89,7 @@ FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
   <node id="85" lat="-42.8050000" lon="147.4100000"/>
   <node id="90" lat="-42.7975000" lon="147.3000000"/>
   <node id="91" lat="-42.7975000" lon="147.3100000"/>
+  <node id="95" lat="-42.7960000" lon="147.3050000"><tag k="highway" v="stop"/></node>
   <way id="10">
     <nd ref="3"/><nd ref="2"/><nd ref="1"/>
     <tag k="highway" v="secondary"/><tag k="oneway" v="yes"/><tag k="name" v="Main Road"/>
@@ -211,7 +220,13 @@ def _ways_table(path) -> list[tuple]:
         return con.execute("SELECT id, kind, tags_json, coords, node_ids FROM ways ORDER BY id").fetchall()
 
 
-COUNTS = {"roads": 6, "buildings": 3, "power_lines": 3, "railways": 2, "paths": 3, "service_ways": 3, "skipped": 4}
+def _road_nodes_table(path) -> list[tuple]:
+    with closing(sqlite3.connect(path)) as con:
+        return con.execute("SELECT id, lon, lat, tags_json FROM road_nodes ORDER BY id").fetchall()
+
+
+COUNTS = {"roads": 6, "buildings": 3, "power_lines": 3, "railways": 2, "paths": 3, "service_ways": 3, "skipped": 4,
+          "road_nodes": 4}
 
 
 def test_build_keeps_drivable_roads_and_closed_buildings(extract, tmp_path):
@@ -328,6 +343,7 @@ def test_pyosmium_builds_the_same_index_from_xml_and_pbf(extract, osm_index, tmp
         out = tmp_path / (source.name + ".sqlite")
         assert index.build_index(source, out, reader="osmium") == COUNTS
         assert _ways_table(out) == expected
+        assert _road_nodes_table(out) == _road_nodes_table(osm_index)
         assert index.metadata(out)["reader"].startswith("pyosmium ")
     assert index.metadata(tmp_path / "fixture.osm.pbf.sqlite")["osm_timestamp"] == "2026-11-01T20:21:02Z"
 
@@ -335,13 +351,14 @@ def test_pyosmium_builds_the_same_index_from_xml_and_pbf(extract, osm_index, tmp
 def test_command_line_builds_and_queries(extract, tmp_path, capsys):
     out = tmp_path / "cli.sqlite"
     assert index.main(["build", str(extract), str(out), "--reader", "xml"]) == 0
-    assert ("indexed 6 roads, 2 railways, 3 paths, 3 service roads and tracks, 3 buildings and 3 power lines"
-            in capsys.readouterr().out)
+    assert ("indexed 6 roads, 2 railways, 3 paths, 3 service roads and tracks, 3 buildings and 3 power lines, "
+            "and 4 tagged nodes on the roads" in capsys.readouterr().out)
     assert index.main(["query", str(out), *map(str, QUERY)]) == 0
     text = capsys.readouterr().out
     assert "roads: 3 ways, 7 nodes" in text and "buildings: 1 in EPSG:28355" in text
     assert "railways and paths: 2 railways, 3 paths" in text
     assert "service roads and tracks: 1 driveways, 1 other service roads, 1 tracks" in text
+    assert "tagged road nodes: 1 traffic signals, 1 crossings, 1 stop and give-way signs, 3 in all" in text
     assert index.main(["query", str(out), *map(str, QUERY), "--json"]) == 0
     assert len(json.loads(capsys.readouterr().out)["elements"]) == 10
 
@@ -610,3 +627,103 @@ def test_a_route_stage_on_a_layout_3_index_builds_without_driveways_and_says_why
     result = route_stage.run(Job(track_id="index_road", waypoints=WESTBOUND), _settings(tmp_path, old), work)
     assert result["ways"] == 1 and "rebuild it" in result["driveways"]["unavailable"]
     assert work.read_json(route_stage.STAGE, route_stage.DRIVEWAYS)["driveways"] == []
+
+
+# ----- tagged road nodes (layout 4): traffic signals, crossings, stop and give-way signs -----
+
+def test_tagged_road_nodes_round_trip_with_the_tags_the_index_keeps(osm_index):
+    data = index.road_nodes(osm_index, QUERY)
+    nodes = {e["id"]: e for e in data["elements"]}
+    # On the roads crossing the box: the signals, the give-way sign and the crossing. Not the stop sign on the
+    # service road, the crossing at the footway's end, the far road's signals or the stop sign on no way.
+    assert list(nodes) == [2, 4, 6]
+    # What a signal or crossing is, which way it faces and whether it has a button; not where the mapper saw it.
+    assert nodes[2] == {"type": "node", "id": 2, "lat": -42.8, "lon": 147.305,
+                        "tags": {"highway": "traffic_signals", "traffic_signals:direction": "forward",
+                                 "button_operated": "yes"}}
+    assert nodes[4]["tags"] == {"highway": "give_way"}
+    assert nodes[6]["tags"] == {"highway": "crossing", "crossing": "uncontrolled", "crossing:markings": "zebra"}
+    # Each is on a road the roads query gives, so its way and place come from that way's node ids.
+    ways = {e["id"]: e["nodes"] for e in index.query(osm_index, QUERY)["elements"] if e["type"] == "way"}
+    assert ways[10].index(2) == 1 and ways[11].index(4) == 1 and ways[11].index(6) == 3
+    # The far road's signals, when its road is in the box; nothing where there's no road.
+    assert [e["id"] for e in index.road_nodes(osm_index, (147.39, -42.81, 147.42, -42.79))["elements"]] == [40]
+    assert index.road_nodes(osm_index, (147.5, -42.9, 147.6, -42.8))["elements"] == []
+    meta = index.metadata(osm_index)
+    assert meta["road_nodes"] == "4" and meta["road_node_keys"] == "crossing|traffic_sign"
+    assert meta["road_node_highway"] == "crossing|give_way|stop|traffic_signals"
+    # The roads query and the graph are as before: nodes carry no tags.
+    assert all("tags" not in e for e in index.query(osm_index, QUERY)["elements"] if e["type"] == "node")
+
+
+def test_a_road_with_many_tagged_nodes_comes_back_whole(tmp_path):
+    # More nodes than one SQL query's parameters: every one comes back.
+    n = 2000
+    nodes = "".join(f'<node id="{i}" lat="-42.8" lon="{147.3 + i * 1e-5:.7f}"><tag k="highway" v="crossing"/></node>'
+                    for i in range(1, n + 1))
+    refs = "".join(f'<nd ref="{i}"/>' for i in range(1, n + 1))
+    src = tmp_path / "many.osm"
+    src.write_text(f'<?xml version="1.0"?><osm version="0.6">{nodes}<way id="1">{refs}'
+                   '<tag k="highway" v="residential"/></way></osm>', encoding="utf-8")
+    index.build_index(src, tmp_path / "many.sqlite", reader="xml")
+    found = index.road_nodes(tmp_path / "many.sqlite", (147.29, -42.81, 147.33, -42.79))["elements"]
+    assert [e["id"] for e in found] == list(range(1, n + 1))
+
+
+def test_overpass_gives_the_same_tagged_road_nodes_as_the_index(osm_index, tmp_path):
+    box = (147.28, -42.82, 147.42, -42.78)
+    answer = _overpass_answer(box, lambda t: t.get("highway") in overpass.DRIVABLE.split("|"))
+    assert any(e.get("tags", {}).get("source") for e in answer["elements"] if e["type"] == "node")
+    queries = []
+
+    def fake_overpass(query, settings):
+        queries.append(query)
+        return answer
+
+    from_index = index.road_nodes(osm_index, box)
+    from_overpass = roads.road_nodes_for_bbox(box, _settings(tmp_path), fetch=fake_overpass)
+    assert from_overpass["elements"] == from_index["elements"]
+    assert [e["id"] for e in from_index["elements"]] == [2, 4, 6, 40]
+    # The roads query itself, so a build that has fetched its roads asks Overpass nothing new (the cache answers).
+    assert queries == [overpass.query_for_bbox(box[1], box[0], box[3], box[2])]
+    assert roads.road_nodes_for_bbox(box, _settings(tmp_path, osm_index), fetch=_no_overpass) == from_index
+
+
+def test_a_layout_4_index_built_before_the_tagged_nodes_serves_everything_else(osm_index, tmp_path, capsys):
+    early = tmp_path / "layout4_early.sqlite"
+    shutil.copyfile(osm_index, early)
+    with closing(sqlite3.connect(early)) as con:  # as #37's layout 4 builds left it: no road_nodes table
+        con.execute("DROP TABLE road_nodes")
+        con.execute("DELETE FROM meta WHERE key IN ('road_nodes', 'road_node_highway', 'road_node_keys')")
+        con.commit()
+    assert [e["id"] for e in index.query(early, QUERY)["elements"] if e["type"] == "way"] == [10, 11, 12]
+    assert [e["id"] for e in index.service_ways(early, QUERY)["elements"] if e["type"] == "way"] == [16, 17, 18]
+    assert [e["id"] for e in index.railways_and_paths(early, QUERY)["elements"] if e["type"] == "way"] == [
+        13, 50, 51, 52, 53]
+    assert len(index.buildings(early, TO_XY.transform_bounds(*QUERY), EPSG)) == 1
+    with pytest.raises(index.IndexUnavailable, match="before the tagged road nodes .* were indexed; rebuild it"):
+        index.road_nodes(early, QUERY)
+    with pytest.raises(roads.INDEX_ERRORS):
+        roads.road_nodes_for_bbox(QUERY, _settings(tmp_path, early), fetch=_no_overpass)
+    assert index.main(["query", str(early), *map(str, QUERY)]) == 0
+    text = capsys.readouterr().out
+    assert "tagged road nodes: not in this index" in text and "service roads and tracks: 1 driveways" in text
+
+
+def test_a_layout_3_index_has_no_tagged_road_nodes_and_still_routes(osm_index, tmp_path):
+    old = tmp_path / "layout3.sqlite"
+    shutil.copyfile(osm_index, old)
+    with closing(sqlite3.connect(old)) as con:  # as a layout 3 build leaves it: no service ways and no road nodes
+        con.execute("UPDATE meta SET value = '3' WHERE key = 'schema'")
+        con.execute("DELETE FROM ways WHERE kind = 'service'")
+        con.commit()
+        con.executescript("DROP TABLE service_rtree; DROP TABLE road_nodes;")
+    g = graph.build(index.query(old, QUERY), TO_XY)
+    assert {w["id"] for w in g.ways} == {10, 11, 12}
+    with pytest.raises(index.IndexUnavailable, match="before the tagged road nodes"):
+        index.road_nodes(old, QUERY)
+    # A layout 3 file that somehow has the table still says it has none: the layout decides.
+    with closing(sqlite3.connect(old)) as con:
+        con.executescript("CREATE TABLE road_nodes (id INTEGER PRIMARY KEY, lon REAL, lat REAL, tags_json TEXT);")
+    with pytest.raises(index.IndexUnavailable):
+        index.road_nodes(old, QUERY)
