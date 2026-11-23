@@ -23,6 +23,7 @@ import itertools
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.ndimage import gaussian_filter1d
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
@@ -35,6 +36,7 @@ MERGE_PASSES = 4  # a small region next to only other small ones may need a seco
 CUT_SLOPE_DEG = 35.0  # a cut batter's slope, averaged over CUT_MEAN_M
 CUT_MEAN_M = 4.0
 CUT_REACH_M = 25.0  # how far from the road's edge a cut batter may reach: beyond, a steep gully is natural ground
+HEADING_TREND_M = 20.0  # a cut's texture runs along the road from the heading smoothed over this (`Road.beside`)
 BLOCK = 50_000  # triangles queried at a time: bounds the neighbour lists' memory on a long road
 
 
@@ -46,6 +48,7 @@ class Road:
     s: np.ndarray  # (n,) metres along it
     theta: np.ndarray  # (n,) its heading, unwrapped (radians, anticlockwise from east)
     edges: np.ndarray  # (n, 2, 3) each station's left and right carriageway edge: easting, northing, height
+    trend: np.ndarray  # (n,) `theta` smoothed over HEADING_TREND_M (`beside`)
 
     @classmethod
     def from_ribbon(cls, rb) -> "Road":
@@ -61,7 +64,10 @@ class Road:
         xy = np.asarray(xy, dtype=float)
         s = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(xy, axis=0).T))])
         t = np.gradient(xy, axis=0)
-        return cls(xy, s, np.unwrap(np.arctan2(t[:, 1], t[:, 0])), np.asarray(edges, dtype=float))
+        theta = np.unwrap(np.arctan2(t[:, 1], t[:, 0]))
+        step = float(np.median(np.diff(s))) if len(s) > 1 else 1.0
+        trend = gaussian_filter1d(theta, HEADING_TREND_M / max(step, 1e-6), mode="nearest")
+        return cls(xy, s, theta, np.asarray(edges, dtype=float), trend)
 
     def beside(self, xy: np.ndarray, h: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """For points (easting, northing) at heights `h`: (metres along the road at their offset, metres out from
@@ -78,8 +84,17 @@ class Road:
         k = np.arange(len(xy))
         out = np.clip(np.abs(across) - np.abs(edge_off[k, side]), 0.0, None)
         # Along a parallel of the centreline `across` metres to its left, a metre of road is 1 - curvature * across
-        # metres long, so the station there is s - across * heading (plus the little way past station i).
-        return self.s[i] + along - across * self.theta[i], out, np.asarray(h, dtype=float) - self.edges[i, side, 2]
+        # metres long, so the station there is s - across * (the heading turned through) (plus the little way past
+        # station i). But that's from some starting heading, and straight out from the road it shifts the station
+        # by the heading's difference from that start for every metre out. From the absolute heading, a cut beside
+        # a road heading -2.7 radians (from east) had its texture shifted about 2 m along the road for every metre
+        # up the face, its streaks lying nearly flat (Strickland Avenue, 24 Nov 2026); from a cut patch's own mean
+        # heading, a long patch on a winding road was still shifted 1.5 m a metre in places (Lyell Highway). So it's
+        # measured from the heading's trend over HEADING_TREND_M: the shift is only the road's wobble about that,
+        # and on a steady bend the parallel's metres come out as the centreline's, the streaks fanning out along
+        # the radii (a metre of face 0.8 m of texture 15 m out on a 60 m bend's outside, 1.33 m on its inside).
+        return (self.s[i] + along - across * (self.theta[i] - self.trend[i]), out,
+                np.asarray(h, dtype=float) - self.edges[i, side, 2])
 
 
 def adjacency(tri: np.ndarray, pos: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -246,6 +261,7 @@ def road_uv(xy: np.ndarray, h: np.ndarray, road: Road, tile_m: float) -> np.ndar
     """Texture coordinates for a cut batter's points: u along the road at the point's offset, v the distance up
     the face from the carriageway's edge (straight across and up), both repeating every `tile_m`. On a planar
     batter that's the face's own metres, so a 50-degree face isn't stretched 1.6 times up the slope, as the plan
-    projection the other ground classes use stretches it."""
+    projection the other ground classes use stretches it; and u doesn't shift with the distance out, so the
+    face's streaks run straight up it (`Road.beside`)."""
     along, out, above = road.beside(xy, h)
     return np.column_stack([along, np.hypot(out, above)]) / tile_m

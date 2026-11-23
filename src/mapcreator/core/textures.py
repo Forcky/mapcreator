@@ -17,6 +17,7 @@ from functools import partial
 
 import numpy as np
 from PIL import Image
+from scipy.ndimage import uniform_filter
 
 DDS_HEADER_FLAGS = 0x000A1007  # CAPS | HEIGHT | WIDTH | PIXELFORMAT | MIPMAPCOUNT | LINEARSIZE
 DDS_CAPS = 0x00401008  # TEXTURE | MIPMAP | COMPLEX
@@ -149,13 +150,20 @@ def _streaks(size: int, beta: float, stretch: float, seed: int) -> np.ndarray:
 
 def ground_cut(size: int = GROUND_COVER_PX, seed: int = 251) -> Image.Image:
     """A cut batter's bare earth (`grass.CUT`): clay brown, with darker streaks washed down the face, paler
-    weathered bands, and stones. One texture statewide: nothing in the pipeline says what rock a cutting is in."""
+    weathered bands, and stones. One texture statewide: nothing in the pipeline says what rock a cutting is in.
+
+    The streaks are spread evenly: their noise less its own mean over a sixth of the tile (about 2.7 m at the
+    cut's 16 m repeat), so every piece of a face 5 m long has a fair share of them. Left to the noise, one 5 m
+    piece of the tile had 7 % streaks to the tile's 25 %, and where a short cut stood framed by darker forest floor
+    it read as a flat, pale tan panel (Strickland Avenue, 24 Nov 2026). The pale bands are narrow and few for the
+    same reason."""
     grain = 0.55 * tileable_noise(size, 1.5, seed) + 0.45 * tileable_noise(size, 0.4, seed + 1)
     rgb = _mix(np.array([142.0, 110.0, 80.0]), grain, np.full(3, 0.4)).astype(float)
-    wash = _uniform(_streaks(size, 0.9, 6.0, seed + 2))
+    wash = _streaks(size, 0.9, 6.0, seed + 2)
+    wash = _uniform(wash - uniform_filter(wash, size // 6, mode="wrap"))
     dark = np.clip((wash - 0.75) / PATCH_EDGE + 0.5, 0.0, 1.0)[..., None]  # about a quarter, in streaks
     rgb = rgb * (1 - 0.8 * dark) + _mix(np.array([92.0, 72.0, 56.0]), grain, np.full(3, 0.3)) * 0.8 * dark
-    pale = np.clip((_uniform(_streaks(size, 1.1, 2.5, seed + 3)) - 0.85) / PATCH_EDGE + 0.5, 0.0, 1.0)[..., None]
+    pale = np.clip((_uniform(_streaks(size, 1.1, 6.0, seed + 3)) - 0.92) / PATCH_EDGE + 0.5, 0.0, 1.0)[..., None]
     rgb = rgb * (1 - 0.6 * pale) + _mix(np.array([170.0, 146.0, 112.0]), grain, np.full(3, 0.3)) * 0.6 * pale
     pebbles = _uniform(tileable_noise(size, 0.8, seed + 4))
     for colour, lo, hi in (((178, 170, 156), 0.96, 1.0), ((62, 56, 50), 0.0, 0.03)):  # pale and dark stones
