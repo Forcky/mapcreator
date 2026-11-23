@@ -197,6 +197,72 @@ def test_the_cut_batters_texture_runs_up_the_face_unstretched(cut_road):
     assert up > 0.9
 
 
+def _batter_uv(centre, tangent, outward, edge_xy, out):
+    """A 50-degree batter beside a road, from 4 m to 16 m out and 40 m along, and its texture (`road_uv`).
+    `centre` (n, 2) is the road's centreline and `edge_xy` (n, 2, 2) its left and right carriageway edges;
+    `out(a, o)` the batter's point `o` metres out from the centreline `a` metres along, where `tangent(a)` (unit)
+    is the road's direction and `outward(a)` (unit) the way away from it. Returns per triangle the Jacobian of
+    (u, v) in texture metres by (metres along the road, metres up the face), as rows, and its mean offset."""
+    edges = np.concatenate([edge_xy, np.zeros((len(centre), 2, 1))], axis=2)
+    road = classmap.Road.from_line(centre, edges)
+    along, offset = np.arange(0.0, 41.0), 4.0 + 2.0 * np.arange(7)
+    _, _, tri = grid(len(along), len(offset), 1.0)
+    a, o = np.meshgrid(along, offset, indexing="ij")
+    a, o = a.ravel(), o.ravel()
+    xy, h = out(a, o), FACE * (o - 3.2)
+    tile = grass.MESHES[grass.CUT_MATERIAL][1]
+    uv = classmap.road_uv(xy, h, road, tile) * tile
+    p = np.column_stack([xy, h])[tri]
+    mid = a[tri].mean(axis=1)
+    t3 = np.column_stack([tangent(mid), np.zeros(len(tri))])
+    up = np.column_stack([outward(mid), np.full(len(tri), FACE)])
+    up /= np.linalg.norm(up, axis=1, keepdims=True)
+    e = np.stack([p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]], axis=1)  # (triangles, 2 edges, 3)
+    surface = np.stack([(e * t3[:, None]).sum(axis=2), (e * up[:, None]).sum(axis=2)], axis=2)
+    tex = np.stack([uv[tri[:, 1]] - uv[tri[:, 0]], uv[tri[:, 2]] - uv[tri[:, 0]]], axis=1)
+    return np.linalg.solve(surface, tex), o[tri].mean(axis=1)  # rows: d/d(along), d/d(up the face); cols: u, v
+
+
+@pytest.mark.parametrize("heading", [0.0, 1.5, 3.0, -2.7])
+@pytest.mark.parametrize("side", [1.0, -1.0])
+def test_the_cut_batters_texture_is_unsheared_whichever_way_the_road_heads(heading, side):
+    # A straight road: the texture is the face's own metres, u along the road and v up the face, with no shear.
+    # Measured from the absolute heading, a road heading 3 radians from east shifted u 1.9 m along the road for
+    # every metre up this face.
+    t = np.array([np.cos(heading), np.sin(heading)])
+    left = np.array([-t[1], t[0]])
+    s = np.arange(-50.0, 92.0)
+    centre = np.array([E0, N0]) + s[:, None] * t
+    edge_xy = np.stack([centre + 3.2 * left, centre - 3.2 * left], axis=1)
+    jac, _ = _batter_uv(centre, lambda a: np.tile(t, (len(a), 1)), lambda a: np.tile(side * left, (len(a), 1)),
+                        edge_xy, lambda a, o: np.array([E0, N0]) + a[:, None] * t + (side * o)[:, None] * left)
+    assert np.abs(jac[:, 1, 0]).max() < 0.02  # u doesn't shift up the face
+    assert np.abs(jac[:, 0, 0] - 1).max() < 0.02  # a metre along is a metre of texture
+    assert np.abs(np.abs(jac[:, 1, 1]) - 1).max() < 0.02 and np.abs(jac[:, 0, 1]).max() < 0.02
+
+
+@pytest.mark.parametrize("side", [1.0, -1.0])
+def test_on_a_bend_the_cut_batters_streaks_fan_out_along_the_radii(side):
+    # A steady 60 m radius bend, the road heading 2.6-3.2 radians from east past the batter, on its outside (1) or
+    # inside (-1): u doesn't shift up the face, and along the face a metre of it is the centreline's metre, so
+    # radius / (radius + offset) of texture on the outside and radius / (radius - offset) on the inside.
+    radius, c, phi0 = 60.0, np.array([E0, N0]), 1.0
+    s = np.arange(-100.0, 141.0)
+    phi = phi0 + s / radius
+    centre = c + radius * np.column_stack([np.cos(phi), np.sin(phi)])  # anticlockwise: the centre is on the left
+    radial = np.column_stack([np.cos(phi), np.sin(phi)])
+    edge_xy = np.stack([centre - 3.2 * radial, centre + 3.2 * radial], axis=1)
+
+    def ring(a):
+        return np.column_stack([np.cos(phi0 + a / radius), np.sin(phi0 + a / radius)])
+
+    jac, off = _batter_uv(centre, lambda a: ring(a) @ np.array([[0.0, 1.0], [-1.0, 0.0]]),
+                          lambda a: side * ring(a), edge_xy, lambda a, o: c + (radius + side * o)[:, None] * ring(a))
+    assert np.abs(jac[:, 1, 0]).max() < 0.02
+    assert np.abs(jac[:, 0, 0] - radius / (radius + side * off)).max() < 0.03
+    assert np.abs(np.abs(jac[:, 1, 1]) - 1).max() < 0.03
+
+
 def test_without_a_cut_material_steep_ground_keeps_its_class(cut_road):
     frame, _ = cut_road
     t = np.linspace(0, 1200, 120)
