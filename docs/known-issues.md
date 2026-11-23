@@ -195,7 +195,7 @@ The route stage finds the real side roads that meet the route; each gets its fir
   - **What to look at in game:** drive off the road and walk the car round the stubs where the holes were: Mast Gully Road (leaves at 35°) and Old Coach Road on Mount Dandenong Tourist Road, and the skewed stubs on Brinktop Road. The ground should be whole right up to the skirts. Where a stub's skirt crosses the road's (both are drawn there, one over the other), the terrain takes the corner of one skirt there, or stands 2 cm inside both, so it lies over them by a sliver: look for a small step or flicker there.
   - **And the cracks at those crossings, fixed** (18 Nov 2026): until then the terrain had a point on each crossing, which neither skirt has. Rounded to 32-bit floats, its edges and the skirts' parted by a fraction of a millimetre, and the hole check failed a live build of Esperance Coast Road on one 4.4 km from the origin, beside junction 006's stub (`mesh._crossings`, `docs/ac-format.md`, "Terrain").
 - **A gravel side road off a sealed road** brings the gravel material, its 2048 x 512 texture and the `GRAVEL` surface into the track: most of Grasstree Hill's 1 MB growth.
-- **Driveways, service roads and tracks** aren't junctions (the maintainer's decision, 10 Nov 2026): the road data doesn't hold them. Grasstree Hill has 37 driveways and Lower Swamp Road 39, and guide posts, rails and trunk colliders still stand in some of their mouths. Clearing them needs the OSM index to keep those ways too, a PR of its own.
+- **Driveways, service roads and tracks** aren't junctions (the maintainer's decision, 10 Nov 2026): no stub and no closure. Their mouths are kept clear of guard rails, guide posts, curve markers and signs, and their first 30 m of trees, since index layout 4 ("Driveways' mouths" in `docs/ac-format.md`). See "Driveways' mouths" below.
 - **Roundabouts** are recorded and built as before: only the route's arc of the ring is road, and nothing is cleared at their exits. A later PR draws them.
 - **Mount Dandenong Tourist Road** has 73 junctions in 14.6 km, 8 clusters within 30 m of each other: its guide posts fall from 1,535 to 1,443, and 1,053 trees (420 trunk colliders) come off its side roads.
 - **Cost** (laptop builds, made-up WorldCover trees; mesh-stage vertices and triangles, and each layout's KN5, without stubs and with them):
@@ -236,6 +236,28 @@ The route stage finds the real side roads that meet the route; each gets its fir
 
   - Most of a small road's growth is the two textures: the closures' atlas (0.35 MB) and, with a car, the jurisdiction's (0.7 MB). The rest is geometry, about 550 vertices a closure and 560 a car.
   - With the stubs, Mount Dandenong Tourist Road comes to 431,150 → 510,779 mesh-stage vertices (+18%) and 30.6 → 36.5 MB, under the research's estimate (+22%, 5-7 MB).
+
+## Driveways' mouths
+
+Guard rails, guide posts, curve markers and signs keep out of the mouths of driveways, other service roads, tracks and private roads, and trees off their first 30 m (`docs/ac-format.md`, "Driveways' mouths"). No stub, no closure.
+
+- **What it did** (laptop builds from openstreetmap.fr's Tasmania and Victoria extracts of 13 and 23 Nov 2026, made-up WorldCover trees; the same route on main and on the branch; every `fast_lane.ai` and `ai_hints.ini` byte for byte the same; validation passes):
+
+  | Road | Mouths (driveway / service / track) | Rails cut (gaps) | Posts moved, CAMs left out | Trees taken out |
+  |---|---|---|---|---|
+  | Grasstree Hill | 40 (37 / 0 / 3) | 112 m (5) | 18, 10 | 15 |
+  | Lower Swamp Road | 39 (39 / 0 / 0) | 29 m (4) | 27, 3 | 33 |
+  | Brinktop Road | 18 (9 / 4 / 5) | none | 6, 0 | 1 |
+  | Lyell Highway | 10 (0 / 6 / 4) | none | 8, 0 | 13 |
+  | Mount Dandenong Tourist Road | 43 (19 / 21 / 3) | no rails (10 m DEM) | 22, 0 | 67 |
+
+  The junctions research's check (`check_today.py`: rails and furniture 0-3 m beyond the edge on a leg's own carriageway, trunks and tree models on its first 30 m) found on main a rail across 5 driveway mouths on Grasstree Hill and 1 on Lower Swamp Road, furniture in 5, 3, 3, 3 and 11 mouths, and trunk colliders in 8, 10, 0, 4 and 21; on the branch, none, but for two trunks on Dandenong whose colliders straddle the end of the cleared 30 m.
+- **A mouth is where OSM draws it.** Driveways are often drawn roughly (the junctions research: "their OSM lines are often sketchy"), so a gap in a rail or a moved post can be a few metres off the real driveway, and an unmapped driveway gets none.
+- **Lay-bys and parallel service roads** are kept clear along their whole length beside the road: there's no rail or post between the road and a lay-by.
+- **A short rail goes.** As at a side road, a piece of rail left under 24 m beside a mouth is taken out. Where driveways are close together a rail can lose more than the mouths themselves (Grasstree Hill: 106 m on the right for 5 gaps).
+- **Not checked by the validator.** It checks side roads' mouths, not driveways'. They're cleared the same way, but nothing would catch a rail left in one.
+- **No closure props.** The closure kit has none for driveways (Motorsport Australia's level D, "a tape and road closure sign"): today a driveway is open ground, as before.
+- **Index size.** Layout 4 grew the Tasmanian index from 107.1 to 140.0 MB (+31%) and the Victorian from 645.6 to 771.4 MB (+19%). Keeping only each service way's first 40 m from a drivable road would cut Tasmania's growth to about a third (an estimate from the rows' bytes, not built).
 
 ## Roundabouts
 
