@@ -31,7 +31,7 @@ import shapely
 from mapcreator import cpus
 from mapcreator.config import Settings
 from mapcreator.core import bridges as bridges_core
-from mapcreator.core import furniture, grass, junctions, mesh, police_car, reach, roadside, stub_closures, stubs
+from mapcreator.core import furniture, grass, junctions, mesh, police_car, reach, roadside, signals, stub_closures, stubs
 from mapcreator.core import crossing_roads, rail_and_paths
 from mapcreator.core import ramps as ramps_core
 from mapcreator.core import roundabouts as rb_core
@@ -67,6 +67,9 @@ BRIDGES = "bridges.json"
 # The slip ramps and the shallow forks' gore stubs (`core.forks`) as built: the section stage's plan less any left out
 # here (`ramps_core.settle`).
 RAMPS = "ramps.json"
+# The traffic signal sites and named junctions as drawn (`core.signals`): each site's corner posts (or why one is
+# missing), its mast arms, faces and crosswalks, and each named junction's blades and posts.
+SIGNALS = "signals.json"
 
 log = logging.getLogger(__name__)
 
@@ -309,6 +312,24 @@ def furniture_mouths(*masks: dict[str, np.ndarray] | None) -> dict[str, np.ndarr
     return {k: np.logical_or.reduce([np.asarray(m[k], bool) for m in given]) for k in "LR"}
 
 
+def _signals(work: WorkDir, job: Job, found, plan, c, sec, frame: LocalFrame, runs,
+             blocked: dict[str, np.ndarray] | None) -> signals.Built:
+    """The traffic signals along the route and the street-name blades at its named junctions (`core.signals`), their
+    corners set by the side roads' mouths as built (with their stubs' flares) and kept clear of `blocked`, the stations
+    where no furniture stands."""
+    sites = route_stage.signals(work, job)
+    mouth_list = junctions.mouths(found, c["s"], c["xy"], c["heading"], sec["half_left"], sec["half_right"],
+                                  stubs=stubs.by_junction(plan)) if found else []
+
+    def station(rec) -> float:
+        return junctions._station(c["xy"], c["s"], np.asarray(rec["xy"], float), float(rec["at_m"]))
+
+    blade_sites = signals.blades_for(found, c["s"], c["xy"], c["heading"], c["run"], runs, station)
+    road = signals._Road(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"], sec["half_right"],
+                         sec["slope_left"], sec["slope_right"])
+    return signals.build(sites, blade_sites, road, frame, mouths=mouth_list, blocked=blocked, station_of=station)
+
+
 def frame_for(xy: np.ndarray, z: np.ndarray) -> LocalFrame:
     lo, hi = xy.min(axis=0), xy.max(axis=0)
     return LocalFrame(e0=float(round((lo[0] + hi[0]) / 2)), n0=float(round((lo[1] + hi[1]) / 2)),
@@ -522,6 +543,20 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     if furn:
         textures[furniture.MATERIAL] = str(out / "furniture.png")
         atlas.image.save(textures[furniture.MATERIAL])
+    # Traffic signals and street-name blades (`core.signals`), at the corners of the junctions, clear of the mouths
+    # the furniture keeps out of; but a lay-by, a bus lane or another service way running beside the route, whose
+    # "mouth" is its whole length, doesn't keep a junction's corner post away (`signals.ALONGSIDE_MOUTH_M`).
+    short_drive = [m for m in drive if m.s1 - m.s0 <= signals.ALONGSIDE_MOUTH_M]
+    sig = _signals(work, job, found, plan, c, sec, frame, runs, furniture_mouths(
+        mouths, junctions.masks(short_drive, c["s"]) if short_drive else None,
+        decks.parapet if decks and decks.bridges else None))
+    meshes += sig.meshes
+    (out / SIGNALS).unlink(missing_ok=True)
+    if sig.records:
+        work.write_json(STAGE, SIGNALS, {"version": signals.FORMAT_VERSION, "drawn": sig.records})
+    if sig.atlas is not None:
+        textures[signals.TEXTURE] = str(out / f"{signals.TEXTURE}.png")
+        sig.atlas.image.save(textures[signals.TEXTURE])
     meshes += roadside.end_walls(c["s"], c["xy"], c["z"], c["heading"], dem.sample, frame)
     # Railways and paths crossing the route (`core.rail_and_paths`), on the ground and road built above.
     lines_built = _rail_and_paths(work, c, sec, frame, dem, meshes, rb, built, crossed.get("built"),
@@ -575,6 +610,11 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             **({"water": Material("water", texture="water")} if water else {}),
             # The furniture's materials (plain, reflectors, the boards' faces) all draw on the one atlas.
             **{name: Material(name, furniture.MATERIAL) for name in sorted({m.material for m in furn})},
+            # The signals' and blades' (`core.signals`): their own KN5 values, the boards' and blades' faces brighter
+            # at night, and the amber lenses flashing (`package.ext_config_ini`).
+            **{name: Material(name, signals.TEXTURE, properties=signals.KN5_PROPERTIES[name],
+                              night_diffuse=signals.NIGHT_DIFFUSE.get(name))
+               for name in sorted({m.material for m in sig.meshes if m.renderable})},
             # The closures' (closure, closure_retro) and the police cars' (with their own KN5 and night values).
             **(closed.materials if closed is not None else {}),
         },
@@ -608,6 +648,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "frame": [frame.e0, frame.n0, frame.h0],
         "guard_rails": rail_stats,
         "furniture": furn_stats,
+        "signals": sig.stats,
         "water": water_summary,
         "ground": ground_summary,
     } | ({"junctions": junction_stats} if junction_stats is not None else {}) | (

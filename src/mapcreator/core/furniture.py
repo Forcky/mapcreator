@@ -13,7 +13,8 @@ cite it), the way the road markings are:
 - **Speed limit signs** where OpenStreetMap's `maxspeed` changes along the route, and once near each
   layout's start, on the left for each direction of travel.
 
-The textures are drawn here into one atlas: the numerals use Pillow's built-in Aileron font (CC0).
+The textures are drawn here into one atlas: the numerals are in Overpass (`core.lettering`, SIL OFL 1.1), the sign
+font the traffic lights research chose (Q7, 24 Nov 2026); they were in Pillow's built-in Aileron before.
 
 The faces that are retroreflective on the real thing have materials of their own on the same atlas, with the same
 values by day: `REFLECTOR_MATERIAL` for the guide post reflectors and `RETRO_MATERIAL` for CAM boards and speed sign
@@ -26,9 +27,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 from scipy.ndimage import uniform_filter1d
 
+from mapcreator.core import lettering
 from mapcreator.core.scene import MAX_VERTICES, Z_SIGN, LocalFrame, Mesh
 
 # (radius up to, metres; spacing on the outside of the curve; on the inside). Straights: 150 m.
@@ -115,7 +117,7 @@ def atlas(limits: list[int]) -> Atlas:
         thick = 0.22 * w
         d.polygon([(back, y0 + 0.1 * h), (tip, y0 + 0.5 * h), (back, y0 + 0.9 * h), (back - sign * thick, y0 + 0.9 * h),
                    (tip - sign * thick, y0 + 0.5 * h), (back - sign * thick, y0 + 0.1 * h)], fill=(15, 15, 15))
-    font = ImageFont.load_default(size=int(CELL * 0.36))
+    font = lettering.font(int(CELL * 0.36))
     for i, limit in enumerate(limits):
         x0, y0, x1, y1 = cell(f"speed_{limit}", i % COLS, 1 + i // COLS, 0.75, 1.0)
         d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=(250, 250, 250), outline=(20, 20, 20), width=3)

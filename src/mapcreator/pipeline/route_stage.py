@@ -19,10 +19,12 @@ from mapcreator.core import crossings as crossings_core
 from mapcreator.core import junctions as junctions_core
 from mapcreator.core import rail_and_paths
 from mapcreator.core import ramps as ramps_core
+from mapcreator.core import signals as signals_core
 from mapcreator.core.centreline import cumulative
 from mapcreator.job import Job, Junctions
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.providers.osm import graph as osm_graph
+from mapcreator.providers.osm import index as osm_index
 from mapcreator.providers.osm import roads as osm_roads
 from mapcreator.regions import job_region
 
@@ -42,6 +44,9 @@ RAMPS = "ramps.json"
 # The driveways, service roads, tracks and private roads leaving the route, whose mouths are kept clear
 # (`core.junctions.find_driveways`; the format is in docs/ac-format.md).
 DRIVEWAYS = "driveways.json"
+# The traffic signal sites along the route, from OSM's tagged road nodes (`core.signals`; the format is in
+# docs/ac-format.md).
+SIGNALS = "signals.json"
 
 
 class RouteTooLong(osm_graph.RouteError):
@@ -373,11 +378,45 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
                                        **found_ramps})
         summary |= {"ramps": len(found_ramps["ramps"])}
         summary |= _write_driveways(data, route, region, settings, work)
+        summary |= _write_signals(data, g, route, region, settings, work, _bbox(job, 0.02))
     else:
         (work.stage(STAGE) / JUNCTIONS).unlink(missing_ok=True)  # built without them, as before they were found
         (work.stage(STAGE) / RAMPS).unlink(missing_ok=True)
         (work.stage(STAGE) / DRIVEWAYS).unlink(missing_ok=True)
+        (work.stage(STAGE) / SIGNALS).unlink(missing_ok=True)
     return summary
+
+
+def _write_signals(data: dict, g: osm_graph.RoadGraph, route: osm_graph.Route, region, settings: Settings, work: WorkDir,
+                   bbox: tuple[float, float, float, float]) -> dict:
+    """Write signals.json (`core.signals.find`): the traffic signal sites along the route, from the tagged nodes on
+    the roads in the same box the roads came from (the OSM index's `road_nodes`, or the roads query's own nodes from
+    Overpass, narrowed from the roads answer already in hand, `data`). Without them (an OSM index built before they were kept, or Overpass not answering) the file lists none
+    and says why, and the build goes on without signals."""
+    head = {"version": signals_core.FORMAT_VERSION, "crs": f"EPSG:{region.epsg}"}
+    try:
+        found_nodes = (osm_roads.road_nodes_for_bbox(bbox, settings) if settings.osm_index
+                       else osm_index.as_indexed_nodes(data))
+    except osm_roads.INDEX_ERRORS:
+        why = "the OSM index was built before traffic signals and other tagged road nodes were kept: rebuild it"
+    except httpx.HTTPError:
+        why = "the Overpass server didn't answer"
+    else:
+        why = None
+    if why is not None:
+        log.warning("no traffic signals: %s", why)
+        work.write_json(STAGE, SIGNALS, {**head, "unavailable": why, "sites": [], "skipped": []})
+        return {"signals": {"unavailable": why}}
+    elements = found_nodes["elements"]
+    to_xy = region.to_xy()
+    x, y = to_xy.transform([e["lon"] for e in elements], [e["lat"] for e in elements]) if elements else ([], [])
+    nodes = [{"id": e["id"], "xy": (float(a), float(b)), "tags": e.get("tags") or {}}
+             for e, a, b in zip(elements, x, y)]
+    found = signals_core.find(g, route.xy, nodes, to_lonlat=region.to_lonlat())
+    work.write_json(STAGE, SIGNALS, {**head, "version": found.pop("version"), **found})
+    kinds = [st["kind"] for st in found["sites"]]
+    return {"signals": {"junction": kinds.count("junction"), "mid_block": kinds.count("mid_block"),
+                        "skipped": len(found["skipped"])}}
 
 
 def _write_driveways(data: dict, route: osm_graph.Route, region, settings: Settings, work: WorkDir) -> dict:
@@ -544,6 +583,15 @@ def driveways(work: WorkDir, job: Job) -> list[dict]:
     if job.junctions != Junctions.CLOSED or not path.exists():
         return []
     return work.read_json(STAGE, DRIVEWAYS)["driveways"]
+
+
+def signals(work: WorkDir, job: Job) -> list[dict]:
+    """The traffic signal sites along the route (`core.signals.find`), as signals.json lists them: none for a job
+    built without junctions, a route stage run before signals were found, or one whose OSM data didn't have them."""
+    path = work.root / STAGE / SIGNALS
+    if job.junctions != Junctions.CLOSED or not path.exists():
+        return []
+    return work.read_json(STAGE, SIGNALS)["sites"]
 
 
 def ramps(work: WorkDir, job: Job) -> list[dict]:

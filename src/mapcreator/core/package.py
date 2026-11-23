@@ -221,7 +221,8 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
                    dirt_colours: dict[str, str] | None = None,
                    water_materials: list[str] | None = None, water_type: str = "LAKE",
                    tree_list: str | None = None, tree_surfaces: list[str] | None = None,
-                   retro_materials: dict[str, tuple[float, float]] | None = None) -> str:
+                   retro_materials: dict[str, tuple[float, float]] | None = None,
+                   flashing: tuple[list[str], dict[str, str], str] | None = None) -> str:
     """Custom Shaders Patch track config (`extension/ext_config.ini`). Vanilla AC ignores it.
 
     - Grass FX grows procedural grass on our grass materials. CSP's default colour mask means it follows the
@@ -257,6 +258,11 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
       ambient term, the night sky, is left as it is, so a reflector out of the beam stays dark. NIGHT_SMOOTH is
       defined in CSP's `common/conditions.ini` (CONDITION_80: sun above 88 degrees, LAG 0.97), which the file then
       includes, as every shipped config that uses it does.
+    - `flashing` (materials, condition keys, emissive) makes the traffic signals' amber lenses flash
+      (`core.signals`): a `[CONDITION_...]` of INPUT=ONE with FLASHING_* keys, named by the keys' NAME, and a
+      `[MATERIAL_ADJUSTMENT_n]` of ksEmissive under it, off between flashes, as CSP's own `leipzig_stadtpark.ini` and
+      `pudsey.ini` flash "blinking yellow traffic lights". `[CONDITION_...]`'s suffix is CSP's own, numbering it
+      clear of the conditions an included file defines (`pudsey.ini` writes it so).
     """
     water = [("INCLUDE: common/materials_track.ini", {}),
              ("Material_Water", {"Materials": ", ".join(water_materials), "Type": water_type})] if water_materials else []
@@ -270,6 +276,12 @@ def ext_config_ini(*, grass_materials: list[str], road_materials: list[str], ver
             "ACTIVE": "1", "DESCRIPTION": "retroreflective furniture: brighter in the headlights at night",
             "MATERIALS": name, "CONDITION": "NIGHT_SMOOTH", "KEY_0": "ksDiffuse", "VALUE_0": night, "VALUE_0_OFF": day})
         for i, (name, (night, day)) in enumerate(sorted(retro_materials.items()))] if retro_materials else []
+    if flashing and flashing[0]:
+        materials, condition, emissive = flashing
+        retro += [("CONDITION_...", condition), (f"MATERIAL_ADJUSTMENT_{len(retro_materials or {})}", {
+            "ACTIVE": "1", "DESCRIPTION": "traffic signals out of normal service: amber flashing",
+            "MATERIALS": ", ".join(materials), "KEY_0": "ksEmissive", "VALUE_0": emissive, "VALUE_0_OFF": "0, 0, 0",
+            "CONDITION": condition["NAME"]})]
     text = ini(retro + water + [
         ("ABOUT", {"AUTHOR": "mapcreator", "VERSION": version}),
         ("GRASS_FX", {"GRASS_MATERIALS": ", ".join(list(grass_materials) + list(grassy_gravel)),

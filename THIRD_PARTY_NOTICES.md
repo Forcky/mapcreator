@@ -18,6 +18,17 @@ Any ported code carries a provenance header (source URL, licence, commit) and an
 
 To update: download the same three files for the new version, delete the `sourceMappingURL` line, update the version and hashes here and the hash check in `tests/test_service_static.py`.
 
+### Overpass font (SemiBold), release 3.0.5
+
+- Where: `src/mapcreator/core/fonts/Overpass-SemiBold.ttf`, with its licence `OFL.txt` beside it (`core/lettering.py` loads it)
+- Used for: the lettering of the street-name blades (`core/signals.py`) and the speed signs' numerals (`core/furniture.py`), drawn into their textures. A built track carries the rendered letters, never the font file.
+- Source: https://github.com/RedHatOfficial/Overpass, `fonts/ttf/Overpass-SemiBold.ttf` and `OFL.txt` at commit `c580d28bfab7f39013568e684a65eeb23eff588d`
+- Copyright 2021 The Overpass Project Authors (https://github.com/RedHatOfficial/Overpass)
+- Licence: SIL Open Font License 1.1, full text in `OFL.txt` beside the font. The OFL allows bundling and redistributing the font with software, unmodified, with its copyright notice and licence; the font declares no Reserved Font Name. Stored byte for byte (`.gitattributes`); nothing was changed.
+- SHA-256 as downloaded:
+  - `Overpass-SemiBold.ttf` `d72444ce96344d20cb4b0798dde08c45a8fd22b152e7dec03fc8da5d58ef1e9f`
+  - `OFL.txt` `86e5ff25c701ec446d20b1a85b02ee6d36de8503a7288a4c948f5459809af1f0`
+
 ## Format references
 
 The KN5, `fast_lane.ai`, Tree FX and track-folder writers in `src/mapcreator/core/`, and the checks `core/validate.py` makes on a finished track, were written from a description of the file formats. That description was compiled by reading these projects. No code was copied from them.
@@ -37,6 +48,12 @@ The KN5, `fast_lane.ai`, Tree FX and track-folder writers in `src/mapcreator/cor
 - **xxHash32** (`xxh32` in `src/mapcreator/core/treefx.py`), which Tree FX uses to identify a model's textures, implements Yann Collet's XXH32 algorithm as described in the [xxHash specification](https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md). It is a short Python implementation of the published algorithm; none of xxHash's code (BSD-2-Clause) is included.
 
 ## Design references
+
+### Traffic signals and street-name blades
+
+- Where: `src/mapcreator/core/signals.py` (see `docs/ac-format.md`, "Traffic signals and street-name blades")
+- What: the signal posts, lanterns, target boards, mast arms, pedestrian lanterns, push buttons and street-name blades are drawn by our own code from written descriptions: sizes, colours, heights and placement rules from Tasmania's Department of State Growth Specification 730 and standard drawings SD-101-xxx, Austroads' Guide to Traffic Management Part 10, and the ACT's Municipal Infrastructure Standards 12 (blades). The pedestrian figures and the button's arrow are our own simple drawings. Nothing is traced or copied from AS 1742, AS 2144, AS 2353 or any drawing or image; no Google imagery was viewed.
+- The flashing amber follows the pattern of CSP's own track configs, `config/tracks/leipzig_stadtpark.ini` and `config/tracks/pudsey.ini` in https://github.com/ac-custom-shaders-patch/acc-extension-config (commit `68ecff9`): a condition with `FLASHING_*` keys and a `ksEmissive` material adjustment. The keys are CSP's documented configuration; no file's text is copied.
 
 ### Police car liveries and crests
 

@@ -26,7 +26,9 @@ mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, the side 
                        ground classes from TASVEG in Tasmania, for Grass FX), the route's own bridges (a kerb strip and
                        parapets; an open deck over the ground, with abutments and piers, where the gap allows;
                        bridges.json), 1:2 batters on fills, guard rails (up to a bridge over a gap) and furniture (none in
-                       side roads' mouths, on a roundabout's island side or on a bridge), each stub's closure and police
+                       side roads' mouths, on a roundabout's island side or on a bridge), traffic signals at OSM's
+                       signal sites (flashing amber) and street-name blades at named junctions (signals.json), each
+                       stub's closure and police
                        cars at some major ones (closures.json), the roads crossing it and the bridges over it, with their
                        piers and abutments (crossing_roads.json), footbridges and rail bridges over the route and paths
                        and railways under its bridges (rail_and_paths.json), AC dummies

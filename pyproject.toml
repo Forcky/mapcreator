@@ -60,6 +60,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "mapcreator.service" = ["static/*.html", "static/*.js", "static/*.css", "static/vendor/*/*"]
+# The sign font (`core.lettering`) and its licence, which the OFL asks to go with it.
+"mapcreator.core" = ["fonts/*.ttf", "fonts/OFL.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
