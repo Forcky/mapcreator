@@ -89,7 +89,8 @@ def test_the_ground_map_gives_each_point_its_area_class_and_far_forest_is_canopy
     assert gmap.materials(xy, np.full(3, 50.0)).tolist() == ["terrain", "terrain_forest", "terrain"]
     assert grass.GroundMap(grass.tasveg_areas([Community(box(50, 0, 150, 1000), "MBW")])).classes(xy[:2]).tolist() == [
         grass.MOOR, grass.MOOR]
-    # Forest past CANOPY_FROM_M is drawn as canopy from afar, dithered over the band around it; nothing else.
+    # Forest past CANOPY_FROM_M is drawn as canopy from afar, its edge wandering over the band around it in long
+    # waves; nothing else.
     wide = grass.GroundMap(grass.tasveg_areas([Community(box(-2000, -2000, 2000, 2000), "WOU")]))
     forest = np.column_stack([np.full(400, E0 + 175), N0 + np.linspace(1, 999, 400)])
     for d, share in ((grass.CANOPY_FROM_M - grass.CANOPY_BLEND_M / 2 - 1, 0.0), (grass.CANOPY_FROM_M, 0.5),
@@ -99,9 +100,10 @@ def test_the_ground_map_gives_each_point_its_area_class_and_far_forest_is_canopy
     assert (gmap.materials(xy[:1], np.full(1, 650.0)) == "terrain").all()
 
 
-def test_a_class_edge_is_dithered_not_ruled():
-    # Pasture west of x = 0, forest east of it. Near the road a triangle takes the class of a point up to
-    # EDGE_DITHER_M from its centre: so the edge is ragged over about twice that, and plain beyond it.
+def test_a_class_edge_is_warped_not_ruled():
+    # Pasture west of x = 0, forest east of it. Near the road a triangle takes the class of a point moved up to
+    # EDGE_DITHER_M from its centre in smooth waves: so the edge is ragged over about twice that, and plain beyond.
+    # (`test_ground_classes` checks that neighbours move together.)
     gmap = grass.GroundMap(grass.tasveg_areas([Community(box(-500, -500, 0, 500), "FAL"),
                                               Community(box(0, -500, 500, 500), "WOU")]))
     y = N0 + np.linspace(-400, 400, 2000)
@@ -114,7 +116,7 @@ def test_a_class_edge_is_dithered_not_ruled():
     assert forest_share(-r - 0.5) == 0.0 and forest_share(r + 0.5) == 1.0
     assert 0.2 < forest_share(-r / 4) < 0.5 < forest_share(r / 4) < 0.8
     assert forest_share(0.0) == pytest.approx(0.5, abs=0.1)
-    # Further out the dither widens with the lattice, up to five times as much.
+    # Further out the warp widens with the lattice, up to five times as much.
     assert 0.0 < forest_share(-2 * r, dist=300.0) < 0.5
     # It's fixed by where a point is, so a build is the same every time.
     xy = np.column_stack([np.full(len(y), E0), y])
@@ -237,7 +239,7 @@ def test_the_pack_writes_four_configurations_groups_and_an_adjustment_per_class(
                     "terrain_bracken": "D", "terrain_rough": "D, 0.6"}
     grows = by["GRASS_FX"]["GRASS_MATERIALS"].split(", ")
     assert set(grows) == set(maps) | {"terrain"}
-    assert not {"terrain_forest", "terrain_canopy", "terrain_bare"} & set(grows)
+    assert not {"terrain_forest", "terrain_canopy", "terrain_bare", "terrain_cut"} & set(grows)
     # Rain FX treats all the ground as rough, bare or not.
     assert set(EVERY_GROUND) <= set(by["RAIN_FX"]["ROUGH_MATERIALS"].split(", "))
 
@@ -376,7 +378,7 @@ def test_each_ground_class_has_its_own_tileable_texture():
     means = {}
     for name in textures.GROUND_COVERS:
         a = np.asarray(textures.LIBRARY[name]()).astype(float)
-        assert a.shape == (512, 512, 3)
+        assert a.shape == (textures.GROUND_COVER_PX, textures.GROUND_COVER_PX, 3)
         # Tileable: the jump across the wrap is no bigger than between neighbouring pixels inside.
         inside = np.abs(np.diff(a, axis=0)).mean()
         assert np.abs(a[0] - a[-1]).mean() < 2 * inside + 1
@@ -401,7 +403,8 @@ def test_open_ground_doesnt_line_up_in_rows():
 
     def rows(name, uv, tile):
         tex = np.asarray(textures.LIBRARY[name]()).astype(float)
-        img = tex[(np.floor(uv[:, 1] * 512).astype(int)) % 512, (np.floor(uv[:, 0] * 512).astype(int)) % 512]
+        px = tex.shape[0]
+        img = tex[(np.floor(uv[:, 1] * px).astype(int)) % px, (np.floor(uv[:, 0] * px).astype(int)) % px]
         out = []
         for m in (img.mean(axis=1) < 60, img.mean(axis=1)):  # dark (bare) patches; brightness
             m = m.reshape(x.shape).astype(float)

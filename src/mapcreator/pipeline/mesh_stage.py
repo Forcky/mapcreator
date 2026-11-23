@@ -244,7 +244,7 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(),
         meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, ground, frame, extra=extra)
     else:
         meshes += mesh.terrain_meshes(rb, TERRAIN_CORRIDOR_M, ground, frame, ground=gmap.materials,
-                                      classes=grass.MESHES, fold_skirt=True, extra=extra)
+                                      classes=grass.MESHES, fold_skirt=True, extra=extra, cut=grass.CUT_MATERIAL)
     meshes += water_core.meshes(water, frame)
     if decks:
         deck_meshes, decks.stats = decks.meshes(rb, frame, ground, cut=cut)

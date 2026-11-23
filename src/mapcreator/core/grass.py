@@ -17,19 +17,24 @@ drawn: Grass FX takes each blade's colour from the ground under it.
 | Forest, plantation, scrub | `terrain_forest` | none |
 | Forest seen from afar | `terrain_canopy` | none |
 | Sand, mud, rock, water | `terrain_bare` | none |
+| A cut batter above the road (not from the map) | `terrain_cut` | none |
 
 - Only four extra configurations exist ("only up to a D config is possible atm", CSP's Grass FX docs), so wetland
   shares C with moorland, and its own ground tells them apart.
 - Forest more than CANOPY_FROM_M from the road is drawn dark canopy green, not leaf litter: out there made-up
   trees thin to a quarter of the cover and fewer (`scenery.TREE_BANDS`), and none stand past the scenery reach,
-  so litter-brown ground would show as bare brown hills. The change is dithered over CANOPY_BLEND_M.
+  so litter-brown ground would show as bare brown hills. The change wanders in and out over CANOPY_BLEND_M, in
+  long waves.
 - Under the verge's mown strip the class is always A. The skirt beyond it takes the class of the ground it
   stands on (`mesh.terrain_meshes(fold_skirt=True)`), so in forest only the verge is mown grass.
 - Pasture and towns are as on a track without the pack: the `terrain` material and texture, and CSP's default
   grass (no shape keys, no atlas pieces). That's where the pack changed the look least and cost the most frame
   rate (in game, 9 Nov 2026: Grasstree Hill 5.4% slower, most of it on pasture), so it gives way there.
-- Class edges are dithered over EDGE_DITHER_M or more (`GroundMap.materials`), so a mapped block's straight
-  edge breaks up instead of drawing a ruled line across a paddock.
+- Class edges are warped by up to EDGE_DITHER_M or more in smooth waves (`warped`), so a mapped block's straight
+  edge breaks up instead of drawing a ruled line across a paddock. Over the terrain's triangles the class map is
+  then tidied (`classmap.tidy`): an 8 m majority, then regions under 100 m^2 merged into their neighbours.
+- Steep ground cut into the hill above the road, within 25 m of it, is a cut batter (`classmap.cut_batters`):
+  bare earth, no grass, its texture laid up the face. Fills below the road keep their class.
 - Without a vegetation map (the mainland so far, or a failed fetch), none of this applies: the terrain is one
   `terrain` material and Grass FX keeps today's defaults.
 
@@ -52,6 +57,7 @@ from mapcreator.core import grassfx, scenery
 
 PASTURE, SHORT, TUSSOCK, WOODLAND, MOOR, WET = "pasture", "short", "tussock", "woodland", "moor", "wet"
 BRACKEN, ROUGH, FOREST, CANOPY, BARE, UNKNOWN = "bracken", "rough", "forest", "canopy", "bare", "unknown"
+CUT = "cut"  # a cut batter beside the road: bare earth, whatever the map says (`classmap.cut_batters`)
 
 
 @dataclass(frozen=True)
@@ -86,10 +92,14 @@ CLASSES = (
     GroundClass(FOREST, "terrain_forest", "ground_forest", "F", None),
     GroundClass(CANOPY, "terrain_canopy", "ground_canopy", "K", None),
     GroundClass(BARE, "terrain_bare", "ground_bare", "X", None),
+    # Not from the map: steep ground cut into the hill above the road (`classmap.cut_batters`). Its texture
+    # coordinates run along the road and up the face (`classmap.road_uv`), not in plan.
+    GroundClass(CUT, "terrain_cut", "ground_cut", "C", None),
 )
 # A point no area of the map holds (a gap between polygons) is drawn as pasture: today's ground.
 BY_KEY = {**{c.key: c for c in CLASSES}, UNKNOWN: CLASSES[0]}
 BY_MATERIAL = {c.material: c for c in CLASSES}
+CUT_MATERIAL = BY_KEY[CUT].material
 # What `mesh.terrain_meshes` needs for each material: its mesh-name letter, its texture's repeat in metres, and
 # whether that's warped.
 MESHES = {c.material: (c.letter, c.tile_m, c.warp) for c in CLASSES}
@@ -99,9 +109,9 @@ PACK_MATERIALS = tuple(c.material for c in CLASSES if c.material != "terrain")
 VERGE_MATERIALS = ("grass", "gravel_narrow")
 CANOPY_FROM_M = scenery.NEAR_M  # 250 m: where made-up trees thin to their far bands
 CANOPY_BLEND_M = 60.0
-# A triangle takes the class of a point up to this far from its centre near the road, in a direction and at a
-# distance fixed by where it is, so a class's edge is dithered over about twice this. Further out it grows with the
-# terrain's lattice (4 m near the road, 32 m far out), up to five times as much.
+# A triangle takes the class of a point up to this far from its centre near the road, moved in smooth waves of where
+# it is (`warped`), so a class's edge is ragged over about twice this. Further out it grows with the terrain's
+# lattice (4 m near the road, 32 m far out), up to five times as much.
 EDGE_DITHER_M = 6.0
 
 # TASVEG 5.0 VEGCODEs by class (157 codes, labels from theLIST's REST renderer). Codes not named here go by their
@@ -143,20 +153,28 @@ def tasveg_areas(communities: Iterable) -> list[tuple[shapely.Geometry, str]]:
     return [(c.polygon, tasveg_class(c.code)) for c in communities]
 
 
-def _unit_hash(xy: np.ndarray, salt: float = 0.0) -> np.ndarray:
-    """A number in [0, 1) for each point, fixed by where it is (and `salt`): dithers a change of class without a
-    generator."""
-    return np.modf(np.abs(np.sin(xy[:, 0] * 12.9898 + xy[:, 1] * 78.233 + salt)) * 43758.5453)[0]
-
-
-def dithered(xy: np.ndarray, dist: np.ndarray) -> np.ndarray:
-    """Each point moved up to EDGE_DITHER_M (more far from the road) in a direction fixed by where it is: where a
-    class is looked up, so the classes' edges come out ragged."""
+def warped(xy: np.ndarray, dist: np.ndarray) -> np.ndarray:
+    """Each point moved by up to EDGE_DITHER_M (more far from the road) east-west and north-south, in smooth 11-41 m
+    waves of where it is:
+    where a class is looked up, so a mapped edge comes out ragged at the waves' scale, and neighbouring
+    triangles move together rather than each its own way (the per-triangle dither this replaces made a 12 m band of
+    wedges). The waves are three a direction, the second and third weaker, summing to at most 1."""
     xy = np.asarray(xy, dtype=float).reshape(-1, 2)
     reach = EDGE_DITHER_M * np.clip(np.asarray(dist, dtype=float) / 60.0, 1.0, 5.0)
-    angle = 2 * np.pi * _unit_hash(xy, 1.7)
-    r = reach * np.sqrt(_unit_hash(xy, 5.3))  # even over the disc
-    return xy + np.column_stack([np.cos(angle), np.sin(angle)]) * r[:, None]
+    x, y = xy[:, 0], xy[:, 1]
+    wx = (np.sin(2 * np.pi * y / 23 + 1.3) + 0.7 * np.sin(2 * np.pi * (x + y) / 37 + 4.1)
+          + 0.5 * np.sin(2 * np.pi * x / 13 + 0.2))
+    wy = (np.sin(2 * np.pi * x / 29 + 2.7) + 0.7 * np.sin(2 * np.pi * (x - y) / 41 + 0.6)
+          + 0.5 * np.sin(2 * np.pi * y / 11 + 3.3))
+    return xy + np.column_stack([wx, wy]) / 2.2 * reach[:, None]
+
+
+def _canopy_wave(xy: np.ndarray) -> np.ndarray:
+    """A smooth field of position, -1 to 1, in waves of 70-150 m: how far the change to canopy is moved in or out
+    (CANOPY_BLEND_M), so it's a wavy line round the road rather than a per-triangle scatter."""
+    x, y = xy[:, 0], xy[:, 1]
+    return (np.sin(2 * np.pi * x / 97 + 0.4) + 0.8 * np.sin(2 * np.pi * (x - y) / 151 + 2.2)
+            + 0.6 * np.sin(2 * np.pi * y / 71 + 4.4)) / 2.4
 
 
 class GroundMap:
@@ -187,12 +205,13 @@ class GroundMap:
 
     def materials(self, xy: np.ndarray, dist: np.ndarray) -> np.ndarray:
         """The terrain material at each point, `dist` metres from the centreline: the class of a point near it
-        (`dithered`), with forest far from the road drawn as canopy (CANOPY_FROM_M, dithered over
-        CANOPY_BLEND_M)."""
+        (`warped`), with forest far from the road drawn as canopy (beyond CANOPY_FROM_M, moved in or out by up to
+        half CANOPY_BLEND_M in long waves). Over the terrain's triangles `classmap.tidy` then clears what speckle
+        is left and merges small regions."""
         xy = np.asarray(xy, dtype=float).reshape(-1, 2)
-        keys = self.classes(dithered(xy, dist))
-        far = np.clip((np.asarray(dist, dtype=float) - CANOPY_FROM_M) / CANOPY_BLEND_M + 0.5, 0.0, 1.0)
-        keys[(keys == FOREST) & (_unit_hash(xy) < far)] = CANOPY
+        keys = self.classes(warped(xy, dist))
+        far = np.asarray(dist, dtype=float) + CANOPY_BLEND_M / 2 * _canopy_wave(xy) > CANOPY_FROM_M
+        keys[(keys == FOREST) & far] = CANOPY
         found, code = np.unique(keys.astype(str), return_inverse=True)
         return np.array([BY_KEY[k].material for k in found], dtype=object)[code]
 
