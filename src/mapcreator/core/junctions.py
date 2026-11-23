@@ -44,6 +44,17 @@ kept off the side road for its first `LEG_M` as they are kept off the mainline: 
 the mainline's clearance for each. Where the side road has a stub (`core.stubs`), its mouth reaches over the stub's
 flares too, and the side road is the stub's paved outline (its throat and carriageway) as well as its mapped line.
 
+**Driveways** (`find_driveways`; the maintainer's answer to the junctions research's Q5, 10 Nov 2026). Driveways,
+other service roads, tracks and private roads get no stub and no closure, and are never a junction, a crossing or a
+road to route on. But their mouths are kept clear as a junction's are: no guard rail, guide post, curve marker or
+sign stands in one, and no tree stands on the first `DRIVEWAY_LEG_M` of one, nor within the mainline's clearance
+beyond its verge (`scenery.CLEAR_OF_VERGE_M`) of its edge: a driveway has no verge of its own.
+Buildings and power-line supports are left where they are: a house or a pole beside a driveway is where it really
+is. A driveway's width is `DRIVEWAY_WIDTH_M` unless it's tagged; a service road, track or private road takes its
+class default (`section.width_from_tags`, a track as unsealed unless its surface says otherwise). They're written to
+`01_route/driveways.json`, apart from the junctions, so nothing that reads junctions (stubs, closures, gates,
+validation's junction checks) ever sees one.
+
 The format of `01_route/junctions.json` is in `docs/ac-format.md` ("Junctions"). Coordinates are in the region's
 projected CRS, as the route's are.
 """
@@ -99,6 +110,13 @@ RING = frozenset({"roundabout", "circular"})
 KEEP_TAGS = ("highway", "name", "ref", "surface", "lanes", "width", "narrow", "lane_markings", "oneway", "maxspeed",
              "access", "motor_vehicle", "vehicle", "junction")
 SIDE_CODE = {"left": "L", "right": "R"}
+
+# Driveways, service roads, tracks and private roads (module notes, "Driveways").
+DRIVEWAY_FORMAT_VERSION = 1
+SERVICE_CLASSES = frozenset({"service", "track"})  # `providers.osm.overpass.SERVICE`
+DRIVEWAY_LEG_M = 30.0  # followed this far: the junctions research measured trunks in a side road's first 30 m
+DRIVEWAY_WIDTH_M = 3.5  # an untagged driveway's carriageway (the research's 1.75 m half width)
+DRIVEWAY_KEEP_TAGS = ("highway", "service", "name", "surface", "width", "access", "motor_vehicle", "vehicle")
 
 
 def access_value(tags: dict) -> str | None:
@@ -537,6 +555,103 @@ def find(net, route_xy: np.ndarray, *, leg_m: float = LEG_M, to_lonlat=None) -> 
                      "shallow_leg_m": max(leg_m, SHALLOW_LEG_M), "end_clear_m": END_CLEAR_M, "nose_w_m": NOSE_W_M},
             "junctions": junctions,
             "roundabouts": [_ring_record(nw, rt, ring, k, leg_m, elsewhere) for k, ring in enumerate(rings)],
+            "skipped": skipped}
+
+
+def driveway_kind(tags: dict) -> str | None:
+    """What a way leaving the route is when its mouth is kept clear without a stub (module notes, "Driveways"):
+    "driveway" (`service=driveway`), "service" (any other `highway=service`), "track", or "private_road" (a class the
+    router uses, but private: a real junction it isn't). None for anything else, and for an area (`area=yes`: a
+    car park or yard drawn as its outline)."""
+    if str(tags.get("area") or "").strip().lower() == "yes":
+        return None
+    hw = tags.get("highway")
+    if hw == "service":
+        return "driveway" if tags.get("service") == "driveway" else "service"
+    if hw == "track":
+        return "track"
+    if hw in DRIVABLE and is_private(tags):
+        return "private_road"
+    return None
+
+
+def driveway_width(tags: dict) -> tuple[float, str]:
+    """A driveway's carriageway width and where it came from: its `width` tag if it has one, else DRIVEWAY_WIDTH_M
+    for a driveway; a service road, track or private road its class default (`section.width_from_tags`), a track
+    unsealed unless its surface is tagged sealed."""
+    surface = sec.surface_class(tags)
+    unsealed = surface != sec.SEALED if tags.get("highway") == "track" else surface == sec.UNSEALED
+    width, source = sec.width_from_tags(tags, unsealed=unsealed)
+    if source not in ("width", "width_clamped") and driveway_kind(tags) == "driveway":
+        return DRIVEWAY_WIDTH_M, "driveway"
+    return width, source
+
+
+def find_driveways(net, route_xy: np.ndarray, *, leg_m: float = DRIVEWAY_LEG_M, to_lonlat=None) -> dict:
+    """The driveways, other service roads, tracks and private roads leaving a routed polyline (`driveway_kind`): the
+    content of driveways.json. Only their mouths are kept clear; nothing else ever reads them.
+
+    `net` is a network holding the route's ways and the ways leaving it, as `find` takes it, but built for this
+    alone: it holds service roads and tracks, so the route must never be found on it. Each way is followed out to
+    `leg_m` as a junction's side road is (`_Network.walk`), and dropped where it's a bridge, tunnel or other layer in
+    its first GRADE_FREE_M, or meets another part of the route within MIN_LEG_M (listed under "skipped").
+    """
+    nw = _Network(net)
+    rt = _Route(route_xy, nw)
+    found, skipped = [], []
+    for i in range(1, len(rt.xy) - 1):  # at the route's very end, its end wall closes everything
+        node = int(rt.node[i])
+        if node < 0:
+            continue
+        at = float(rt.s[i])
+        here = rt.xy[i]
+        u_in = here - rt.at(at - ANGLE_AT_M)
+        u_out = rt.at(at + ANGLE_AT_M) - here
+        u_in /= max(float(np.hypot(*u_in)), 1e-9)
+        u_out /= max(float(np.hypot(*u_out)), 1e-9)
+        tangent = u_in + u_out if float(np.hypot(*(u_in + u_out))) > 1e-6 else u_out
+        for nb, way in nw.adj[node]:
+            if frozenset((node, nb)) in rt.pairs:
+                continue  # the route itself
+            tags = nw.tags(way)
+            kind = driveway_kind(tags)
+            if kind is None:
+                continue  # a real side road (`find`), a path, or anything else
+            if rt.along_route(here, nw.xy[nb], at) and _spliced(rt, i, nw.xy[nb]):
+                continue  # the route itself, running on past a spliced waypoint
+            leg = nw.walk(node, nb, way, rt.nodes - {node}, leg_m)
+            clip = rt.other_part_m(leg.line, here, at)
+            if clip is not None and clip < cumulative(leg.line)[-1]:
+                leg.line, leg.ends = _cut(leg.line, clip), "meets_route"
+            length = float(cumulative(leg.line)[-1])
+            angle = _wrap(_heading(_along(leg.line, ANGLE_AT_M) - here) - _heading(tangent))
+            record = {"node": int(nw.osm_node[node]), "at_m": round(at, 1), "xy": np.round(here, 2).tolist(),
+                      "side": "left" if angle > 0 else "right", "angle_deg": round(angle, 1), "kind": kind,
+                      "way_id": nw.ways[way]["id"], "highway": tags.get("highway"), "name": tags.get("name")}
+            if _grade_separated_near(nw, leg):
+                reason = "grade_separated"
+            elif leg.ends == "meets_route" and length < MIN_LEG_M:
+                reason = "meets_route"
+            else:
+                reason = None
+            if reason is not None:
+                skipped.append({**record, "reason": reason})
+                continue
+            width, source = driveway_width(tags)
+            found.append({**record, "way_ids": [nw.ways[w]["id"] for w in leg.ways], "access": access_value(tags),
+                          "tags": {k: tags[k] for k in DRIVEWAY_KEEP_TAGS if k in tags},
+                          "width_m": round(float(width), 2), "width_source": source, "length_m": round(length, 1),
+                          "ends": leg.ends, "line": np.round(leg.line, 2).tolist()})
+    found.sort(key=lambda d: (d["at_m"], d["side"], d["angle_deg"]))
+    driveways = [{"id": k, **d} for k, d in enumerate(found)]
+    if to_lonlat is not None:
+        for d in driveways:
+            lon, lat = to_lonlat.transform(*d["xy"])
+            d["lonlat"] = [round(float(lon), 7), round(float(lat), 7)]
+    return {"version": DRIVEWAY_FORMAT_VERSION,
+            "rule": {"leg_m": leg_m, "classes": sorted(SERVICE_CLASSES), "private": sorted(PRIVATE),
+                     "driveway_width_m": DRIVEWAY_WIDTH_M, "grade_free_m": GRADE_FREE_M, "min_leg_m": MIN_LEG_M},
+            "driveways": driveways,
             "skipped": skipped}
 
 

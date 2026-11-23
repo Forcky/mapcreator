@@ -80,6 +80,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     crossing = crossing if crossing and (crossing["roads"] or crossing["decks"]) else None
     # Slip ramps (`core.ramps`): the same off each ramp's taper, gore, stub and nose island.
     ramps = section_stage.ramps(work, job)
+    # Driveways, service roads, tracks and private roads (`junctions.find_driveways`): trees only, off each one's first
+    # 30 m and CLEAR_OF_VERGE_M beyond its edge. A house or a power pole beside a driveway stays where it is.
+    drive = junctions.mouths(route_stage.driveways(work, job), c["s"], xy, c["heading"], sec["half_left"],
+                             sec["half_right"])
     cleared: dict | None = {} if mouths or rings or crossing or ramps else None
 
     def side_roads_zone(beyond_m: float):
@@ -173,6 +177,14 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         shapely.prepare(side_roads)
         keep_trees = ~shapely.contains_xy(side_roads, trees.xy[:, 0], trees.xy[:, 1])
         cleared["trees"] = int((~keep_trees).sum())
+    driveways_cleared = None
+    if drive:
+        lanes = junctions.zone(drive, c["s"], xy, scenery.CLEAR_OF_VERGE_M)
+        shapely.prepare(lanes)
+        on_lane = shapely.contains_xy(lanes, trees.xy[:, 0], trees.xy[:, 1]) if len(trees) else np.zeros(0, bool)
+        before = len(trees) if keep_trees is None else int(keep_trees.sum())
+        keep_trees = ~on_lane if keep_trees is None else keep_trees & ~on_lane
+        driveways_cleared = {"found": len(drive), "trees": before - int(keep_trees.sum())}
 
     meshes = scenery.building_meshes(footprints, dem.sample, frame, rng, keep=keep_buildings)
 
@@ -243,7 +255,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "meshes": len(meshes),
         "vertices": int(sum(len(m.positions) for m in meshes)),
         "triangles": int(sum(len(m.triangles) for m in meshes)),
-    } | ({"junctions": {"found": len(found), "side_roads_cleared_of": cleared}} if cleared is not None else {})
+    } | ({"junctions": {"found": len(found), "side_roads_cleared_of": cleared}} if cleared is not None else {}) | (
+        {"driveways": driveways_cleared} if driveways_cleared is not None else {})
 
 
 def _power(region, settings: Settings, xy: np.ndarray, half: float, dem, frame, out,

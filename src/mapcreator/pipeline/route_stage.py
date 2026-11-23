@@ -6,6 +6,7 @@ Roads come from the local OSM index when `osm_index` is set (production), else f
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
 import httpx
@@ -25,6 +26,8 @@ from mapcreator.providers.osm import graph as osm_graph
 from mapcreator.providers.osm import roads as osm_roads
 from mapcreator.regions import job_region
 
+log = logging.getLogger(__name__)
+
 STAGE = "01_route"
 # How the roads were selected from OpenStreetMap (`osm_roads.selection`), for the track's ATTRIBUTION.txt.
 OSM_SELECTION = "osm_selection.json"
@@ -36,6 +39,9 @@ CROSSINGS = "crossings.json"
 CROSSING_LINES = "crossing_lines.json"
 # The ramps leaving or joining the route at a slip angle (`core.ramps`; the format is in docs/ac-format.md).
 RAMPS = "ramps.json"
+# The driveways, service roads, tracks and private roads leaving the route, whose mouths are kept clear
+# (`core.junctions.find_driveways`; the format is in docs/ac-format.md).
+DRIVEWAYS = "driveways.json"
 
 
 class RouteTooLong(osm_graph.RouteError):
@@ -366,10 +372,54 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         work.write_json(STAGE, RAMPS, {"version": found_ramps.pop("version"), "crs": f"EPSG:{region.epsg}",
                                        **found_ramps})
         summary |= {"ramps": len(found_ramps["ramps"])}
+        summary |= _write_driveways(data, route, region, settings, work)
     else:
         (work.stage(STAGE) / JUNCTIONS).unlink(missing_ok=True)  # built without them, as before they were found
         (work.stage(STAGE) / RAMPS).unlink(missing_ok=True)
+        (work.stage(STAGE) / DRIVEWAYS).unlink(missing_ok=True)
     return summary
+
+
+def _write_driveways(data: dict, route: osm_graph.Route, region, settings: Settings, work: WorkDir) -> dict:
+    """Write driveways.json (`core.junctions.find_driveways`): the driveways, other service roads, tracks and private
+    roads leaving the route, whose mouths are kept clear. They're found on a network of their own (the route's ways,
+    the private roads touching them and the service roads and tracks), never the one the route was found on. Without
+    them (an OSM index built before they were kept, or Overpass not answering) the file lists none and says why, and
+    the build goes on as before."""
+    head = {"version": junctions_core.DRIVEWAY_FORMAT_VERSION, "crs": f"EPSG:{region.epsg}"}
+    lon, lat = region.to_lonlat().transform(route.xy[:, 0], route.xy[:, 1])
+    m = LINES_MARGIN_DEG
+    bbox = (float(min(lon)) - m, float(min(lat)) - m, float(max(lon)) + m, float(max(lat)) + m)
+    try:
+        service = osm_roads.service_ways_for_bbox(bbox, settings)
+    except osm_roads.INDEX_ERRORS:
+        why = "the OSM index was built before driveways, service roads and tracks were kept: rebuild it"
+    except httpx.HTTPError:
+        why = "the Overpass server didn't answer"
+    else:
+        why = None
+    if why is not None:
+        log.warning("driveways' mouths not kept clear: %s", why)
+        work.write_json(STAGE, DRIVEWAYS, {**head, "unavailable": why, "driveways": [], "skipped": []})
+        return {"driveways": {"unavailable": why}}
+    if not settings.osm_index:  # from Overpass: ATTRIBUTION.txt names this filter too (`osm_roads.selection_note`)
+        work.write_json(STAGE, OSM_SELECTION, {**work.read_json(STAGE, OSM_SELECTION),
+                                               "overpass_service_filter": osm_roads.SERVICE_SELECTION})
+    route_ids = {route.ways[int(w)]["id"] for w in route.seg_way}
+    road_ways = [e for e in data["elements"] if e["type"] == "way" and e["id"] in route_ids]
+    on_route = {n for w in road_ways for n in w["nodes"]}
+    # Private roads are in the road data (the router's classes); a real junction they aren't (`junctions_core.find`).
+    road_ways += [e for e in data["elements"] if e["type"] == "way" and e["id"] not in route_ids
+                  and junctions_core.driveway_kind(e.get("tags") or {}) == "private_road"
+                  and on_route.intersection(e["nodes"])]
+    service_ways = [e for e in service["elements"] if e["type"] == "way"]
+    used = {n for w in road_ways + service_ways for n in w["nodes"]}
+    nodes = {e["id"]: e for e in data["elements"] + service["elements"] if e["type"] == "node" and e["id"] in used}
+    net = osm_graph.build({"elements": list(nodes.values()) + road_ways + service_ways}, region.to_xy())
+    found = junctions_core.find_driveways(net, route.xy, to_lonlat=region.to_lonlat())
+    work.write_json(STAGE, DRIVEWAYS, {**head, "version": found.pop("version"), **found})
+    kinds = [d["kind"] for d in found["driveways"]]
+    return {"driveways": {k: kinds.count(k) for k in ("driveway", "service", "track", "private_road")}}
 
 
 def _write_crossings(g: osm_graph.RoadGraph, route: osm_graph.Route, region, work: WorkDir) -> dict:
@@ -484,6 +534,16 @@ def junctions(work: WorkDir, job: Job) -> list[dict]:
     if job.junctions != Junctions.CLOSED or not path.exists():
         return []
     return work.read_json(STAGE, JUNCTIONS)["junctions"]
+
+
+def driveways(work: WorkDir, job: Job) -> list[dict]:
+    """The driveways, service roads, tracks and private roads leaving the route (`core.junctions.find_driveways`),
+    as driveways.json lists them: none for a job built without junctions, a route stage run before they were found,
+    or one whose OSM data didn't have them. Only their mouths are kept clear: they're never junctions."""
+    path = work.root / STAGE / DRIVEWAYS
+    if job.junctions != Junctions.CLOSED or not path.exists():
+        return []
+    return work.read_json(STAGE, DRIVEWAYS)["driveways"]
 
 
 def ramps(work: WorkDir, job: Job) -> list[dict]:

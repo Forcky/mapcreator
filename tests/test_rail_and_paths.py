@@ -137,6 +137,7 @@ def _route(tmp_path, monkeypatch, lines=hobart_lines):
         return lines()
 
     monkeypatch.setattr(route_stage.osm_roads, "railways_and_paths_for_bbox", fetch)
+    monkeypatch.setattr(route_stage.osm_roads, "service_ways_for_bbox", lambda bbox, settings: {"elements": []})
     work = WorkDir(tmp_path / "work")
     settings = replace(config.load(), osm_index="")  # as from Overpass, whatever the local config
     out = route_stage.run(Job(track_id="hobart", waypoints=HOBART), settings, work)
@@ -168,9 +169,11 @@ def test_the_route_stage_lists_a_footbridge_with_its_whole_bridge_approaches_and
     assert road["tags"] == {"highway": "secondary", "maxheight": "5.3"}
     # From Overpass, ATTRIBUTION.txt names the railways' and paths' filters too (ODbL 4.6).
     sel = route_stage.osm_selection(work, config.load())
-    assert sel == {"overpass_filter": overpass.ROADS_FILTER, "overpass_lines_filter": roads.LINES_SELECTION}
+    assert sel == {"overpass_filter": overpass.ROADS_FILTER, "overpass_lines_filter": roads.LINES_SELECTION,
+                   "overpass_service_filter": roads.SERVICE_SELECTION}  # and the driveways' (`core.junctions`)
     note = roads.selection_note(sel, build="test")
     assert overpass.RAILWAYS_FILTER in note and overpass.PATHS_FILTER in note and "index.py" in note
+    assert overpass.SERVICE_FILTER in note
 
 
 def test_without_railways_and_paths_the_route_stage_says_why_and_goes_on(tmp_path, monkeypatch):

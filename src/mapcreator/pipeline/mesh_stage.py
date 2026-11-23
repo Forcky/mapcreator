@@ -300,6 +300,15 @@ def _mouths(found, plan, rings, c, sec) -> dict[str, np.ndarray] | None:
     return out
 
 
+def furniture_mouths(*masks: dict[str, np.ndarray] | None) -> dict[str, np.ndarray] | None:
+    """Where no guide post, curve marker or sign stands, per side: the union of the given masks (side roads', ramps'
+    and roundabouts' mouths, driveways' mouths, bridges' parapets), any of them None; None if all are."""
+    given = [m for m in masks if m is not None]
+    if not given:
+        return None
+    return {k: np.logical_or.reduce([np.asarray(m[k], bool) for m in given]) for k in "LR"}
+
+
 def frame_for(xy: np.ndarray, z: np.ndarray) -> LocalFrame:
     lo, hi = xy.min(axis=0), xy.max(axis=0)
     return LocalFrame(e0=float(round((lo[0] + hi[0]) / 2)), n0=float(round((lo[1] + hi[1]) / 2)),
@@ -446,6 +455,11 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     if ramps_now:  # nor along a slip ramp's taper, gore and nose island (`ramps_core.masks`)
         ramp_masks = ramps_core.masks(ramps_now, c["s"])
         mouths = ramp_masks if mouths is None else {k: mouths[k] | ramp_masks[k] for k in "LR"}
+    # Nor in a driveway's, a service road's, a track's or a private road's mouth (`junctions.find_driveways`), except
+    # on the route's own bridges, where nothing meets the road at its level.
+    drive = junctions.mouths(route_stage.driveways(work, job), c["s"], c["xy"], c["heading"], sec["half_left"],
+                             sec["half_right"])
+    drive_masks = junctions.masks(drive, c["s"]) if drive else None
     junction_stats = {"found": len(found)} if found else None
     if ramp_plan:
         junction_stats = junction_stats or {}
@@ -472,9 +486,17 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         masks = {side: mask | on_bridge for side, mask in masks.items()}
     if decks and decks.bridges:  # on the bridge itself the parapet takes over, sharing the rail's end station
         masks = {side: mask & ~bridges_core.interior(decks.parapet[side]) for side, mask in masks.items()}
+    driveway_stats = {"found": len(drive)} if drive else None
     if fine.any() or on_bridge.any():
         if mouths is not None:
             masks, junction_stats["rail_m_removed"] = roadside.clear_mouths(masks, mouths, c["s"])
+        if drive_masks is not None:
+            before = masks
+            masks, driveway_stats["rail_m_removed"] = roadside.clear_mouths(
+                masks, {k: drive_masks[k] & ~on_bridge for k in "LR"}, c["s"])
+            # The driveways a rail used to run across: a rail now ends either side of each.
+            driveway_stats["rail_gaps"] = sum(
+                bool((before[m.side] & ~masks[m.side] & (c["s"] >= m.s0) & (c["s"] <= m.s1)).any()) for m in drive)
         rails, rail_stats = roadside.guard_rails(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"],
                                                  sec["half_right"], sec["slope_left"], sec["slope_right"],
                                                  dem.sample, frame, allowed=fine, masks=masks)
@@ -484,9 +506,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     limits = furniture.speed_limits(c["run"], runs)
     # Nothing stands on a bridge but its parapets and their reflectors: no guide post, curve marker or sign, as in a
     # side road's mouth (a post due there goes up just past it, a sign moves off it).
-    furn_mouths = mouths
-    if decks and decks.bridges:
-        furn_mouths = {k: (mouths[k] if mouths is not None else no_rail) | decks.parapet[k] for k in "LR"}
+    # Nor in a driveway's mouth.
+    furn_mouths = furniture_mouths(mouths, drive_masks, decks.parapet if decks and decks.bridges else None)
     furn, furn_stats, atlas = furniture.furniture(
         c["s"], c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
         sec["slope_left"], sec["slope_right"], sec["superelevation"], limits, frame, masks["L"], masks["R"],
@@ -590,6 +611,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "water": water_summary,
         "ground": ground_summary,
     } | ({"junctions": junction_stats} if junction_stats is not None else {}) | (
+        {"driveways": driveway_stats} if driveway_stats is not None else {}) | (
         {"crossing_roads": cross_stats} if cross_stats is not None else {}) | (
         {"rail_and_paths": lines_built.stats} if lines_built.records else {}) | (
         {"bridges": decks.stats} if decks else {})

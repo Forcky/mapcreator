@@ -34,7 +34,7 @@ docker run --rm -v <osm dir>:/data mapcreator-index:local \
 
 Don't use a bare `python:3.12-slim` container for this. pyosmium's wheel links the system's libexpat, which the slim image doesn't ship, so `import osmium` fails there. The example Dockerfiles install it.
 
-Refresh the extract and rebuild the index now and then (e.g. monthly), and whenever the code's index layout changes (`SCHEMA_VERSION` in `providers/osm/index.py`; layout 3 added railways and paths). An index of an older layout keeps serving what it holds, so builds go on, but what the newer layout adds is missing until it's rebuilt. The index records the extract's timestamp (`metadata()` in `providers/osm/index.py`). Node locations are held in memory by default. If the build host is short of RAM, add `--locations sparse_file_array,/data/nodes.bin` to keep them on disk.
+Refresh the extract and rebuild the index now and then (e.g. monthly), and whenever the code's index layout changes (`SCHEMA_VERSION` in `providers/osm/index.py`; layout 3 added railways and paths, layout 4 service roads and tracks: a fifth to a third larger on the Victorian and Tasmanian extracts). An index of an older layout keeps serving what it holds, so builds go on, but what the newer layout adds is missing until it's rebuilt. The index records the extract's timestamp (`metadata()` in `providers/osm/index.py`). Node locations are held in memory by default. If the build host is short of RAM, add `--locations sparse_file_array,/data/nodes.bin` to keep them on disk.
 
 ## 2. Build the worker image and smoke-test it
 

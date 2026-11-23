@@ -22,8 +22,8 @@ from mapcreator.service.routing import DevRouter, RouterUnavailable
 
 EPSG = 28355  # MGA zone 55, the fixture is near Hobart
 # A block of road: Main Road runs west only along -42.800; Back Street loops round the north.
-# Also: a tertiary road with a node missing from the extract, a footway and a service road
-# (not drivable), a road far away, an L-shaped road whose box covers QUERY without entering it,
+# Also: a tertiary road with a node missing from the extract, a footway, a service road, a private driveway
+# and a track (not drivable: layout 4), a road far away, an L-shaped road whose box covers QUERY without entering it,
 # a house between the roads, a shed far away, an unclosed "building" and a route relation.
 # Power: an 11 kV minor line drawn with vertices 400 m apart, a 220/110 kV double-circuit line, an
 # underground line (indexed, never built) and a power=cable way (not indexed).
@@ -79,6 +79,8 @@ FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
   <node id="83" lat="-42.7992000" lon="147.4020000"/>
   <node id="84" lat="-42.8050000" lon="147.4000000"/>
   <node id="85" lat="-42.8050000" lon="147.4100000"/>
+  <node id="90" lat="-42.7975000" lon="147.3000000"/>
+  <node id="91" lat="-42.7975000" lon="147.3100000"/>
   <way id="10">
     <nd ref="3"/><nd ref="2"/><nd ref="1"/>
     <tag k="highway" v="secondary"/><tag k="oneway" v="yes"/><tag k="name" v="Main Road"/>
@@ -106,6 +108,15 @@ FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
   <way id="16">
     <nd ref="5"/><nd ref="9"/>
     <tag k="highway" v="service"/>
+  </way>
+  <way id="17">
+    <nd ref="4"/><nd ref="90"/>
+    <tag k="highway" v="service"/><tag k="service" v="driveway"/><tag k="access" v="private"/>
+    <tag k="operator" v="Someone"/>
+  </way>
+  <way id="18">
+    <nd ref="6"/><nd ref="91"/>
+    <tag k="highway" v="track"/><tag k="tracktype" v="grade3"/><tag k="surface" v="gravel"/>
   </way>
   <way id="30">
     <nd ref="20"/><nd ref="21"/><nd ref="22"/><nd ref="23"/><nd ref="20"/>
@@ -200,12 +211,12 @@ def _ways_table(path) -> list[tuple]:
         return con.execute("SELECT id, kind, tags_json, coords, node_ids FROM ways ORDER BY id").fetchall()
 
 
-COUNTS = {"roads": 6, "buildings": 3, "power_lines": 3, "railways": 2, "paths": 3, "skipped": 5}
+COUNTS = {"roads": 6, "buildings": 3, "power_lines": 3, "railways": 2, "paths": 3, "service_ways": 3, "skipped": 4}
 
 
 def test_build_keeps_drivable_roads_and_closed_buildings(extract, tmp_path):
     counts = index.build_index(extract, tmp_path / "out.sqlite", reader="xml")
-    # Skipped: the service road, the unclosed building, the power=cable way, the platform and the tram line.
+    # Skipped: the unclosed building, the power=cable way, the platform and the tram line.
     assert counts == COUNTS
     rows = {r[0]: r for r in _ways_table(tmp_path / "out.sqlite")}
     assert {i for i, r in rows.items() if r[1] == "road"} == {10, 11, 12, 14, 15, 56}
@@ -213,6 +224,7 @@ def test_build_keeps_drivable_roads_and_closed_buildings(extract, tmp_path):
     assert {i for i, r in rows.items() if r[1] == "power"} == {40, 41, 42}
     assert {i for i, r in rows.items() if r[1] == "railway"} == {51, 52}
     assert {i for i, r in rows.items() if r[1] == "path"} == {13, 50, 53}
+    assert {i for i, r in rows.items() if r[1] == "service"} == {16, 17, 18}
     # Power lines keep what their model needs, not who runs them, and which vertices are mapped supports.
     assert json.loads(rows[40][2]) == {"power": "minor_line", "voltage": "11000", "mapcreator:supports": "-P-"}
     assert json.loads(rows[41][2])["mapcreator:supports"] == "TT"
@@ -223,8 +235,9 @@ def test_build_keeps_drivable_roads_and_closed_buildings(extract, tmp_path):
     assert json.loads(rows[30][2]) == {"building": "house", "building:levels": "2"}
     assert rows[30][4] is None
     meta = index.metadata(tmp_path / "out.sqlite")
-    assert meta["source"] == "fixture.osm" and meta["roads"] == "6" and meta["schema"] == index.SCHEMA_VERSION == "3"
+    assert meta["source"] == "fixture.osm" and meta["roads"] == "6" and meta["schema"] == index.SCHEMA_VERSION == "4"
     assert meta["railways"] == "2" and meta["paths"] == "3" and meta["railway_classes"] == overpass.RAILWAYS
+    assert meta["service_ways"] == "3" and meta["service_classes"] == overpass.SERVICE
     assert not (tmp_path / "out.sqlite.partial").exists()
 
 
@@ -322,11 +335,13 @@ def test_pyosmium_builds_the_same_index_from_xml_and_pbf(extract, osm_index, tmp
 def test_command_line_builds_and_queries(extract, tmp_path, capsys):
     out = tmp_path / "cli.sqlite"
     assert index.main(["build", str(extract), str(out), "--reader", "xml"]) == 0
-    assert "indexed 6 roads, 2 railways, 3 paths, 3 buildings and 3 power lines" in capsys.readouterr().out
+    assert ("indexed 6 roads, 2 railways, 3 paths, 3 service roads and tracks, 3 buildings and 3 power lines"
+            in capsys.readouterr().out)
     assert index.main(["query", str(out), *map(str, QUERY)]) == 0
     text = capsys.readouterr().out
     assert "roads: 3 ways, 7 nodes" in text and "buildings: 1 in EPSG:28355" in text
     assert "railways and paths: 2 railways, 3 paths" in text
+    assert "service roads and tracks: 1 driveways, 1 other service roads, 1 tracks" in text
     assert index.main(["query", str(out), *map(str, QUERY), "--json"]) == 0
     assert len(json.loads(capsys.readouterr().out)["elements"]) == 10
 
@@ -371,12 +386,15 @@ def test_route_stage_asks_overpass_without_an_index(osm_index, tmp_path, monkeyp
     job = Job(track_id="overpass_road", waypoints=WESTBOUND)
     result = route_stage.run(job, _settings(tmp_path), WorkDir(tmp_path / "work"))
     assert result["ways"] == 1
-    # Overpass takes south, west, north, east. Then the railways and paths round the route (stage 2c).
-    assert len(queries) == 2 and "(-42.820000,147.280500,-42.780000,147.329500)" in queries[0]
+    # Overpass takes south, west, north, east. Then the railways and paths round the route (stage 2c), and the
+    # service roads and tracks (driveways' mouths).
+    assert len(queries) == 3 and "(-42.820000,147.280500,-42.780000,147.329500)" in queries[0]
     assert overpass.RAILWAYS_FILTER in queries[1] and overpass.PATHS_FILTER in queries[1]
+    assert overpass.SERVICE_FILTER in queries[2]
     work = WorkDir(tmp_path / "work")
     assert route_stage.osm_selection(work, _settings(tmp_path)) == {"overpass_filter": overpass.ROADS_FILTER,
-                                                                     "overpass_lines_filter": roads.LINES_SELECTION}
+                                                                     "overpass_lines_filter": roads.LINES_SELECTION,
+                                                                     "overpass_service_filter": roads.SERVICE_SELECTION}
     # A work folder routed before the selection was recorded gets the current settings' answer.
     (tmp_path / "work" / route_stage.STAGE / route_stage.OSM_SELECTION).unlink()
     assert route_stage.osm_selection(work, _settings(tmp_path, osm_index))["index"] == "fixture.osm"
@@ -525,3 +543,70 @@ def test_an_index_from_before_railways_and_paths_still_serves_the_rest(osm_index
         roads.railways_and_paths_for_bbox(QUERY, _settings(tmp_path, old), fetch=_no_overpass)
     assert index.main(["query", str(old), *map(str, QUERY)]) == 0
     assert "railways and paths: not in this index" in capsys.readouterr().out
+
+
+# ----- service roads and tracks (layout 4): only where driveways' mouths are kept clear -----
+
+def test_service_roads_and_tracks_come_back_apart_from_the_roads_with_their_node_ids(osm_index):
+    data = index.service_ways(osm_index, QUERY)
+    ways = {e["id"]: e for e in data["elements"] if e["type"] == "way"}
+    assert list(ways) == [16, 17, 18]
+    # What they are, who may use them and their surface; not who runs them or what grade a track is.
+    assert ways[17] == {"type": "way", "id": 17, "nodes": [4, 90],
+                        "tags": {"highway": "service", "service": "driveway", "access": "private"}}
+    assert ways[18]["tags"] == {"highway": "track", "surface": "gravel"} and ways[16]["nodes"] == [5, 9]
+    assert {e["id"] for e in data["elements"] if e["type"] == "node"} == {4, 5, 6, 9, 90, 91}
+    # The roads query, which the router is built from, never holds one.
+    assert [e["id"] for e in index.query(osm_index, QUERY)["elements"] if e["type"] == "way"] == [10, 11, 12]
+    g = graph.build(index.query(osm_index, QUERY), TO_XY)
+    assert {w["id"] for w in g.ways} == {10, 11, 12}
+
+
+def test_overpass_gives_the_same_service_roads_and_tracks_as_the_index(osm_index, tmp_path):
+    box = (147.28, -42.82, 147.42, -42.78)
+    answer = _overpass_answer(box, lambda t: t.get("highway") in overpass.SERVICE.split("|"))
+    queries = []
+
+    def fake_overpass(query, settings):
+        queries.append(query)
+        return answer
+
+    from_index = index.service_ways(osm_index, box)
+    from_overpass = roads.service_ways_for_bbox(box, _settings(tmp_path), fetch=fake_overpass)
+    assert from_overpass["elements"] == from_index["elements"]
+    assert len(queries) == 1 and overpass.SERVICE_FILTER in queries[0]
+    assert roads.service_ways_for_bbox(box, _settings(tmp_path, osm_index), fetch=_no_overpass) == from_index
+
+
+def test_a_layout_3_index_still_serves_everything_but_the_service_ways(osm_index, tmp_path, capsys):
+    old = tmp_path / "layout3.sqlite"
+    shutil.copyfile(osm_index, old)
+    with closing(sqlite3.connect(old)) as con:  # as a layout 3 build leaves it: no service rows or table
+        con.execute("UPDATE meta SET value = '3' WHERE key = 'schema'")
+        con.execute("DELETE FROM ways WHERE kind = 'service'")
+        con.commit()
+        con.executescript("DROP TABLE service_rtree;")
+    assert [e["id"] for e in index.query(old, QUERY)["elements"] if e["type"] == "way"] == [10, 11, 12]
+    lines = index.railways_and_paths(old, QUERY)["elements"]
+    assert [e["id"] for e in lines if e["type"] == "way"] == [13, 50, 51, 52, 53]
+    assert len(index.buildings(old, TO_XY.transform_bounds(*QUERY), EPSG)) == 1
+    assert len(index.power_lines(old, TO_XY.transform_bounds(*QUERY, densify_pts=21), EPSG)) == 2
+    with pytest.raises(index.IndexUnavailable, match="before driveways, service roads and tracks were indexed"):
+        index.service_ways(old, QUERY)
+    with pytest.raises(roads.INDEX_ERRORS):
+        roads.service_ways_for_bbox(QUERY, _settings(tmp_path, old), fetch=_no_overpass)
+    assert index.main(["query", str(old), *map(str, QUERY)]) == 0
+    assert "service roads and tracks: not in this index" in capsys.readouterr().out
+
+
+def test_a_route_stage_on_a_layout_3_index_builds_without_driveways_and_says_why(osm_index, tmp_path, monkeypatch):
+    old = tmp_path / "layout3.sqlite"
+    shutil.copyfile(osm_index, old)
+    with closing(sqlite3.connect(old)) as con:
+        con.execute("UPDATE meta SET value = '3' WHERE key = 'schema'")
+        con.commit()
+    monkeypatch.setattr(overpass, "fetch", _no_overpass)
+    work = WorkDir(tmp_path / "work")
+    result = route_stage.run(Job(track_id="index_road", waypoints=WESTBOUND), _settings(tmp_path, old), work)
+    assert result["ways"] == 1 and "rebuild it" in result["driveways"]["unavailable"]
+    assert work.read_json(route_stage.STAGE, route_stage.DRIVEWAYS)["driveways"] == []

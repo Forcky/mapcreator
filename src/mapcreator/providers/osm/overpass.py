@@ -31,6 +31,10 @@ RAILWAYS = "rail|light_rail|narrow_gauge|disused|abandoned"
 PATHS = "footway|cycleway|path|pedestrian|steps|bridleway"
 RAILWAYS_FILTER = f'way["railway"~"^({RAILWAYS})$"]'
 PATHS_FILTER = f'way["highway"~"^({PATHS})$"]'
+# Service roads (driveways among them) and tracks: never routed on, never given a stub or taken for a crossing. They
+# are kept only so roadside furniture, guard rails and trees stay out of their mouths where they meet the route.
+SERVICE = "service|track"
+SERVICE_FILTER = f'way["highway"~"^({SERVICE})$"]'
 
 
 def _box(south: float, west: float, north: float, east: float) -> str:
@@ -51,6 +55,15 @@ def railways_and_paths_query_for_bbox(south: float, west: float, north: float, e
     return (
         "[out:json][timeout:180];\n"
         f"({RAILWAYS_FILTER}{box};{PATHS_FILTER}{box};);\n"
+        "(._;>;);\nout body;\n"
+    )
+
+
+def service_query_for_bbox(south: float, west: float, north: float, east: float) -> str:
+    """The service roads and tracks in a box, with their nodes: the ways the local index keeps of them (`index.py`)."""
+    return (
+        "[out:json][timeout:180];\n"
+        f"{SERVICE_FILTER}{_box(south, west, north, east)};\n"
         "(._;>;);\nout body;\n"
     )
 

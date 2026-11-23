@@ -1,5 +1,5 @@
-"""Drivable OSM roads in a bounding box (and the railways and paths that cross them): from the local index when one
-is configured, else Overpass.
+"""Drivable OSM roads in a bounding box (and the railways and paths that cross them, and the service roads and tracks
+that meet them): from the local index when one is configured, else Overpass.
 
 Production sets `osm_index` to a file built by `index.py` from a Geofabrik
 extract. Without one, development falls back to an Overpass server, whose
@@ -50,7 +50,25 @@ def railways_and_paths_for_bbox(bbox: tuple[float, float, float, float], setting
     return index.as_indexed(data, ("railway", "path"))
 
 
+def service_ways_for_bbox(bbox: tuple[float, float, float, float], settings: Settings, *,
+                          fetch: Callable[[str, Settings], dict] | None = None) -> dict:
+    """Overpass-style JSON for the service roads and tracks crossing `bbox` (west, south, east, north, WGS84), from
+    the same source as `for_bbox`: driveways among them. They are never routed on, given a stub or taken for a
+    crossing; they're only where roadside objects keep out of a mouth (`core.junctions.find_driveways`).
+
+    Overpass's answer is narrowed to what the index keeps (`index.as_indexed`), as for the railways and paths. An index
+    built before they were kept raises `index.IndexUnavailable` (one of `INDEX_ERRORS`), and the caller goes on
+    without them.
+    """
+    if settings.osm_index:
+        return index.service_ways(settings.osm_index, bbox)
+    west, south, east, north = bbox
+    data = (fetch or overpass.fetch)(overpass.service_query_for_bbox(south, west, north, east), settings)
+    return index.as_indexed(data, ("service",))
+
+
 LINES_SELECTION = f"{overpass.RAILWAYS_FILTER} and {overpass.PATHS_FILTER}"
+SERVICE_SELECTION = overpass.SERVICE_FILTER
 
 
 def selection(settings: Settings) -> dict[str, str]:
@@ -75,6 +93,9 @@ def selection_note(sel: dict[str, str], *, build: str, source_url: str = "") -> 
     lines = (f" Railways and paths were selected with the filters {sel['overpass_lines_filter']}, narrowed to what "
              "the index builder keeps (src/mapcreator/providers/osm/index.py)." if sel.get("overpass_lines_filter")
              else "")
+    service = (f" Service roads and tracks, whose mouths are kept clear, were selected with the filter "
+               f"{sel['overpass_service_filter']}, narrowed the same way." if sel.get("overpass_service_filter")
+               else "")
     return (f"The OpenStreetMap data was selected from an Overpass API server with the filter "
             f"{sel['overpass_filter']} around the route (src/mapcreator/providers/osm/overpass.py{at}, "
-            f"build {build}).{lines}")
+            f"build {build}).{lines}{service}")
