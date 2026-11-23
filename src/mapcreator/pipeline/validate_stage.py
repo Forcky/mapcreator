@@ -279,6 +279,16 @@ def driveway_notes(work: WorkDir) -> list[str]:
         if why else []
 
 
+def signal_notes(work: WorkDir) -> list[str]:
+    """The build's warning when traffic signals weren't looked for (`core.signals.find`): an OSM index built before
+    the tagged road nodes were kept, or Overpass not answering. The track then has no signals."""
+    path = work.root / route_stage.STAGE / route_stage.SIGNALS
+    if not path.exists():
+        return []
+    why = work.read_json(route_stage.STAGE, route_stage.SIGNALS).get("unavailable")
+    return [f"Traffic signals weren't looked for, so none are drawn: {why}."] if why else []
+
+
 def bridge_checks(work: WorkDir) -> list[validate.BridgeCheck]:
     """The route's own bridges as built (`core.bridges`), as the validator sees them."""
     records = mesh_stage.built_bridges(work)
@@ -340,6 +350,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         plan, work.read_json(mesh_stage.STAGE, mesh_stage.CROSSING_ROADS) if plan and built_path.exists() else None)
     rep.warnings += rail_and_paths_notes(work)
     rep.warnings += driveway_notes(work)
+    rep.warnings += signal_notes(work)
     work.write_json(STAGE, "report.json", {"ok": rep.ok, "passed": rep.passed, "failed": rep.failed,
                                            "route_failed": rep.route_failed, "warnings": rep.warnings})
     if rep.failed:

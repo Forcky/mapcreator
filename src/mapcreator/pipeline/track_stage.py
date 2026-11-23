@@ -15,8 +15,8 @@ from mapcreator.config import Settings
 from mapcreator.core import bridges as bridges_core
 from mapcreator.core import ramps as ramps_core
 from mapcreator.core import roundabouts as rb_core
-from mapcreator.core import (ai_line, closures, furniture, grass, grassfx, junctions, kn5, package, stubs, textures,
-                             treefx, validate)
+from mapcreator.core import (ai_line, closures, furniture, grass, grassfx, junctions, kn5, package, signals, stubs,
+                             textures, treefx, validate)
 from mapcreator.core.layout import (AI_END_SHORT_M, GATE_FROM_END_M, Layout, RoadModel, finish_distance,
                                     gate_distances, layouts_for, logic_dummies)
 from mapcreator.core.scene import Scene
@@ -328,7 +328,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         water_materials=["water"] if "water" in mat_index else [], water_type=water_type or "LAKE",
         tree_list=tree_list[0] if tree_list else None,
         tree_surfaces=[*ground, "grass"] if "grass" in mat_index else ground,
-        retro_materials=retro_materials(scenes, mats)),
+        retro_materials=retro_materials(scenes, mats),
+        # The traffic signals' amber, flashing (`core.signals`, Q1 of the traffic lights research).
+        flashing=([signals.AMBER_MATERIAL], signals.flash_condition(), signals.FLASH_EMISSIVE)
+        if signals.AMBER_MATERIAL in mat_index else None),
         encoding="ascii")
     _write_centreline(track_dir, job, c, sec, region, lonlat, attributions, plan, rings, ramps)
 

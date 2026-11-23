@@ -366,12 +366,29 @@ A side road that leaves the route at a slip angle and isn't a link (under 15°, 
 - **Tasmania has transmission lines only:** TasNetworks' distribution poles are restricted to emergency services, and OpenStreetMap maps none along Grasstree Hill Road, so roadside poles there are missing.
 - **Inferred supports:** an OSM line drawn with vertices further apart than a span can be (250 m distribution, 650 m transmission) gets evenly spaced supports along it, at a typical span, except between two mapped supports (a long real span). The line is real; those supports' exact positions aren't.
 
+## Traffic signals and street-name blades
+
+- **To check in game** (CSP 0.2.11), on `examples/hobart_cbd_signals.json`:
+  - the amber flashing at all: CSP's conditions, `FLASHING_*` keys and material adjustments date from 2018 and should work on 0.2.11, but this track's are untested. That it flashes about once a second, on and off equally, all junctions together;
+  - the amber at noon and at 22:00 at Macquarie and Elizabeth Streets: reads as amber, not white or orange, and from 60-100 m back (the aiming distances in Spec 730 Table 730.141); not so bright it blooms at night. `signals.FLASH_EMISSIVE` (255, 150, 0 at 0.025) is the one value to tune;
+  - the dark red and green lenses and the pedestrian figures read as unlit by day, and don't glow at night;
+  - the target boards' white borders and the blades at night (ksDiffuse 2.0 like the speed signs): readable, not washed out; the blades' lettering by day at 30-50 m;
+  - a car stopping at a signal post, a mast column and a blade post (solid, Q5), and not at a lantern, arm or blade;
+  - **frame rate in the CBD**, at a fixed probe point at Macquarie and Elizabeth, against a build of the same route on main: the signals and blades add about 22,000 vertices in 3 draw calls on 2.3 km, but a CBD also has 36 junctions' stubs and closures and 1,600 buildings, none of which a rural road has.
+- **Corner posts stand a few metres further back than real ones:** a post keeps out of a side road's mouth and its 5 m margin, as the furniture does, so it's about 5 m from the corner's kerb return, where a real one stands. Town roads have no kerbs or footpaths yet (a later plan item); posts stand on the 2 m grass verge.
+- **Posts left out:** where another mouth (a driveway, a fork's other carriageway) leaves no clear station within 15 m of a corner, that post and its faces aren't drawn: 3 of 48 corners on the CBD example (one each at Macquarie and Elizabeth, Davey and Elizabeth, and Davey and Murray, beside a divided side road's other carriageway, Davey Street's fork or Macquarie Street's bus contra-lane, which is mapped as a side road).
+- **A site's layout is the standard minimum:** three faces per approach, plus a mast arm on three lanes or more. Arrow faces, dual primaries and real mast arm sites need the site's own design, which no open data has. A third of Hobart's CBD sites are a single node with no direction, so their approaches come from `oneway`.
+- **Signals only where OSM has them,** which in Hobart's CBD is every signalised junction State Growth lists (the research's 40 of 40); the inner suburbs are mapped less densely. Mainland states' own signal datasets aren't used (Q11).
+- **Blades:** mixed case until the maintainer's photos of Hobart's blades confirm it (`signals.BLADE_CASE`); the abbreviations are Australia Post's street types, an estimate of what blades carry. Rural junctions get blades too (Grasstree Hill 7, Brinktop Road 10): the research's rule is every junction of two named roads.
+- **Not yet:** ONE WAY and NO ENTRY signs, GIVE WAY, STOP and pedestrian-crossing signs where OSM tags them, zebra markings (phase 2); cycling lights as an option (phase 3); parking signs.
+- **An index without the tagged road nodes** (built before layout 4 had them) builds with no signals and a validation warning; blades are still drawn.
+
 ## Roadside furniture
 
 - **To check in game:**
   - the reflectors, CAMs and speed signs at night, at other times of night and in other weather (the night adjustment was tuned at 22:00, clear);
   - CAMs read as chevrons pointing the right way, in both directions;
-  - speed signs readable;
+  - speed signs readable, now in Overpass (the traffic lights research's Q7) rather than Aileron;
   - frame rate (Grasstree Hill: about 450 guide posts and 300 CAMs, about 25,000 vertices; each KN5 grows 2 MB).
 - **Speed limits come only from OSM.** Many rural ways have no `maxspeed` (only 24% of Grasstree Hill Road has one), so those stretches get no signs. CAMs assume 100 km/h there. Tasmania's State Road speed limits (theLIST, CC BY) cover state roads fully, but using them with an OSM centreline would combine two road datasets for the same feature.
 

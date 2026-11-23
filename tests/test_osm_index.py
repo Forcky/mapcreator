@@ -727,3 +727,47 @@ def test_a_layout_3_index_has_no_tagged_road_nodes_and_still_routes(osm_index, t
         con.executescript("CREATE TABLE road_nodes (id INTEGER PRIMARY KEY, lon REAL, lat REAL, tags_json TEXT);")
     with pytest.raises(index.IndexUnavailable):
         index.road_nodes(old, QUERY)
+
+
+def test_the_route_stage_finds_the_signals_on_the_route(osm_index, tmp_path, monkeypatch):
+    from mapcreator.pipeline import validate_stage
+
+    monkeypatch.setattr(overpass, "fetch", _no_overpass)
+    work = WorkDir(tmp_path / "work")
+    job = Job(track_id="index_road", waypoints=WESTBOUND)
+    result = route_stage.run(job, _settings(tmp_path, osm_index), work)
+    # Main Road's signals at node 2, where only a footway leaves it: a mid-block crossing, one-way, so one approach.
+    assert result["signals"] == {"junction": 0, "mid_block": 1, "skipped": 0}
+    site = route_stage.signals(work, job)[0]
+    assert (site["node"], site["kind"], site["signals"]) == (2, "mid_block", [2])
+    assert sorted((leg["route"], leg["inbound"]) for leg in site["legs"]) == [("after", False), ("before", True)]
+    assert validate_stage.signal_notes(work) == []
+    # From Overpass, the roads answer's own nodes: the same site.
+    answer = _overpass_answer((147.2805, -42.82, 147.3295, -42.78), lambda t: t.get("highway") in
+                              overpass.DRIVABLE.split("|"))
+    work2 = WorkDir(tmp_path / "work2")
+    monkeypatch.setattr(overpass, "fetch", lambda query, settings: answer if overpass.ROADS_FILTER in query
+                        else {"elements": []})
+    route_stage.run(job, _settings(tmp_path), work2)
+    assert route_stage.signals(work2, job) == route_stage.signals(work, job)
+    # Built without junctions: no signals either.
+    assert route_stage.signals(work, Job(track_id="index_road", waypoints=WESTBOUND, junctions="none")) == []
+
+
+def test_a_route_stage_on_an_index_without_road_nodes_builds_without_signals_and_says_why(osm_index, tmp_path,
+                                                                                         monkeypatch):
+    from mapcreator.pipeline import validate_stage
+
+    early = tmp_path / "layout4_early.sqlite"
+    shutil.copyfile(osm_index, early)
+    with closing(sqlite3.connect(early)) as con:
+        con.execute("DROP TABLE road_nodes")
+        con.commit()
+    monkeypatch.setattr(overpass, "fetch", _no_overpass)
+    work = WorkDir(tmp_path / "work")
+    job = Job(track_id="index_road", waypoints=WESTBOUND)
+    result = route_stage.run(job, _settings(tmp_path, early), work)
+    assert "rebuild it" in result["signals"]["unavailable"] and route_stage.signals(work, job) == []
+    assert result["driveways"] != {"unavailable": result["signals"]["unavailable"]}  # the service ways are there
+    notes = validate_stage.signal_notes(work)
+    assert len(notes) == 1 and notes[0].startswith("Traffic signals weren't looked for, so none are drawn")
