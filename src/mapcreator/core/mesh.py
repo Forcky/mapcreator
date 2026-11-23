@@ -30,7 +30,7 @@ from scipy.ndimage import minimum_filter1d, uniform_filter1d
 from scipy.spatial import Delaunay, cKDTree
 
 from mapcreator import cpus
-from mapcreator.core import textures
+from mapcreator.core import classmap, textures
 from mapcreator.core.scene import MAX_VERTICES, LocalFrame, Mesh
 from mapcreator.core.section import STYLES, is_unsealed
 from mapcreator.core.textures import GRAVEL_TILE_M, ROAD_TILE_M
@@ -235,10 +235,12 @@ def orient_up(pos: np.ndarray, tri: np.ndarray) -> np.ndarray:
     return out
 
 
-def _mesh(name, material, pos, tri, uv) -> Mesh:
+def _mesh(name, material, pos, tri, uv, normals=None) -> Mesh:
+    """A mesh with its triangles wound up, and its vertex normals from its own triangles unless given."""
     tri = orient_up(pos, tri)
-    return Mesh(name, material, pos.astype(np.float32), _vertex_normals(pos, tri).astype(np.float32),
-                uv.astype(np.float32), tri.astype(np.int64))
+    normals = _vertex_normals(pos, tri) if normals is None else normals
+    return Mesh(name, material, pos.astype(np.float32), normals.astype(np.float32), uv.astype(np.float32),
+                tri.astype(np.int64))
 
 
 # The texture of each road material (`section.STYLES`).
@@ -851,7 +853,7 @@ def _constrained(pts, hts, tri, keep, corridor, footprint):
 
 def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame, *,
                    uv_m: float = 8.0, ground=None, classes: dict[str, tuple[str, float, bool]] | None = None,
-                   fold_skirt: bool = False, extra: Footprint | None = None) -> list[Mesh]:
+                   fold_skirt: bool = False, extra: Footprint | None = None, cut: str | None = None) -> list[Mesh]:
     """Terrain from the skirt's outer edge out to `corridor_m`, chunked under the vertex limit.
 
     - `fold_skirt` adds the skirt (verge edge outwards) to the terrain, for verge meshes made without it
@@ -862,6 +864,10 @@ def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame,
       (`warped_uv`). Each material's triangles go in meshes of a few 400 m chunks each (`_class_groups`), named by
       their first chunk and the letter (`1GRASS_T012P`). Without it every triangle is `terrain`, in a mesh per chunk
       named `1GRASS_T###`, as before.
+      - The materials are then tidied over the triangles (`classmap.tidy`): an 8 m majority, and regions under
+        100 m^2 merged. With `cut` (a material in `classes`), the cut batters above the road take it, with texture
+        coordinates along the road and up the face (`classmap.road_uv`).
+      - Vertex normals are the whole terrain's, so two classes' meshes meet without a change of shading.
     - `extra`: the stubs' ground (`Footprint`). The terrain then leaves room for them too, sharing their outlines.
     """
     if extra is None:
@@ -906,6 +912,10 @@ def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame,
         for k in np.unique(chunk):
             out.extend(_split_by_vertex_limit(f"1GRASS_T{k:03d}", tri[chunk == k], pts, hts, frame, uv_m))
         return out
+    road = classmap.Road.from_ribbon(rb)
+    material = classmap.tidy(material, tri, pts, hts, road, cut=cut)
+    # One set of normals over the whole terrain: each mesh takes its points' own.
+    normals = _vertex_normals(frame.to_ac(pts[:, 0], pts[:, 1], hts), tri)
     # Meshes of each material in `classes` order, each of a few chunks; then sorted along the road.
     rank = {n: i for i, n in enumerate(classes)}
     code = np.fromiter((rank[m] for m in material), np.int64, len(material))
@@ -914,10 +924,19 @@ def terrain_meshes(rb: Ribbon, corridor_m: float, dem_sample, frame: LocalFrame,
     for idx in np.split(order, np.flatnonzero(np.diff(code[order])) + 1):
         name = material[idx[0]]
         letter, tile, warp = classes[name]
+        uvs = None
+        if name == cut:  # along the road and up the face; whole repeats off each group's, to keep them small
+            used = np.unique(tri[idx])
+            uvs = np.zeros((len(pts), 2))
+            uvs[used] = classmap.road_uv(pts[used], hts[used], road, tile)
         for first, mine in _class_groups(chunk[idx]):
+            t = tri[idx[mine]]
+            group_uvs = None
+            if uvs is not None:
+                group_uvs = uvs - np.floor(uvs[np.unique(t)].min(axis=0))
             meshes.append((first, rank[name], _split_by_vertex_limit(
-                f"1GRASS_T{first:03d}{letter}", tri[idx[mine]], pts, hts, frame, tile, name,
-                warp=tile if warp else None)))
+                f"1GRASS_T{first:03d}{letter}", t, pts, hts, frame, tile, name,
+                warp=tile if warp else None, normals=normals, uvs=group_uvs)))
     for _, _, ms in sorted(meshes, key=lambda m: m[:2]):
         out.extend(ms)
     return out
@@ -954,9 +973,10 @@ def _class_groups(chunk: np.ndarray) -> list[tuple[int, np.ndarray]]:
 
 
 def _split_by_vertex_limit(name, tri, pts, hts, frame, uv_m, material: str = "terrain",
-                           warp: float | None = None) -> list[Mesh]:
+                           warp: float | None = None, normals=None, uvs=None) -> list[Mesh]:
     """Meshes of `tri` under the vertex limit, halved by easting until each fits. UVs repeat every `uv_m`, or with
-    `warp` every `warp` metres through `warped_uv`."""
+    `warp` every `warp` metres through `warped_uv`, or are `uvs` (one per point of `pts`) where given. `normals`
+    (one per point) are the vertex normals, where given; otherwise each mesh's own."""
     pieces = []
     parts = [tri]
     while parts:
@@ -971,7 +991,12 @@ def _split_by_vertex_limit(name, tri, pts, hts, frame, uv_m, material: str = "te
     for i, t in enumerate(pieces):
         used, local = np.unique(t, return_inverse=True)  # each corner's index among the mesh's own points
         pos = frame.to_ac(pts[used, 0], pts[used, 1], hts[used])
-        uv = np.column_stack([pos[:, 0], pos[:, 2]]) / uv_m if warp is None else warped_uv(pos[:, 0], pos[:, 2], warp)
+        if uvs is not None:
+            uv = uvs[used]
+        else:
+            uv = (np.column_stack([pos[:, 0], pos[:, 2]]) / uv_m if warp is None
+                  else warped_uv(pos[:, 0], pos[:, 2], warp))
         suffix = f"_{i}" if len(pieces) > 1 else ""
-        meshes.append(_mesh(name + suffix, material, pos, local.reshape(t.shape), uv))
+        meshes.append(_mesh(name + suffix, material, pos, local.reshape(t.shape), uv,
+                            None if normals is None else normals[used]))
     return meshes

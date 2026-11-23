@@ -113,9 +113,14 @@ GROUND_COVERS = {
     "ground_bare": ((150, 142, 124), (((124, 122, 116), 0.3, 1.1), ((98, 92, 82), 0.1, 0.9))),
 }
 PATCH_EDGE = 0.12  # how soft a patch's edge is, as a share of the pixels ranked across it
+# The ground classes' textures are 1024 px: at their 16 m repeat that's 1.6 cm a texel, as dense as pasture's 8 m
+# on 512 px (today's `ground`, which the mainland's single terrain material shares, stays as it is). At 512 px a
+# forest floor on a steep cutting showed 5-7 cm texels and DXT1 blocks of 20-30 cm. Each is about 0.5 MB deflated
+# in each KN5 that uses it.
+GROUND_COVER_PX = 1024
 
 
-def ground_cover(name: str, size: int = 512, seed: int | None = None) -> Image.Image:
+def ground_cover(name: str, size: int = GROUND_COVER_PX, seed: int | None = None) -> Image.Image:
     """The ground texture `name` from GROUND_COVERS: tileable, a base colour with each patch layer over it."""
     base, patches = GROUND_COVERS[name]
     seed = 50 + 20 * list(GROUND_COVERS).index(name) if seed is None else seed
@@ -125,6 +130,37 @@ def ground_cover(name: str, size: int = 512, seed: int | None = None) -> Image.I
         rank = _uniform(tileable_noise(size, beta, seed + 2 + k))
         t = np.clip((rank - (1 - share)) / PATCH_EDGE + 0.5, 0.0, 1.0)[..., None]  # about `share` of the pixels
         rgb = rgb * (1 - t) + _mix(np.array(colour, dtype=float), grain, np.full(3, 0.35)) * t
+    return Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
+
+
+def _streaks(size: int, beta: float, stretch: float, seed: int) -> np.ndarray:
+    """Tileable noise drawn out `stretch` times longer down the columns than across them, in [0, 1]: streaks
+    running along v, which on a cut batter (`classmap.road_uv`) is up and down the face."""
+    rng = np.random.default_rng(seed)
+    fx, fy = np.meshgrid(np.fft.fftfreq(size), np.fft.fftfreq(size))
+    radius = np.hypot(fx, fy * stretch)
+    radius[0, 0] = 1.0
+    spectrum = np.fft.fft2(rng.normal(size=(size, size))) / radius**beta
+    spectrum[0, 0] = 0
+    out = np.real(np.fft.ifft2(spectrum))
+    out -= out.min()
+    return out / max(out.max(), 1e-12)
+
+
+def ground_cut(size: int = GROUND_COVER_PX, seed: int = 251) -> Image.Image:
+    """A cut batter's bare earth (`grass.CUT`): clay brown, with darker streaks washed down the face, paler
+    weathered bands, and stones. One texture statewide: nothing in the pipeline says what rock a cutting is in."""
+    grain = 0.55 * tileable_noise(size, 1.5, seed) + 0.45 * tileable_noise(size, 0.4, seed + 1)
+    rgb = _mix(np.array([142.0, 110.0, 80.0]), grain, np.full(3, 0.4)).astype(float)
+    wash = _uniform(_streaks(size, 0.9, 6.0, seed + 2))
+    dark = np.clip((wash - 0.75) / PATCH_EDGE + 0.5, 0.0, 1.0)[..., None]  # about a quarter, in streaks
+    rgb = rgb * (1 - 0.8 * dark) + _mix(np.array([92.0, 72.0, 56.0]), grain, np.full(3, 0.3)) * 0.8 * dark
+    pale = np.clip((_uniform(_streaks(size, 1.1, 2.5, seed + 3)) - 0.85) / PATCH_EDGE + 0.5, 0.0, 1.0)[..., None]
+    rgb = rgb * (1 - 0.6 * pale) + _mix(np.array([170.0, 146.0, 112.0]), grain, np.full(3, 0.3)) * 0.6 * pale
+    pebbles = _uniform(tileable_noise(size, 0.8, seed + 4))
+    for colour, lo, hi in (((178, 170, 156), 0.96, 1.0), ((62, 56, 50), 0.0, 0.03)):  # pale and dark stones
+        t = ((pebbles >= lo) & (pebbles <= hi))[..., None]
+        rgb = np.where(t, _mix(np.array(colour, dtype=float), grain, np.full(3, 0.3)), rgb)
     return Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
 
 
@@ -383,5 +419,5 @@ def ballast(size: int = 256, seed: int = 81) -> Image.Image:
 
 LIBRARY = {"asphalt": asphalt, "road_marked": road_marked, "road_plain": road_plain, "gravel_road": gravel_road,
            "gravel_road_narrow": gravel_road_narrow, "grass": grass, "ground": ground, "steel": steel, "water": water,
-           "kerb": kerb, "ballast": ballast,
+           "kerb": kerb, "ballast": ballast, "ground_cut": ground_cut,
            **{name: partial(ground_cover, name) for name in GROUND_COVERS}}
