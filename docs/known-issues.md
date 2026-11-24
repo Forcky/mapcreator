@@ -380,8 +380,23 @@ A side road that leaves the route at a slip angle and isn't a link (under 15°, 
 - **A site's layout is the standard minimum:** three faces per approach, plus a mast arm on three lanes or more. Arrow faces, dual primaries and real mast arm sites need the site's own design, which no open data has. A third of Hobart's CBD sites are a single node with no direction, so their approaches come from `oneway`.
 - **Signals only where OSM has them,** which in Hobart's CBD is every signalised junction State Growth lists (the research's 40 of 40); the inner suburbs are mapped less densely. Mainland states' own signal datasets aren't used (Q11).
 - **Blades:** mixed case until the maintainer's photos of Hobart's blades confirm it (`signals.BLADE_CASE`); the abbreviations are Australia Post's street types, an estimate of what blades carry. Rural junctions get blades too (Grasstree Hill 7, Brinktop Road 10): the research's rule is every junction of two named roads.
-- **Not yet:** ONE WAY and NO ENTRY signs, GIVE WAY, STOP and pedestrian-crossing signs where OSM tags them, zebra markings (phase 2); cycling lights as an option (phase 3); parking signs.
+- **Not yet:** cycling lights as an option (phase 3); parking signs. The regulatory signs are below.
 - **An index without the tagged road nodes** (built before layout 4 had them) builds with no signals and a validation warning; blades are still drawn.
+
+## Regulatory signs and zebra crossings
+
+- **To check in game** (CSP 0.2.11):
+  - on `examples/west_hobart_hill_street.json`: the **zebra** at about 0.25 km, from 100 m back to driving over it. The stripes are a separate mesh 2 cm above the road: no flicker (z-fighting) against the road at a distance, by day and at 22:00; the tyres don't look sunk in them; they read as white paint as bright as the road's own lines (`sign_paint` takes the road's values), not glowing at night. The R3-1 signs either side, read from 50 m;
+  - the **GIVE WAY** signs at Hamilton Street (0.14 km) and Faraday Street (0.95 km), seen from the route: their backs beside the closures, as a real one's would be, and nothing of the closure (tape, boards) passing through them;
+  - on `examples/hobart_cbd_signals.json`: the **ONE WAY** signs across from Victoria Street and Heathfield Avenue, their arrows pointing the way Macquarie and Davey Streets flow; the ones on signal posts sitting below the lanterns and pedestrian lanterns, clear of the push button; the **NO ENTRY** signs at Sandy Bay Road's and Barrack Street's mouths on Davey Street, facing the route;
+  - every face at noon and at 22:00 (ksDiffuse 2.0 at night, as the speed signs): readable, the red not washed out pink, the lettering not grey; ksSpecular is 0 on all of them;
+  - a car stopping at a sign post (solid, Q5).
+- **The faces are drawn from descriptions**, not from AS 1742's drawings: the shapes, colours and words of R1-1, R1-2, R2-2, R2-4 and R3-1 as written descriptions give them, with sizes estimated. The NO ENTRY's and R3-1's layouts in particular are our best reading and should be checked against the maintainer's own photos (not Google's imagery).
+- **Only where OSM has them.** GIVE WAY and STOP only where tagged: the research counted 21 give-way nodes and 1 stop in the CBD box, against 168 junctions; a give-way node mapped more than 30 m from its junction (some rural ones are) isn't drawn. Zebras only where OSM tags the markings: Hobart's CBD example route crosses none (its zebras are on slip lanes and side streets), so `examples/west_hobart_hill_street.json` was added for one.
+- **ONE WAY repeaters every 200 m** on a long one-way block are an estimate of "repeated along long blocks". A one-way carriageway of a divided road gets none (nor junction signs), found by a road of the same name or `ref` one-way the other way within 40 m: a divided road mapped with different names either side would get them.
+- **A side road's signs need its stub.** A side road without one (left out by the stubs' checks) gets none of its signs, and no ONE WAY faces it: there's no road to see them from. On the CBD example that leaves out 5 ONE WAY signs (across from Market Place, Elizabeth Street three times and one of Davey Street's forks), Market Place's GIVE WAY and its NO ENTRY pair; one ONE WAY (Davey and Elizabeth) and one NO ENTRY (between Salamanca Place's two carriageways, where a real one would stand on the island) find no clear place.
+- **Zebra stripes on a side road** are drawn only where its stub is (none on the examples yet). A zebra across a road with a centre line has the line showing between the stripes; real ones break it.
+- **Rural roads:** Brinktop Road and Grasstree Hill get nothing new. Their bboxes hold tagged give-ways, but none within 30 m of a junction on the route: Grasstree Hill's one on the route itself is within 70 m of the route's end (the end wall), the rest are at side roads' far ends.
 
 ## Roadside furniture
 

@@ -27,7 +27,8 @@ mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, the side 
                        parapets; an open deck over the ground, with abutments and piers, where the gap allows;
                        bridges.json), 1:2 batters on fills, guard rails (up to a bridge over a gap) and furniture (none in
                        side roads' mouths, on a roundabout's island side or on a bridge), traffic signals at OSM's
-                       signal sites (flashing amber) and street-name blades at named junctions (signals.json), each
+                       signal sites (flashing amber) and street-name blades at named junctions (signals.json), ONE WAY,
+                       NO ENTRY and OSM's tagged GIVE WAY, STOP and zebra crossings (signs.json), each
                        stub's closure and police
                        cars at some major ones (closures.json), the roads crossing it and the bridges over it, with their
                        piers and abutments (crossing_roads.json), footbridges and rail bridges over the route and paths

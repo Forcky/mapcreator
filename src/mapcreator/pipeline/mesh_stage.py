@@ -32,6 +32,7 @@ from mapcreator import cpus
 from mapcreator.config import Settings
 from mapcreator.core import bridges as bridges_core
 from mapcreator.core import furniture, grass, junctions, mesh, police_car, reach, roadside, signals, stub_closures, stubs
+from mapcreator.core import signs as signs_core
 from mapcreator.core import crossing_roads, rail_and_paths
 from mapcreator.core import ramps as ramps_core
 from mapcreator.core import roundabouts as rb_core
@@ -70,6 +71,9 @@ RAMPS = "ramps.json"
 # The traffic signal sites and named junctions as drawn (`core.signals`): each site's corner posts (or why one is
 # missing), its mast arms, faces and crosswalks, and each named junction's blades and posts.
 SIGNALS = "signals.json"
+# The regulatory signs and zebra crossings as drawn (`core.signs`): each sign's post, or why it isn't drawn, and each
+# zebra's stripes.
+SIGNS = "signs.json"
 
 log = logging.getLogger(__name__)
 
@@ -330,6 +334,39 @@ def _signals(work: WorkDir, job: Job, found, plan, c, sec, frame: LocalFrame, ru
     return signals.build(sites, blade_sites, road, frame, mouths=mouth_list, blocked=blocked, station_of=station)
 
 
+def _signs(work: WorkDir, job: Job, found, plan, c, sec, frame: LocalFrame, meshes: list, dem, drive: list,
+           blocked: dict[str, np.ndarray] | None, sig: signals.Built) -> signs_core.Built:
+    """The regulatory signs and zebra crossings (`core.signs`): on the route's verge clear of `blocked`, as the
+    signals' posts are; beside the side roads that have stubs, outside every side road's and driveway's carriageway
+    and stub; on the signals' and blades' posts where theirs would stand beside one; standing on the ground built
+    (`meshes`), the zebras on the road's surface."""
+    doc = route_stage.signs(work, job)
+    if not doc.get("signs") and not doc.get("zebras"):
+        return signs_core.Built([], None, {})
+    by_id = stubs.by_junction(plan)
+    every = junctions.mouths(found, c["s"], c["xy"], c["heading"], sec["half_left"], sec["half_right"],
+                             stubs=by_id) if found else []
+    with_stub = {m.junction["id"]: m for m in every if m.junction.get("id") in by_id}
+    keep_out = [m.corridor(signs_core.SIDE_CLEAR_M) for m in every + list(drive)]
+    reach = signs_core.REACH_M + signs_core.MAX_SHIFT_M + 20.0
+    areas = [(x - reach, y - reach, x + reach, y + reach)
+             for x, y in (r["xy"] for r in doc.get("signs", []) + doc.get("zebras", []))]
+    ground = stub_closures.TopSurface(meshes, frame, areas)
+    road_top = stub_closures.TopSurface([m for m in meshes if m.name.startswith(("1ROAD", "1GRAVEL"))], frame, areas)
+
+    def height(e, n):
+        h = ground(e, n)
+        return np.where(np.isfinite(h), h, dem.sample(e, n))
+
+    def station(rec) -> float:
+        return junctions._station(c["xy"], c["s"], np.asarray(rec["xy"], float), float(rec["at_m"]))
+
+    road = signals._Road(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"], sec["half_right"],
+                         sec["slope_left"], sec["slope_right"])
+    return signs_core.build(doc, road, frame, mouths=with_stub, all_mouths=every, keep_out=keep_out, blocked=blocked,
+                            posts=sig.posts, height=height, road_height=road_top, station_of=station)
+
+
 def frame_for(xy: np.ndarray, z: np.ndarray) -> LocalFrame:
     lo, hi = xy.min(axis=0), xy.max(axis=0)
     return LocalFrame(e0=float(round((lo[0] + hi[0]) / 2)), n0=float(round((lo[1] + hi[1]) / 2)),
@@ -547,9 +584,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     # the furniture keeps out of; but a lay-by, a bus lane or another service way running beside the route, whose
     # "mouth" is its whole length, doesn't keep a junction's corner post away (`signals.ALONGSIDE_MOUTH_M`).
     short_drive = [m for m in drive if m.s1 - m.s0 <= signals.ALONGSIDE_MOUTH_M]
-    sig = _signals(work, job, found, plan, c, sec, frame, runs, furniture_mouths(
-        mouths, junctions.masks(short_drive, c["s"]) if short_drive else None,
-        decks.parapet if decks and decks.bridges else None))
+    post_mouths = furniture_mouths(mouths, junctions.masks(short_drive, c["s"]) if short_drive else None,
+                                   decks.parapet if decks and decks.bridges else None)
+    sig = _signals(work, job, found, plan, c, sec, frame, runs, post_mouths)
     meshes += sig.meshes
     (out / SIGNALS).unlink(missing_ok=True)
     if sig.records:
@@ -557,6 +594,16 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     if sig.atlas is not None:
         textures[signals.TEXTURE] = str(out / f"{signals.TEXTURE}.png")
         sig.atlas.image.save(textures[signals.TEXTURE])
+    # Regulatory signs and zebra crossings (`core.signs`): GIVE WAY and STOP where OSM tags them, ONE WAY and NO ENTRY
+    # from `oneway`, pedestrian crossings' signs and stripes; kept out of the same mouths as the signals' posts.
+    sgn = _signs(work, job, found, plan, c, sec, frame, meshes, dem, drive, post_mouths, sig)
+    meshes += sgn.meshes
+    (out / SIGNS).unlink(missing_ok=True)
+    if sgn.records:
+        work.write_json(STAGE, SIGNS, {"version": signs_core.FORMAT_VERSION, "drawn": sgn.records})
+    if sgn.atlas is not None:
+        textures[signs_core.TEXTURE] = str(out / f"{signs_core.TEXTURE}.png")
+        sgn.atlas.image.save(textures[signs_core.TEXTURE])
     meshes += roadside.end_walls(c["s"], c["xy"], c["z"], c["heading"], dem.sample, frame)
     # Railways and paths crossing the route (`core.rail_and_paths`), on the ground and road built above.
     lines_built = _rail_and_paths(work, c, sec, frame, dem, meshes, rb, built, crossed.get("built"),
@@ -615,6 +662,10 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             **{name: Material(name, signals.TEXTURE, properties=signals.KN5_PROPERTIES[name],
                               night_diffuse=signals.NIGHT_DIFFUSE.get(name))
                for name in sorted({m.material for m in sig.meshes if m.renderable})},
+            # The regulatory signs' and zebras' (`core.signs`): the faces brighter at night, no specular.
+            **{name: Material(name, signs_core.TEXTURE, properties=signs_core.KN5_PROPERTIES[name],
+                              night_diffuse=signs_core.NIGHT_DIFFUSE.get(name))
+               for name in sorted({m.material for m in sgn.meshes if m.renderable})},
             # The closures' (closure, closure_retro) and the police cars' (with their own KN5 and night values).
             **(closed.materials if closed is not None else {}),
         },
@@ -649,6 +700,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         "guard_rails": rail_stats,
         "furniture": furn_stats,
         "signals": sig.stats,
+        "signs": sgn.stats,
         "water": water_summary,
         "ground": ground_summary,
     } | ({"junctions": junction_stats} if junction_stats is not None else {}) | (

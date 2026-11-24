@@ -580,12 +580,13 @@ def _right(facing) -> np.ndarray:
 class _Builder:
     """Quads, prisms and boxes in region coordinates (e, n, h), one part per material, and invisible collider boxes."""
 
-    def __init__(self, tex: Atlas):
+    def __init__(self, tex: Atlas, materials: Sequence[str] = (MATERIAL, RETRO_MATERIAL, AMBER_MATERIAL)):
         self.tex = tex
-        self.parts = {m: ([], [], [], []) for m in (MATERIAL, RETRO_MATERIAL, AMBER_MATERIAL)}
+        self.parts = {m: ([], [], [], []) for m in materials}
+        self.material = materials[0]  # the plain one: prisms, beams and the colliders take it
         self.colliders: list[tuple] = []  # (e, n, h0, h1, half width)
 
-    def quad(self, c, right, up, w, h, normal, cell, material=MATERIAL, flip_u=False):
+    def quad(self, c, right, up, w, h, normal, cell, material=None, flip_u=False):
         """A rectangle centred on `c` (3D), `w` along `right` and `h` along `up`, seen from the side `normal` points
         to, with an atlas cell on it."""
         u0, v0, u1, v1 = self.tex.cells[cell]
@@ -593,21 +594,21 @@ class _Builder:
             u0, u1 = u1, u0
         r, u = np.asarray(right, float) * w / 2, np.asarray(up, float) * h / 2
         c = np.asarray(c, float)
-        pos, nrm, uv, tri = self.parts[material]
+        pos, nrm, uv, tri = self.parts[material or self.material]
         i = len(pos)
         pos.extend([c - r - u, c + r - u, c + r + u, c - r + u])
         nrm.extend([np.asarray(normal, float)] * 4)
         uv.extend([(u0, v1), (u1, v1), (u1, v0), (u0, v0)])
         tri.extend([(i, i + 1, i + 2), (i, i + 2, i + 3)])
 
-    def disc(self, c, right, up, radius, normal, cell, material=MATERIAL, sides=12):
+    def disc(self, c, right, up, radius, normal, cell, material=None, sides=12):
         """A round face (a lens) centred on `c`, a fan of `sides` triangles, its texture the circle inscribed in the
         atlas cell. Round, so a lens lit by ksEmissive glows round: CSP adds the emissive colour over the whole
         face, whatever the texture."""
         u0, v0, u1, v1 = self.tex.cells[cell]
         uc, vc, ur, vr = (u0 + u1) / 2, (v0 + v1) / 2, (u1 - u0) / 2 * 0.9, (v1 - v0) / 2 * 0.9
         right, up, c = np.asarray(right, float), np.asarray(up, float), np.asarray(c, float)
-        pos, nrm, uv, tri = self.parts[material]
+        pos, nrm, uv, tri = self.parts[material or self.material]
         i = len(pos)
         pos.append(c)
         nrm.append(np.asarray(normal, float))
@@ -620,12 +621,36 @@ class _Builder:
         for k in range(sides):
             tri.append((i, i + 1 + k, i + 1 + (k + 1) % sides))
 
+    def polygon(self, c, right, up, outline, normal, cell, material=None):
+        """A flat convex face (an octagon, a triangle) centred on `c`: `outline`'s points, (x, y) metres along `right`
+        and `up`, as a fan from their middle. The atlas cell holds the outline's bounding box."""
+        pts = np.asarray(outline, float)
+        u0, v0, u1, v1 = self.tex.cells[cell]
+        lo, hi = pts.min(axis=0), pts.max(axis=0)
+        span = np.where(hi - lo > 1e-9, hi - lo, 1.0)
+        fx = (pts[:, 0] - lo[0]) / span[0]
+        fy = (pts[:, 1] - lo[1]) / span[1]
+        right, up, c = np.asarray(right, float), np.asarray(up, float), np.asarray(c, float)
+        pos, nrm, uv, tri = self.parts[material or self.material]
+        i = len(pos)
+        mid = pts.mean(axis=0)
+        pos.append(c + right * mid[0] + up * mid[1])
+        nrm.append(np.asarray(normal, float))
+        uv.append((u0 + (u1 - u0) * (mid[0] - lo[0]) / span[0], v1 - (v1 - v0) * (mid[1] - lo[1]) / span[1]))
+        for (x, y), a, b in zip(pts, fx, fy):
+            pos.append(c + right * x + up * y)
+            nrm.append(np.asarray(normal, float))
+            uv.append((u0 + (u1 - u0) * a, v1 - (v1 - v0) * b))
+        k = len(pts)
+        for j in range(k):
+            tri.append((i, i + 1 + j, i + 1 + (j + 1) % k))
+
     def box(self, c, facing, w, h, depth, cells, materials=None):
         """A box centred on `c` (3D), its front facing `facing` (2D), `w` wide, `h` tall and `depth` deep. `cells`:
         front, back, sides (left and right), top and bottom; `materials` likewise (default `MATERIAL`)."""
         f = np.array([*_unit(facing), 0.0])
         r = _right(facing)
-        mats = materials or (MATERIAL,) * 6
+        mats = materials or (self.material,) * 6
         c = np.asarray(c, float)
         front, back, side, top, bottom = cells
         self.quad(c + f * depth / 2, r, _UP, w, h, f, front, mats[0])
@@ -640,7 +665,7 @@ class _Builder:
     def prism(self, e, n, h0, h1, d, cell="galv", sides=POST_SIDES, cap=True):
         """An upright round post as a prism of `sides` faces, smooth shaded, with a flat cap."""
         u0, v0, u1, v1 = self.tex.cells[cell]
-        pos, nrm, uv, tri = self.parts[MATERIAL]
+        pos, nrm, uv, tri = self.parts[self.material]
         a = np.linspace(0.0, 2 * math.pi, sides + 1)
         ring = np.column_stack([np.cos(a), np.sin(a)])
         i = len(pos)
@@ -709,7 +734,7 @@ class _Builder:
                 nrm += [_UP] * 4
                 uv += [(0, 0)] * 4
                 tri += [(i, i + 1, i + 2), (i, i + 2, i + 3)]
-            packed = _pack(frame, f"1WALL_{prefix}_", MATERIAL, np.array(pos, float), np.array(nrm, float),
+            packed = _pack(frame, f"1WALL_{prefix}_", self.material, np.array(pos, float), np.array(nrm, float),
                            np.array(uv, float), np.array(tri, dtype=np.int64), start=0)
             for m in packed:
                 m.renderable = False
@@ -768,6 +793,9 @@ class Built:
     atlas: Atlas | None
     stats: dict
     records: list = field(default_factory=list)  # each site and named junction as drawn (`04_mesh/signals.json`)
+    # Every solid post drawn, signal, mast or blade post, as (e, n, the ground under it): the regulatory signs
+    # (`core.signs`) go on one where theirs would stand beside it.
+    posts: list = field(default_factory=list)
 
 
 class _Road:
@@ -1013,7 +1041,7 @@ def build(sites: Sequence[dict], blade_sites: Sequence[BladeSite], road: _Road, 
                 _blade(b, p, abbreviate(name), h_road, top, tex)
                 stats["blades"] += 1
     return Built(b.meshes(frame), tex if (b.parts[MATERIAL][0] or b.parts[RETRO_MATERIAL][0]) else None, stats,
-                 records)
+                 records, [(e, n, h0 + COLLIDER_BELOW_M) for e, n, h0, _, _ in b.colliders])
 
 
 def _post(b: _Builder, p: Post) -> None:
