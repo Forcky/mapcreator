@@ -18,6 +18,11 @@
 # a Geofabrik extract: python -m mapcreator.providers.osm.index build australia-latest.osm.pbf <index>
 # osm_index = "D:/mirror/osm/australia.sqlite"                             # MAPCREATOR_OSM_INDEX
 
+# The councils' kerb lines (City of Hobart, Glenorchy), mirrored into one file by
+# python scripts/mirror_kerb_lines.py <file>. Without it, town roads' kerbs come from the rules alone.
+# "live" reads the councils' servers directly: development only, never on a worker.
+# kerb_lines = "D:/mirror/kerb_lines.sqlite"                               # MAPCREATOR_KERB_LINES
+
 # Where the code you run is published. ATTRIBUTION.txt points there for how the OSM data was selected (ODbL 4.6).
 # Empty (the default) leaves the address out.
 # source_url = "https://example.org/your/mapcreator"                      # MAPCREATOR_SOURCE_URL

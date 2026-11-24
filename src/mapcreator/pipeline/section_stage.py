@@ -307,10 +307,41 @@ def _kerbs(job: Job, settings: Settings, region, work: WorkDir, c, runs: list[di
             credits.append(region.parcels_attribution)
         return out
 
+    council_source = getattr(region, "kerb_lines", None)
+
+    def council(boxes):
+        """The councils' kerb lines round the candidate stretches (`providers.councils.kerb_lines`). Without them (no
+        mirror configured, or it can't be read) the rule decides, with a warning where a council has lines to give."""
+        from mapcreator.providers.councils import kerb_lines as kl
+
+        if council_source is None:
+            return None
+        expected = sorted({a for box in boxes for a in kl.areas_for(box)})
+        try:
+            got = council_source(boxes, settings)
+        except Exception as e:  # noqa: BLE001 - the rule decides instead
+            log.warning("councils' kerb lines unavailable (%s: %s); kerbs from the town-road rule",
+                        type(e).__name__, e)
+            state["council"] = "unavailable"
+            return None
+        if got is None:
+            if expected:
+                log.warning("no councils' kerb lines configured (kerb_lines), though the road is in %s's area; kerbs "
+                            "from the town-road rule", " and ".join(expected))
+            state["council"] = "not_configured" if expected else "none"
+            return None
+        state["council"] = "ok" if got.lines else "none_here"
+        return got
+
     p = kerbs_core.plan(c["s"], c["xy"], c["heading"], c["run"], [r["tags"] for r in runs], half, half,
                         unsealed=unsealed, blocked=blocked, centroids=centroids, buildings=footprints,
-                        parcels=parcels, reversed_runs=[bool(r.get("reversed")) for r in runs])
+                        parcels=parcels, reversed_runs=[bool(r.get("reversed")) for r in runs], council=council)
     p.summary["parcels"] = state["parcels"]
+    p.summary["council_lines"] = state.get("council", "none")
+    if p.council:
+        from mapcreator.providers.councils import kerb_lines as kl
+
+        credits += [kl.ATTRIBUTIONS[name] for name in sorted(p.council) if name in kl.ATTRIBUTIONS]
     if p.any():
         if getattr(region, "buildings_attribution", None) is not None:
             credits.insert(0, region.buildings_attribution)

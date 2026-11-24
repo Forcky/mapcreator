@@ -23,6 +23,7 @@ Mirrors make builds fast. Without them the worker reads elevation over HTTPS at 
 | Tasmania canopy height (2 m) | 26 GB zip → ~10 GB TIFF | `python scripts/mirror.py tas-chm <dir>` (downloads, then extracts `CHM_2m/TAS_CHM_2m.tif`) |
 | OpenStreetMap, Australia | ~0.9 GB `.osm.pbf` | `https://download.geofabrik.de/australia-oceania/australia-latest.osm.pbf` |
 | OSM index | SQLite, built from the extract | `python -m mapcreator.providers.osm.index build australia-latest.osm.pbf australia.sqlite` (needs the `osm` extra: pyosmium) |
+| Councils' kerb lines (City of Hobart, Glenorchy) | about 10 MB SQLite | `python scripts/mirror_kerb_lines.py <dir>/kerb_lines.sqlite`, from a host that may reach `services1.arcgis.com` and `maps.gcc.tas.gov.au` (not the worker), monthly; then set `MAPCREATOR_KERB_LINES` on the worker and mount the file read-only. Optional: without it, town roads' kerbs come from the rules |
 
 To build the index without installing Python on the host, use the one-shot index image:
 

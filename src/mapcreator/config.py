@@ -45,6 +45,10 @@ class Settings:
     # find how the OpenStreetMap data was selected (ODbL 4.6), so a fork points at its own code. Empty leaves the
     # address out.
     source_url: str = ""
+    # The councils' kerb lines (`providers/councils/kerb_lines.py`): the local mirror `scripts/mirror_kerb_lines.py`
+    # writes. Empty means kerbs come from the rules alone. `live` reads the councils' own servers instead: for
+    # development only, never on a worker.
+    kerb_lines: str = ""
 
 
 DEFAULT_TAS_DEM = (
@@ -81,4 +85,5 @@ def load() -> Settings:
         nvis_source=get("MAPCREATOR_NVIS", "nvis_source", ""),
         svtm_source=get("MAPCREATOR_SVTM", "svtm_source", ""),
         source_url=get("MAPCREATOR_SOURCE_URL", "source_url", "").strip(),
+        kerb_lines=get("MAPCREATOR_KERB_LINES", "kerb_lines", "").strip(),
     )
