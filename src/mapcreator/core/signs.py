@@ -28,7 +28,7 @@ signs we can stand behind".
   road's `oneway`, which the router never does (it follows `oneway`), so that one is a safety net.
 - Side roads leaving under `MIN_ANGLE_DEG` (a divided road's other carriageway, a lane beside it) and links give no
   ONE WAY or NO ENTRY, as they give no blade (`signals.BLADE_MIN_ANGLE_DEG`).
-- Not here: Hobart's kerbside signs (Q9: not yet), turn bans, cycling (phase 3).
+- Not here: Hobart's parking signs along the kerb (Q9: not yet), turn bans, cycling (phase 3).
 
 **Where they stand** (`build`, the mesh stage): real signs where they really stand, on a closed road too. A sign
 on a side road (its GIVE WAY or STOP, its NO ENTRY, a crossing on it) faces the side road's traffic as in reality,

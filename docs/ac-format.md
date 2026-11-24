@@ -442,7 +442,7 @@ The sites and named junctions as drawn: `version` (1) and `drawn`, each a site (
 
 ## Regulatory signs and zebra crossings (`core/signs.py`)
 
-Phase 2 of the traffic lights research (the maintainer's answers of 24 Nov 2026), "regulatory signs we can stand behind": ONE WAY and NO ENTRY from OSM's `oneway`, GIVE WAY, STOP and pedestrian-crossing signs only where OSM tags them (Q8), and zebra markings where OSM tags a zebra. A job with `"junctions": "none"` builds without them, as without the signals. Not here: Hobart's kerbside signs (Q9: not yet), turn bans, cycling lights (phase 3).
+Phase 2 of the traffic lights research (the maintainer's answers of 24 Nov 2026), "regulatory signs we can stand behind": ONE WAY and NO ENTRY from OSM's `oneway`, GIVE WAY, STOP and pedestrian-crossing signs only where OSM tags them (Q8), and zebra markings where OSM tags a zebra. A job with `"junctions": "none"` builds without them, as without the signals. Not here: Hobart's parking signs along the kerb (Q9: not yet), turn bans, cycling lights (phase 3).
 
 - **GIVE WAY (R1-2) and STOP (R1-1)** at a road node tagged `highway=give_way` or `highway=stop` (or `traffic_sign` `AU:R1-2` or `AU:R1-1`), on the route or on a side road the route stage found, within 30 m along its road of the route's junction it's for. Never inferred at an untagged mouth: the T-intersection rule leaves many junctions unsigned. Which traffic it's for, so which way it faces:
   - its `direction` (`forward` or `backward` along its way; `both` gives two signs), where tagged;
