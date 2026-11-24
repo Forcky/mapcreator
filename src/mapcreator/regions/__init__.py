@@ -50,6 +50,10 @@ class Region:
     # Overhead power lines (`core.power.Line`s) by bbox in the region's CRS, or None; one source per region.
     power: Callable[[tuple, Settings], list] | None = None
     power_attribution: Attribution | None = None
+    # The land parcels beside the road reserve (`shapely` polygons in the region's CRS) by bbox, or None: the footpath's
+    # back edge on a kerbed town road (`core.kerbs`). Without them, footpaths take the standard widths.
+    parcels: Callable[[tuple, Settings], list] | None = None
+    parcels_attribution: Attribution | None = None
     # A vegetation map for the corridor (`core.species.VegetationMap`, `SvtmMap` or `NvisMap`), by centreline and
     # reach; the callable may return None (no mirror configured). A map names the sources it used
     # (`attributions`); the region's is credited for one that doesn't.
@@ -97,6 +101,18 @@ def _tas_power(bbox, settings: Settings):
     from mapcreator.providers.tas_list.power import lines
 
     return lines(bbox, settings)
+
+
+def _tas_parcels(bbox, settings: Settings):
+    from mapcreator.providers.tas_list.cadastre import lots
+
+    return lots(bbox, settings)
+
+
+def _tas_parcels_attribution() -> Attribution:
+    from mapcreator.providers.tas_list.cadastre import ATTRIBUTION
+
+    return ATTRIBUTION
 
 
 def _tas_vegetation(centre_xy, reach_m: float, settings: Settings):
@@ -149,6 +165,8 @@ TASMANIA = Region(
     buildings_attribution=_tas_buildings_attribution(),
     power=_tas_power,
     power_attribution=_tas_power_attribution(),
+    parcels=_tas_parcels,
+    parcels_attribution=_tas_parcels_attribution(),
     vegetation=_tas_vegetation,
     vegetation_attribution=_tas_vegetation_attribution(),
     grass=_tas_grass,
