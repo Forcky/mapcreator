@@ -498,7 +498,7 @@ def plan(s, xy, heading, run, run_tags: list[dict], half_l, half_r, *, unsealed=
         "rule_m": round(float(town.sum() * step), 1),
         "cbd_m": round(float(cbd.sum() * step), 1),
         "stretches": [[round(float(s[a] - s[0]), 1), round(float(s[b - 1] - s[0]), 1)] for a, b in _runs(kerbed)],
-        "kerb_to_kerb_m": _stats(kk[kerbed]),
+        "kerb_to_kerb_m": _stats((new_l + new_r + 2 * CHANNEL_M)[kerbed]),  # as drawn, face to face
         "before_m": _stats(today[kerbed]),
         "wider_m": _stats(((new_l + new_r + 2 * CHANNEL_M) - today)[kerbed]),
         "footpath_m": {side: _stats(path[side][kerbed]) for side in "LR"},
