@@ -30,6 +30,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 from scipy.ndimage import uniform_filter1d
 
+from mapcreator.core import kerbs as kerbs_core
 from mapcreator.core import lettering
 from mapcreator.core.scene import MAX_VERTICES, Z_SIGN, LocalFrame, Mesh
 
@@ -150,7 +151,7 @@ def _spacing(radius: float, outside: bool) -> float:
 
 def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, superelevation, limits,
               frame: LocalFrame, rail_l=None, rail_r=None, unsealed=None, mouth_l=None,
-              mouth_r=None, no_cams=None) -> tuple[list[Mesh], dict, Atlas]:
+              mouth_r=None, no_cams=None, kerbs=None) -> tuple[list[Mesh], dict, Atlas]:
     """Guide posts, CAMs and speed signs along the road: meshes (in AC axes), a summary, and the texture atlas
     their material uses.
 
@@ -161,6 +162,8 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
     to the nearest station clear of it. Left is left of the direction the stations run (the forward layout).
     `no_cams`: stations where no CAM stands on either side, the route's arc of a roundabout (`core.roundabouts`):
     nothing on a ring points the way to go. Guide posts there stand as anywhere.
+    `kerbs` (`core.kerbs.Kerbs`): on a kerbed town stretch there are no guide posts (Q10), and CAMs and speed signs
+    stand on the footpath, `kerbs.POST_BEHIND_M` behind the kerb face.
     """
     n = len(s)
     step = float(s[1] - s[0]) if n > 1 else 1.0
@@ -168,6 +171,7 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
         "L": np.zeros(n, bool) if mouth_l is None else np.asarray(mouth_l, bool),
         "R": np.zeros(n, bool) if mouth_r is None else np.asarray(mouth_r, bool)}
     in_mouth = {"posts_moved": 0, "cams_left_out": 0, "signs_moved": 0}
+    on_paths, kerb_posts = [0], [0]
     on_rings = 0
     k = uniform_filter1d(np.asarray(curvature, dtype=float), max(int(CURVATURE_SMOOTH_M / step), 1), mode="nearest")
     radius = 1.0 / np.maximum(np.abs(k), 1e-6)
@@ -183,11 +187,22 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
     tex = atlas(known)
     builder = _Builder(tex)
 
+    def kerbed(i, side) -> bool:
+        return kerbs is not None and kerbs.k[side][i] > 0.5
+
     def point(i, side, beyond):
-        """Region (e, n) and verge height `beyond` metres past the edge on `side`, at station i."""
+        """Region (e, n) and verge height `beyond` metres past the edge on `side`, at station i; on a kerbed stretch,
+        on the footpath behind the kerb instead."""
+        edge_h = z[i] - slope[side][i] * half[side][i]
+        if kerbed(i, side):
+            beyond = kerbs.offset(side, i, kerbs_core.POST_BEHIND_M)
+            h = edge_h + kerbs.rise(side, i, beyond)
+            on_paths[0] += 1
+        else:
+            h = edge_h - beyond * VERGE_FALL
         off = half[side][i] + beyond
         e, nn = xy[i] + left[i] * (sign[side] * off)
-        return e, nn, z[i] - slope[side][i] * half[side][i] - beyond * VERGE_FALL
+        return e, nn, h
 
     # CAMs first: the outside of a qualifying curve has them instead of guide posts.
     limit = np.where(np.isfinite(limits), limits, DEFAULT_LIMIT_KMH)
@@ -246,6 +261,9 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
             last = s[i]
             if rails[side][i] or cam_zone[side][i] or gravel[i]:
                 continue
+            if kerbed(i, side):  # a kerbed town street has no guide posts
+                kerb_posts[0] += 1
+                continue
             e, nn, h = point(i, side, GUIDE_POST_OFFSET_M)
             # The forward traffic has a left-side post on its left (red) and a right-side one on its right (white).
             builder.guide_post(e, nn, h, tangent[i], front="reflector_red" if side == "L" else "reflector_white",
@@ -277,6 +295,8 @@ def furniture(s, xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, su
         stats["side_road_mouths"] = in_mouth
     if no_cams is not None:
         stats["cams_left_off_roundabouts"] = on_rings
+    if kerbs is not None:
+        stats["kerbed"] = {"guide_posts_left_out": kerb_posts[0], "on_footpath": on_paths[0]}
     return meshes, stats, tex
 
 

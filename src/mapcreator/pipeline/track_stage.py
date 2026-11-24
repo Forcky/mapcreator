@@ -13,12 +13,13 @@ import numpy as np
 from mapcreator import __version__, buildinfo, cpus
 from mapcreator.config import Settings
 from mapcreator.core import bridges as bridges_core
+from mapcreator.core import kerbs as kerbs_core
 from mapcreator.core import ramps as ramps_core
 from mapcreator.core import roundabouts as rb_core
 from mapcreator.core import (ai_line, closures, furniture, grass, grassfx, junctions, kn5, package, signals, stubs,
                              textures, treefx, validate)
-from mapcreator.core.layout import (AI_END_SHORT_M, GATE_FROM_END_M, Layout, RoadModel, finish_distance,
-                                    gate_distances, layouts_for, logic_dummies)
+from mapcreator.core.layout import (AI_END_SHORT_M, GATE_FROM_END_M, GATE_OUTSIDE_EDGE_M, Layout, RoadModel,
+                                    finish_distance, gate_distances, layouts_for, logic_dummies)
 from mapcreator.core.scene import Scene
 from mapcreator.job import Job
 from mapcreator.pipeline import mesh_stage, profile_stage, route_stage, scenery_stage, section_stage
@@ -30,8 +31,10 @@ STAGE = "05_track"
 # Material values for the base surfaces follow a generator whose tracks pass an in-game load test.
 MATERIAL_PROPS = {
     "road": {"ksAmbient": 0.35, "ksDiffuse": 0.42, "ksSpecular": 0.06, "ksSpecularEXP": 28.0},
-    # A roundabout island's concrete kerb (`core.roundabouts`): the asphalt's values, a little less sheen.
+    # A roundabout island's concrete kerb (`core.roundabouts`): the asphalt's values, a little less sheen. A town road's
+    # kerb and its footpaths (`core.kerbs`: footpath_asphalt, footpath_concrete) take the same.
     "kerb": {"ksAmbient": 0.35, "ksDiffuse": 0.42, "ksSpecular": 0.04, "ksSpecularEXP": 20.0},
+    "footpath": {"ksAmbient": 0.35, "ksDiffuse": 0.42, "ksSpecular": 0.04, "ksSpecularEXP": 20.0},
     # Loose stone and fines: about as matte as the grass, a little less than the asphalt's sheen. road_plain and
     # gravel_narrow take their base material's values (the name before the underscore).
     "gravel": {"ksAmbient": 0.36, "ksDiffuse": 0.44, "ksSpecular": 0.02, "ksSpecularEXP": 15.0},
@@ -133,7 +136,7 @@ def _attributions(region, work: WorkDir):
     from mapcreator.providers.base import Attribution
 
     out = list(region.attributions)
-    for stage in (profile_stage.STAGE, scenery_stage.STAGE, mesh_stage.STAGE):
+    for stage in (profile_stage.STAGE, section_stage.STAGE, scenery_stage.STAGE, mesh_stage.STAGE):
         path = work.root / stage / "attributions.json"
         if path.exists():
             for d in json.loads(path.read_text(encoding="utf-8")):
@@ -192,6 +195,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     width = sec["half_left"] + sec["half_right"]
     unsealed = _unsealed(sec)
     has_gravel = any(m.name.startswith("1GRAVEL") for m in scene.meshes)
+    has_footway = any(m.name.startswith(kerbs_core.FOOTWAY) for m in scene.meshes)
     unsealed_m = _unsealed_m(c["s"], sec)
     surface_tags = package.surface_tags(unsealed_m, float(c["s"][-1] - c["s"][0]))
     unsealed_note = (f" {unsealed_m / 1000:.1f} km of {(c['s'][-1] - c['s'][0]) / 1000:.1f} km unsealed."
@@ -209,16 +213,20 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     decks = mesh_stage.built_bridges(work)
     # Nor along a slip ramp's taper, gore and nose island (`core.ramps`).
     ramps = mesh_stage.built_ramps(work, job)
+    kerbs = kerbs_core.Kerbs.from_section(sec)
     for lay in layouts:
         road = RoadModel.from_arrays(c["s"], c["xy"], c["z"], c["heading"], c["curvature"], c["grade"],
                                      sec["half_left"], sec["half_right"], sec["slope_left"], sec["slope_right"],
-                                     lay.reverse)
+                                     lay.reverse, **_kerb_arrays(sec))
         avoid = junctions.layout_intervals(mouths, c["s"], lay.reverse)
         if rings:
             avoid = sorted(avoid + rb_core.layout_intervals(rings, c["s"], lay.reverse))
         if ramps:
             avoid = sorted(avoid + ramps_core.layout_intervals(ramps, c["s"], lay.reverse))
         wider = [(a, b, bridges_core.KERB_M) for a, b in bridges_core.layout_intervals(decks, c["s"], lay.reverse)]
+        if kerbs is not None:  # a gate on a kerbed town stretch stands GATE_BEHIND_M behind its kerb face
+            wider += [(a, b, kerbs_core.CHANNEL_M + kerbs_core.GATE_BEHIND_M - GATE_OUTSIDE_EDGE_M)
+                      for a, b in kerbs.intervals(c["s"], lay.reverse)]
         dummies = logic_dummies(road, scene.frame, avoid, wider)
         gates = dict(zip(("start", "finish"), gate_distances(road, avoid)))
         moved = {k: round(d - usual, 1) for (k, d), usual in zip(gates.items(), (GATE_FROM_END_M,
@@ -251,7 +259,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         map_png.save(layout_dir / "map.png")
         data = layout_dir / "data"
         _write_text(data / "map.ini", map_ini, encoding="ascii")
-        _write_text(data / "surfaces.ini", package.surfaces_ini(gravel=has_gravel), encoding="ascii")
+        _write_text(data / "surfaces.ini", package.surfaces_ini(gravel=has_gravel, footway=has_footway),
+                    encoding="ascii")
         _write_text(data / "lighting.ini", package.lighting_ini(), encoding="ascii")
         _write_text(data / "groove.ini", package.groove_ini(), encoding="ascii")
         _write_text(data / "crew.ini", package.crew_ini(), encoding="ascii")
@@ -515,3 +524,10 @@ def _write_centreline(track_dir, job: Job, c, sec, region, lonlat, attributions,
         })
     _write_text(track_dir / "centreline.geojson",
                 json.dumps({"type": "FeatureCollection", "features": features}), encoding="utf-8")
+
+
+def _kerb_arrays(sec) -> dict:
+    """`RoadModel.from_arrays`' kerb weights from section.npz (`core.kerbs`), where it has kerbs."""
+    if "kerb_left" not in sec:
+        return {}
+    return {"kerb_l": np.asarray(sec["kerb_left"], float), "kerb_r": np.asarray(sec["kerb_right"], float)}

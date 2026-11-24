@@ -1,0 +1,18 @@
+{
+  "track_id": "sandy_bay_york_street",
+  "waypoints": [
+    {
+      "lon": 147.3179,
+      "lat": -42.9014
+    },
+    {
+      "lon": 147.3240,
+      "lat": -42.90022
+    },
+    {
+      "lon": 147.32965,
+      "lat": -42.89897
+    }
+  ],
+  "layouts": "forward"
+}

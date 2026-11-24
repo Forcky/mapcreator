@@ -72,7 +72,7 @@ def road_radius(job: Job, work: WorkDir) -> dict[str, tuple[np.ndarray, np.ndarr
     for lay in layouts_for(job.layouts.value):
         road = RoadModel.from_arrays(c["s"], c["xy"], c["z"], c["heading"], c["curvature"], c["grade"],
                                      sec["half_left"], sec["half_right"], sec["slope_left"], sec["slope_right"],
-                                     lay.reverse)
+                                     lay.reverse, **track_stage._kerb_arrays(sec))
         d, r = ai_line.road_radius(road, end_short_m=AI_END_SHORT_M)
         xz = frame.to_ac(np.interp(d, road.d, road.e), np.interp(d, road.d, road.n), np.interp(d, road.d, road.z))
         out[lay.key or "main"] = (xz[:, [0, 2]], r)

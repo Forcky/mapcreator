@@ -297,7 +297,10 @@ def _distance(m: float) -> str:
 
 
 KEEP_TAGS = ("highway", "ref", "name", "lanes", "width", "surface", "oneway", "maxspeed", "bridge", "tunnel", "layer",
-             "narrow", "lane_markings")
+             "narrow", "lane_markings",
+             # Where the footpaths are on a kerbed town road, and what they're made of (`core.kerbs`).
+             "sidewalk", "sidewalk:both", "sidewalk:left", "sidewalk:right", "sidewalk:surface",
+             "sidewalk:both:surface", "sidewalk:left:surface", "sidewalk:right:surface")
 
 
 def _bbox(job: Job, margin_deg: float) -> tuple[float, float, float, float]:
@@ -307,11 +310,14 @@ def _bbox(job: Job, margin_deg: float) -> tuple[float, float, float, float]:
     return min(lons) - margin_deg, min(lats) - margin_deg, max(lons) + margin_deg, max(lats) + margin_deg
 
 
-def runs(route: osm_graph.Route) -> list[dict]:
-    """Consecutive stretches of the route on the same OSM way, with distances and kept tags."""
+def runs(route: osm_graph.Route, g: osm_graph.RoadGraph | None = None) -> list[dict]:
+    """Consecutive stretches of the route on the same OSM way, with distances and kept tags. With the graph `g`, a run
+    whose tags say which side of the way something is on (`sidewalk=left`, `sidewalk:right=...`) also says whether
+    the route drives the way against its drawn direction (`reversed`), so the side can be turned round."""
     s = cumulative(route.xy)
     out: list[dict] = []
     start = 0
+    order = _way_order(g) if g is not None else None
     for i in range(1, len(route.seg_way) + 1):
         if i == len(route.seg_way) or route.seg_way[i] != route.seg_way[start]:
             way = route.ways[int(route.seg_way[start])]
@@ -321,8 +327,35 @@ def runs(route: osm_graph.Route) -> list[dict]:
                 "way_id": way["id"],
                 "tags": {k: way["tags"][k] for k in KEEP_TAGS if k in way["tags"]},
             })
+            if order is not None and _sided(out[-1]["tags"]):
+                out[-1]["reversed"] = _reversed(route, order, start, i)
             start = i
     return out
+
+
+def _sided(tags: dict) -> bool:
+    """Whether a way's tags name a side of it (left or right of its drawn direction)."""
+    return (str(tags.get("sidewalk") or "") in ("left", "right")
+            or any(k.startswith(("sidewalk:left", "sidewalk:right")) for k in tags))
+
+
+def _way_order(g: osm_graph.RoadGraph) -> dict:
+    """Each graph segment's ends, by its way, in the way's own order: {(way, a xy, b xy): True}."""
+    a, b = np.round(g.xy[g.seg_a], 3), np.round(g.xy[g.seg_b], 3)
+    return {(int(w), *map(float, p), *map(float, q)): True for w, p, q in zip(g.seg_way.tolist(), a, b)}
+
+
+def _reversed(route: osm_graph.Route, order: dict, i0: int, i1: int) -> bool:
+    """Whether the route's segments i0..i1-1 run against their way's drawn direction: a vote over the segments found
+    in the graph, in the way's order or the other."""
+    xy = np.round(route.xy, 3)
+    vote = 0
+    for k in range(i0, i1):
+        w = int(route.seg_way[k])
+        p, q = tuple(map(float, xy[k])), tuple(map(float, xy[k + 1]))
+        vote += (w, *p, *q) in order
+        vote -= (w, *q, *p) in order
+    return vote < 0
 
 
 def run(job: Job, settings: Settings, work: WorkDir) -> dict:
@@ -350,7 +383,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
 
     sharp = sharp_turns(route.xy)
     lon, lat = region.to_lonlat().transform(route.xy[:, 0], route.xy[:, 1])
-    route_runs = runs(route)
+    route_runs = runs(route, g)
     geojson = {
         "type": "FeatureCollection",
         "features": [{

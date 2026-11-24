@@ -30,7 +30,7 @@ from scipy.ndimage import minimum_filter1d, uniform_filter1d
 from scipy.spatial import cKDTree
 
 from mapcreator import cpus
-from mapcreator.core import ai_line, kn5, racing_line
+from mapcreator.core import ai_line, kerbs, kn5, racing_line
 from mapcreator.core.crossing_roads import ABUTMENT_MESH, CLEARANCE_M, DECK_DEPTH_M, DECK_MESH, PIER_MESH
 from mapcreator.core.package import ROAD_KEYS, SURFACE_KEYS, surface_keys
 from mapcreator.core.power import POWER_COLLIDER
@@ -284,6 +284,56 @@ def racing_line_checks(rep: Report, label: str, line: ai_line.AiLine, road: Road
     else:
         rep.warnings.append(f"{label}: the AI line bends tighter than the road near {line.length[j]:.0f} m along it: "
                             f"{r_line[j]:.1f} m against the road's {nearby[j]:.1f} m")
+
+
+# Kerbed town roads (`core.kerbs`): the hidden ramps (`kerbs.is_ramp`) under the drawn kerbs, the footpaths.
+KERB_JOIN_M = 0.002  # every ramp vertex is another ground mesh's vertex, within this (float32 vertices)
+# The AI line keeps its margin from the kerb face plus kerbs.AI_EXTRA_M (Q11), so from the ramp's foot (the channel's
+# lip, CHANNEL_M inside the face) at least this; 0.2 m less fails, as for the road's edges (AI_EDGE_MIN_M).
+AI_KERB_MIN_M = racing_line.EDGE_MARGIN_M + kerbs.AI_EXTRA_M - kerbs.CHANNEL_M - 0.2
+SPAWN_KERB_MIN_M = 0.5  # every spawn at least this clear of a kerb's ramp, between the kerbs
+# What stands on a footpath and must keep off the ramp: tree trunks', signal and blade posts' and signs' colliders.
+KERB_COLLIDERS = (TRUNK_MESH, "1WALL_SIGNAL_", "1WALL_SIGN_")
+
+
+def kerb_checks(rep: Report, label: str, data: dict, dummies: dict, line: ai_line.AiLine) -> None:
+    """On a track with kerbed town roads: every kerb's hidden ramp joins the road and the footpath with no gap (each of
+    its vertices is another ground mesh's), no tree, post or sign collider stands over a ramp, every spawn is on the
+    road between the kerbs, and the AI line keeps clear of every kerb face (failures). Nothing to check without."""
+    meshes = [n for n in data["nodes"] if n["class"] == 2]
+    ramps = [n for n in meshes if kerbs.is_ramp(n["name"])]
+    if not ramps:
+        return
+    rep.check(all(n["renderable"] == 0 for n in ramps), f"{label}: {len(ramps)} kerb ramp meshes, all invisible")
+    others = [n["vertices"]["pos"].astype(float) for n in meshes
+              if is_ground_mesh(n["name"]) and not kerbs.is_ramp(n["name"])]
+    rp = np.unique(np.concatenate([n["vertices"]["pos"].astype(float) for n in ramps]).round(4), axis=0)
+    gap = cKDTree(np.concatenate(others)).query(rp, workers=cpus.count())[0] if others else np.full(len(rp), np.inf)
+    loose = int((gap > KERB_JOIN_M).sum())
+    rep.check(loose == 0, f"{label}: every kerb ramp joins the road and the footpath with no gap"
+              + (f" ({loose} of {len(rp)} vertices loose, the worst {gap.max():.3f} m off)" if loose else ""))
+    tri = np.concatenate([n["vertices"]["pos"].astype(float)[n["indices"].reshape(-1, 3)] for n in ramps])
+    plan = shapely.union_all(shapely.polygons(tri[:, :, [0, 2]]).tolist())
+    shapely.prepare(plan)
+    on = []
+    for prefix in KERB_COLLIDERS:
+        found = [n for n in meshes if n["name"].startswith(prefix)]
+        if found:
+            xz = np.concatenate([n["vertices"]["pos"][:, [0, 2]].astype(float) for n in found])
+            if shapely.contains_xy(plan, xz[:, 0], xz[:, 1]).any():
+                on.append(prefix.rstrip("_"))
+    rep.check(not on, f"{label}: no tree, post or sign collider stands on a kerb's ramp" + (f" ({on})" if on else ""))
+    spawns = np.array([d["matrix"][3, [0, 2]] for n, d in dummies.items() if SPAWN.match(n)]).reshape(-1, 2)
+    if len(spawns):
+        near = float(shapely.distance(plan, shapely.points(spawns)).min())
+        rep.check(near >= SPAWN_KERB_MIN_M, f"{label}: every spawn on the road between the kerbs, at least "
+                  f"{SPAWN_KERB_MIN_M:.1f} m from a kerb ({near:.2f} m)")
+    pts = np.asarray(line.pos, float)[:, [0, 2]]
+    dist = shapely.distance(plan, shapely.points(pts))
+    i = int(np.argmin(dist))
+    rep.check(bool(dist[i] >= AI_KERB_MIN_M), f"{label}: AI line clear of every kerb face, at least "
+              f"{AI_KERB_MIN_M + kerbs.CHANNEL_M:.2f} m from it ({dist[i] + kerbs.CHANNEL_M:.2f} m at the closest, "
+              f"{line.length[i]:.0f} m along it)")
 
 
 VERTICAL_G_LIMIT = 0.5  # a crest or sag pulling more than this, at the AI's planned speed, gets a warning
@@ -595,6 +645,7 @@ def _layout_checks(rep: Report, label: str, data: dict, dummies: dict, ai_path: 
     else:
         bend_checks(rep, label, line, allow_tight_bends=allow_tight_bends, radius=road_radius[1], at=road_radius[0])
     racing_line_checks(rep, label, line, road, middle_radius)
+    kerb_checks(rep, label, data, dummies, line)
     vertical_checks(rep, label, line)
     bend_hint_checks(rep, label, line, road, ai_path.parents[1] / "data" / "ai_hints.ini")
     exit_clearance_checks(rep, label, line, ai_path.parents[1] / "data" / "ai_hints.ini")
@@ -837,7 +888,8 @@ def stub_failures(data: dict, stubs: list[tuple[object, StubCheck]]) -> dict[obj
         return np.concatenate(out) if out else np.zeros((0, 3, 3))
 
     road = _Cover(triangles(is_road_mesh))
-    ground = _Cover(triangles(lambda n: n[:1].isdigit() and "GRASS" in n))
+    # Ground beside a stub: grass, and a kerbed town road's footpaths (`core.kerbs`).
+    ground = _Cover(triangles(lambda n: is_ground_mesh(n) and not is_road_mesh(n)))
     out: dict[object, list[str]] = {}
     for key, st in stubs:
         faults = []

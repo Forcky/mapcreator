@@ -80,8 +80,8 @@ def test_hashes_and_stored_jobs_are_unchanged_by_later_fields(store):
     import json
 
     j = job("a")
-    # The formula every hash was made with before allow_tight_bends, junctions and the 64 km limit.
-    old = json.dumps({**j.model_dump(mode="json", exclude={"track_id", "allow_tight_bends", "junctions"}),
+    # The formula every hash was made with before allow_tight_bends, junctions, kerbs and the 64 km limit.
+    old = json.dumps({**j.model_dump(mode="json", exclude={"track_id", "allow_tight_bends", "junctions", "kerbs"}),
                       "max_length_km": 30.0}, sort_keys=True, separators=(",", ":"))
     assert route_hash(j) == hashlib.sha256(old.encode()).hexdigest()
     longer = Job.model_validate({**j.model_dump(), "max_length_km": 75})
@@ -96,6 +96,11 @@ def test_hashes_and_stored_jobs_are_unchanged_by_later_fields(store):
     assert route_hash(bare) != route_hash(j)
     assert "junctions" not in store.create(j, ip_hash="ip").job
     assert store.create(bare, ip_hash="ip").job["junctions"] == "none"
+    # Built without kerbs: a different track. Auto (the default) is today's track id.
+    plain = Job.model_validate({**j.model_dump(), "kerbs": "none"})
+    assert route_hash(plain) != route_hash(j)
+    assert "kerbs" not in store.create(j, ip_hash="ip").job
+    assert store.create(plain, ip_hash="ip").job["kerbs"] == "none"
 
 
 def test_a_failure_code_is_kept_and_cleared_on_requeue(store):

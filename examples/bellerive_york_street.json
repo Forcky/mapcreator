@@ -1,0 +1,18 @@
+{
+  "track_id": "bellerive_york_street",
+  "waypoints": [
+    {
+      "lon": 147.36935,
+      "lat": -42.87320
+    },
+    {
+      "lon": 147.37625,
+      "lat": -42.87457
+    },
+    {
+      "lon": 147.37555,
+      "lat": -42.87810
+    }
+  ],
+  "layouts": "forward"
+}

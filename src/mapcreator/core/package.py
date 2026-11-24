@@ -51,8 +51,12 @@ GRAVEL_SURFACE = {
     "_EXT_SURFACE_TYPE": "GRAVEL", "_EXT_SURFACE_TYPE_MODIFIER": "REGULAR", "_EXT_PERLIN_NOISE": "1",
     "_EXT_PERLIN_OCTAVES": "3", "_EXT_PERLIN_PERSISTENCE": "0.5",
 }
+# A kerbed town road's footpaths (1FOOTWAY_### meshes, `core.kerbs`), written only for a track that has some: ROAD's
+# grip, but not valid track (Q4), so running on the footpath counts as off the track, as grass does. No sound or
+# vibration (AC's built-in KERB, a race track's rumble strip, isn't a concrete footpath).
+FOOTWAY_SURFACE = {**SURFACES[0], "KEY": "FOOTWAY", "IS_VALID_TRACK": "0"}
 # Every KEY a track of ours can define. A physics mesh name must contain exactly one of these (or WALL).
-SURFACE_KEYS = tuple(s["KEY"] for s in SURFACES) + (GRAVEL_SURFACE["KEY"],)
+SURFACE_KEYS = tuple(s["KEY"] for s in SURFACES) + (GRAVEL_SURFACE["KEY"], FOOTWAY_SURFACE["KEY"])
 ROAD_KEYS = ("ROAD", "GRAVEL")  # the drivable road: spawns, the AI line and colliders are checked against both
 
 
@@ -65,9 +69,11 @@ def ini(sections: list[tuple[str, dict]]) -> str:
     return CRLF.join(lines)
 
 
-def surfaces_ini(gravel: bool = False) -> str:
-    """`data/surfaces.ini`: ROAD and GRASS, plus GRAVEL as SURFACE_2 for a track with unsealed road."""
-    return ini([(f"SURFACE_{i}", s) for i, s in enumerate(SURFACES + ([GRAVEL_SURFACE] if gravel else []))])
+def surfaces_ini(gravel: bool = False, footway: bool = False) -> str:
+    """`data/surfaces.ini`: ROAD and GRASS, plus GRAVEL for a track with unsealed road and FOOTWAY for one with kerbed
+    town roads' footpaths, numbered on in that order."""
+    extra = ([GRAVEL_SURFACE] if gravel else []) + ([FOOTWAY_SURFACE] if footway else [])
+    return ini([(f"SURFACE_{i}", s) for i, s in enumerate(SURFACES + extra)])
 
 
 def surface_keys(text: str) -> set[str]:

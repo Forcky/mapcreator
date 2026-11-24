@@ -32,6 +32,7 @@ from mapcreator import cpus
 from mapcreator.config import Settings
 from mapcreator.core import bridges as bridges_core
 from mapcreator.core import furniture, grass, junctions, mesh, police_car, reach, roadside, signals, stub_closures, stubs
+from mapcreator.core import kerbs as kerbs_core
 from mapcreator.core import signs as signs_core
 from mapcreator.core import crossing_roads, rail_and_paths
 from mapcreator.core import ramps as ramps_core
@@ -71,6 +72,8 @@ RAMPS = "ramps.json"
 # The traffic signal sites and named junctions as drawn (`core.signals`): each site's corner posts (or why one is
 # missing), its mast arms, faces and crosswalks, and each named junction's blades and posts.
 SIGNALS = "signals.json"
+# The kerbs as built (`core.kerbs`): how much, the driveways' crossings and the side roads' returns.
+KERBS = "kerbs.json"
 # The regulatory signs and zebra crossings as drawn (`core.signs`): each sign's post, or why it isn't drawn, and each
 # zebra's stripes.
 SIGNS = "signs.json"
@@ -166,13 +169,71 @@ def built_ramps(work: WorkDir, job: Job) -> list[dict]:
     return work.read_json(STAGE, RAMPS)["ramps"]
 
 
+class _Kerbed:
+    """The kerbs on the route's town stretches as built (`core.kerbs`): the section's, less any where a roundabout or
+    a slip ramp took the road's edge (`kerbs.Kerbs.without`), with a vehicular crossing at each driveway's mouth."""
+
+    def __init__(self, kerbs: kerbs_core.Kerbs, s: np.ndarray, x: dict, records: list):
+        self.kerbs, self.s, self.x, self.records = kerbs, np.asarray(s, float), x, records
+        self.quads = {k: kerbs.quads(k) for k in "LR"}
+        self.stats: dict = {}
+
+    def meshes(self, rb, s, frame: LocalFrame, cut: dict | None) -> tuple[list, dict]:
+        """The road's own kerbs, footpaths and grass behind them, less the quads cut for a side road's mouth."""
+        pieces = kerbs_core.Pieces.empty()
+        win = kerbs_core.windows(s)
+        drawn = {}
+        for side in "LR":
+            q = self.quads[side] & ~(np.asarray(cut[side], bool) if cut is not None else False)
+            k, x = self.kerbs.k[side], self.x[side]
+            conc = self.kerbs.concrete[side] | (x > 0)
+            cols = kerbs_core.ribbon_columns(rb, side, k, x, self.kerbs.paved[side])
+            kerbs_core.add_strip(pieces, cols, q, np.asarray(s, float), win, conc[:-1] | conc[1:])
+            drawn[side] = q
+        out = kerbs_core.meshes(pieces, frame)
+        step = float(s[1] - s[0]) if len(s) > 1 else 1.0
+        stats = {"kerb_m": {k: round(float(drawn[k].sum() * step), 1) for k in "LR"},
+                 "crossovers": len(self.records), "meshes": len(out),
+                 "vertices": int(sum(len(m.positions) for m in out))}
+        return out, stats
+
+
+def _kerbed(work: WorkDir, job: Job, found, plan, ramp_plan, rings, c, sec) -> _Kerbed | None:
+    """The section's kerbs (`core.kerbs`) as the mesh stage builds them, or None where there are none: none along a
+    slip ramp's or a fork's taper, gore and nose (`ramps_core.masks`) or a roundabout's arc (`rb_core.cam_mask`),
+    whose own pieces take the road's edge there; and a KC vehicular crossing at each driveway's, service road's,
+    track's or private road's mouth on a kerbed stretch, clear of the side roads' mouths."""
+    kerbs = kerbs_core.Kerbs.from_section(sec)
+    if kerbs is None:
+        return None
+    s = np.asarray(c["s"], float)
+    blocked = {"L": np.zeros(len(s), bool), "R": np.zeros(len(s), bool)}
+    if ramp_plan:
+        rm = ramps_core.masks(ramp_plan, s)
+        blocked = {k: blocked[k] | rm[k] for k in "LR"}
+    if rings:
+        arc = rb_core.cam_mask(rings, s)
+        blocked = {k: blocked[k] | arc for k in "LR"}
+    kerbs = kerbs.without(blocked, s)
+    drive = junctions.mouths(route_stage.driveways(work, job), s, c["xy"], c["heading"], sec["half_left"],
+                             sec["half_right"], band_m=1.0, margin_m=0.0)
+    clear = None
+    if found:
+        side_mouths = junctions.mouths(found, s, c["xy"], c["heading"], sec["half_left"], sec["half_right"],
+                                       stubs=stubs.by_junction(plan), margin_m=kerbs_core.CROSSOVER_CLEAR_M)
+        clear = junctions.masks(side_mouths, s)
+    x, records = kerbs_core.crossovers(s, drive, kerbs, clear)
+    return _Kerbed(kerbs, s, x, records)
+
+
 def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(), crossing=None, crossed=None,
-                     decks=None, ramps=(), ramp_out=None):
+                     decks=None, ramps=(), ramp_out=None, kerb=None):
     """The road's ribbon, the stubs (`stubs.build`) and roundabouts (`rb_core.build`), water, and the road, verge, stub,
     ring and terrain meshes for `plan` and `rings`. `crossing`: the roads crossing the route to draw
     (`core.crossing_roads`), kept off the ground the rest takes; what was drawn goes in `crossed["built"]`. `decks`
     (`bridges.Decks`): the route's own bridges. `ramps`: the slip ramps (`ramps_core.build`), built before the
-    crossing roads, which keep off them too; what was built goes in `ramp_out["built"]`."""
+    crossing roads, which keep off them too; what was built goes in `ramp_out["built"]`. `kerb`: the kerbs on town
+    stretches (`_Kerbed`), or None."""
     ring_pts = rb_core.centres(rings) if rings else None
     # The road's skirt is held short of the roads crossing it as well (`core.crossing_roads`), as of a stub's, and of
     # the slip ramps (`core.ramps`).
@@ -187,10 +248,12 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(),
     # Bridges: the kerb strip in place of the verge, and 1:2 batters on fills for the skirt.
     rb = mesh.build_ribbon(c["xy"], c["z"], c["heading"], c["curvature"], sec["half_left"], sec["half_right"],
                            sec["slope_left"], sec["slope_right"], decks.embanked(dem.sample) if decks else dem.sample,
-                           skirt_cap_l=caps[0], skirt_cap_r=caps[1], **(decks.verges() if decks else {}))
+                           skirt_cap_l=caps[0], skirt_cap_r=caps[1], **(decks.verges() if decks else {}),
+                           **(kerb.kerbs.ribbon() if kerb is not None else {}))
     main_xy = np.vstack([c["xy"], ring_pts]) if rings else c["xy"]
     main_xy = ramps_core.with_centres(main_xy, ramps)
-    built = (stubs.build(plan, rb, c["s"], frame, dem.sample, skirt=gmap is None, main_xy=main_xy)
+    built = (stubs.build(plan, rb, c["s"], frame, dem.sample, skirt=gmap is None, main_xy=main_xy,
+                         kerbs=kerb.kerbs if kerb is not None else None)
              if plan else None)
     extra = built.footprint if built is not None else None
     ring_built = None
@@ -237,12 +300,21 @@ def _road_and_ground(plan, c, sec, frame, dem, gmap, settings, region, rings=(),
     if ring_built is None:
         cut, edge_break = (built.cut, built.edge_break) if built is not None else (None, None)
     cut, edge_break = ramps_core.road_cut(cut, edge_break, ramp_built)
+    kerb_meshes = []
+    if kerb is not None:
+        # Kerbs and footpaths (`core.kerbs`) in place of the verge, less the side roads' mouths, where the returns take
+        # over; and no painted edge line where a kerb runs (a town street's channel is its edge).
+        deck_kw = {"kerb": {k: kerb.quads[k] | (deck_kw["kerb"][k] if deck_kw else False) for k in "LR"}}
+        kerb_meshes, kerb.stats = kerb.meshes(rb, c["s"], frame, cut)
+        on = {k: kerb.kerbs.k[k] > 0 for k in "LR"}
+        edge_break = on if edge_break is None else {k: np.asarray(edge_break[k], bool) | on[k] for k in "LR"}
     if decks:
         meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None, cut=decks.cut(cut),
                                     edge_break=edge_break, **deck_kw)
     else:
         meshes = mesh.ribbon_meshes(rb, c["s"], frame, style=style, skirt=gmap is None, cut=cut,
-                                    edge_break=edge_break)
+                                    edge_break=edge_break, **deck_kw)
+    meshes += kerb_meshes
     meshes += (built.meshes if built is not None else []) + (ring_built.meshes if ring_built is not None else [])
     if cross_built is not None:
         meshes += cross_built.meshes
@@ -317,7 +389,7 @@ def furniture_mouths(*masks: dict[str, np.ndarray] | None) -> dict[str, np.ndarr
 
 
 def _signals(work: WorkDir, job: Job, found, plan, c, sec, frame: LocalFrame, runs,
-             blocked: dict[str, np.ndarray] | None) -> signals.Built:
+             blocked: dict[str, np.ndarray] | None, kerb: _Kerbed | None = None) -> signals.Built:
     """The traffic signals along the route and the street-name blades at its named junctions (`core.signals`), their
     corners set by the side roads' mouths as built (with their stubs' flares) and kept clear of `blocked`, the stations
     where no furniture stands."""
@@ -330,12 +402,12 @@ def _signals(work: WorkDir, job: Job, found, plan, c, sec, frame: LocalFrame, ru
 
     blade_sites = signals.blades_for(found, c["s"], c["xy"], c["heading"], c["run"], runs, station)
     road = signals._Road(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"], sec["half_right"],
-                         sec["slope_left"], sec["slope_right"])
+                         sec["slope_left"], sec["slope_right"], kerb.kerbs if kerb is not None else None)
     return signals.build(sites, blade_sites, road, frame, mouths=mouth_list, blocked=blocked, station_of=station)
 
 
 def _signs(work: WorkDir, job: Job, found, plan, c, sec, frame: LocalFrame, meshes: list, dem, drive: list,
-           blocked: dict[str, np.ndarray] | None, sig: signals.Built) -> signs_core.Built:
+           blocked: dict[str, np.ndarray] | None, sig: signals.Built, kerb: _Kerbed | None = None) -> signs_core.Built:
     """The regulatory signs and zebra crossings (`core.signs`): on the route's verge clear of `blocked`, as the
     signals' posts are; beside the side roads that have stubs, outside every side road's and driveway's carriageway
     and stub; on the signals' and blades' posts where theirs would stand beside one; standing on the ground built
@@ -362,7 +434,7 @@ def _signs(work: WorkDir, job: Job, found, plan, c, sec, frame: LocalFrame, mesh
         return junctions._station(c["xy"], c["s"], np.asarray(rec["xy"], float), float(rec["at_m"]))
 
     road = signals._Road(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"], sec["half_right"],
-                         sec["slope_left"], sec["slope_right"])
+                         sec["slope_left"], sec["slope_right"], kerb.kerbs if kerb is not None else None)
     return signs_core.build(doc, road, frame, mouths=with_stub, all_mouths=every, keep_out=keep_out, blocked=blocked,
                             posts=sig.posts, height=height, road_height=road_top, station_of=station)
 
@@ -408,12 +480,14 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     # Slip ramps (`core.ramps`): built with the stubs and closed with them, under the same cap on police cars; each
     # checked on the meshes just built as a stub is, and one that fails left out (`ramps_core.settle`).
     ramp_state = {"ramps": ramp_plan, "built": None}
+    # Kerbs and footpaths on town stretches (`core.kerbs`), from the section stage's plan.
+    kerb = _kerbed(work, job, found, plan, ramp_plan, section_stage.roundabouts(work, job), c, sec)
 
     def build(stubs_now):
         ramps_now = ramp_state["ramps"]
         rb, built, water, ground_meshes = _road_and_ground(stubs_now, c, sec, frame, ground_dem, gmap, settings, region,
                                                            crossing=crossing, crossed=crossed, decks=decks,
-                                                           ramps=ramps_now, ramp_out=ramp_state)
+                                                           ramps=ramps_now, ramp_out=ramp_state, kerb=kerb)
         closed = None
         if stubs_now or ramps_now:
             # Each stub closed off the stage, and police cars at some of the major closures (`core.stub_closures`),
@@ -444,7 +518,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             rb, pair, water, ground_meshes = _road_and_ground(stubs_now, c, sec, frame, ground_dem, gmap, settings,
                                                               region, rings=rings_now, crossing=crossing,
                                                               crossed=crossed, decks=decks, ramps=ramps_now,
-                                                              ramp_out=ramp_state)
+                                                              ramp_out=ramp_state, kerb=kerb)
             closed = None
             every = stubs_now + rb_core.exit_stubs(rings_now) + ramps_now
             if every:
@@ -557,7 +631,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
                 bool((before[m.side] & ~masks[m.side] & (c["s"] >= m.s0) & (c["s"] <= m.s1)).any()) for m in drive)
         rails, rail_stats = roadside.guard_rails(c["s"], c["xy"], c["z"], c["heading"], sec["half_left"],
                                                  sec["half_right"], sec["slope_left"], sec["slope_right"],
-                                                 dem.sample, frame, allowed=fine, masks=masks)
+                                                 dem.sample, frame, allowed=fine, masks=masks,
+                                                 behind=kerb.kerbs.rail_offsets() if kerb is not None else None)
         if on_bridge.any():
             rail_stats["on_bridges_m"] = round(float(on_bridge.sum() * (c["s"][1] - c["s"][0])), 1)
     meshes += rails
@@ -572,7 +647,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         unsealed=sec["unsealed"] if "unsealed" in sec else None,
         mouth_l=furn_mouths["L"] if furn_mouths is not None else None,
         mouth_r=furn_mouths["R"] if furn_mouths is not None else None,
-        **({"no_cams": rb_core.cam_mask(rings, c["s"])} if rings else {}))
+        **({"no_cams": rb_core.cam_mask(rings, c["s"])} if rings else {}),
+        kerbs=kerb.kerbs if kerb is not None else None)
     if decks and decks.bridges:
         furn += bridges_core.reflectors(decks, rb, frame, atlas)
     meshes += furn
@@ -586,7 +662,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     short_drive = [m for m in drive if m.s1 - m.s0 <= signals.ALONGSIDE_MOUTH_M]
     post_mouths = furniture_mouths(mouths, junctions.masks(short_drive, c["s"]) if short_drive else None,
                                    decks.parapet if decks and decks.bridges else None)
-    sig = _signals(work, job, found, plan, c, sec, frame, runs, post_mouths)
+    sig = _signals(work, job, found, plan, c, sec, frame, runs, post_mouths, kerb)
     meshes += sig.meshes
     (out / SIGNALS).unlink(missing_ok=True)
     if sig.records:
@@ -596,7 +672,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         sig.atlas.image.save(textures[signals.TEXTURE])
     # Regulatory signs and zebra crossings (`core.signs`): GIVE WAY and STOP where OSM tags them, ONE WAY and NO ENTRY
     # from `oneway`, pedestrian crossings' signs and stripes; kept out of the same mouths as the signals' posts.
-    sgn = _signs(work, job, found, plan, c, sec, frame, meshes, dem, drive, post_mouths, sig)
+    sgn = _signs(work, job, found, plan, c, sec, frame, meshes, dem, drive, post_mouths, sig, kerb)
     meshes += sgn.meshes
     (out / SIGNS).unlink(missing_ok=True)
     if sgn.records:
@@ -632,6 +708,15 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         cross_stats = {**crossing_roads.summary(drawn), "decks": deck_stats,
                        "roads_built": cross_built.stats if cross_built is not None else {"pieces": 0}}
 
+    # Kerbs and footpaths as built (`core.kerbs`): their crossings at driveways, and the returns at side roads.
+    (out / KERBS).unlink(missing_ok=True)
+    kerb_stats = None
+    if kerb is not None:
+        returns = built.stats.get("kerb_returns", 0) if built is not None else 0
+        kerb_stats = {**kerb.stats, "returns": returns,
+                      "posts_on_footpath": len(kerb.kerbs.placed)}
+        work.write_json(STAGE, KERBS, {"version": kerbs_core.FORMAT_VERSION, **kerb_stats,
+                                       "crossings": kerb.records})
     used = {m.material for m in meshes}
     scene = Scene(
         frame=frame,
@@ -644,6 +729,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
             # A roundabout island's kerb (`core.roundabouts`), and a bridge's kerb strip.
             **({rb_core.KERB_MATERIAL: Material(rb_core.KERB_MATERIAL, texture=rb_core.KERB_TEXTURE)}
                if rb_core.KERB_MATERIAL in used else {}),
+            # A kerbed town road's footpaths, asphalt or concrete (`core.kerbs`); its kerbs are the island's concrete.
+            **{name: Material(name, texture=tex) for name, tex in kerbs_core.PATH_TEXTURES.items() if name in used},
             # The bridges over the route: their concrete and its darker underside (`core.crossing_roads`).
             **{name: Material(name, texture=crossing_roads.CONCRETE_TEXTURE, properties=props)
                for name, props in crossing_roads.KN5_PROPERTIES.items() if name in used},
@@ -707,4 +794,4 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         {"driveways": driveway_stats} if driveway_stats is not None else {}) | (
         {"crossing_roads": cross_stats} if cross_stats is not None else {}) | (
         {"rail_and_paths": lines_built.stats} if lines_built.records else {}) | (
-        {"bridges": decks.stats} if decks else {})
+        {"bridges": decks.stats} if decks else {}) | ({"kerbs": kerb_stats} if kerb_stats is not None else {})

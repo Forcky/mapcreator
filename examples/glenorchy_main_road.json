@@ -1,0 +1,14 @@
+{
+  "track_id": "glenorchy_main_road",
+  "waypoints": [
+    {
+      "lon": 147.28195,
+      "lat": -42.83020
+    },
+    {
+      "lon": 147.26925,
+      "lat": -42.82982
+    }
+  ],
+  "layouts": "forward"
+}

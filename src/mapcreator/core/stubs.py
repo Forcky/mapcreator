@@ -60,6 +60,7 @@ from scipy.spatial import Delaunay, cKDTree
 
 from mapcreator.core import centreline as cl
 from mapcreator.core import junctions as jn
+from mapcreator.core import kerbs as kerbs_core
 from mapcreator.core import mesh
 from mapcreator.core import section as sec
 from mapcreator.core import textures
@@ -340,7 +341,9 @@ def _candidate(j: dict, m: _Mainline, dem_sample, width_factor: float, scale: di
         half_tan = math.tan(alpha / 2)
         if half_tan < 1e-3:
             return None, "skew"
-        radius = max(min(FLARE_RADIUS_M, FLARE_MAX_M * half_tan) * scale[name], FLARE_MIN_RADIUS_M)
+        # A kerbed town junction's flare follows its kerb return (`core.kerbs`, set by the section stage).
+        radius = max(min(float(j.get("flare_radius_m", FLARE_RADIUS_M)), FLARE_MAX_M * half_tan) * scale[name],
+                     FLARE_MIN_RADIUS_M)
         tangent = radius / half_tan
         if tangent > FLARE_MAX_TANGENT_M:
             return None, "skew"
@@ -1047,6 +1050,7 @@ class _Leg:
     inner: np.ndarray  # its own cross-section's points inside the throat, and their heights
     inner_h: np.ndarray
     heading: float  # at its first row, for the throat's texture coordinates
+    kerb: np.ndarray | None = None  # its ribbon's kerb weight row by row, where it leaves a kerbed stretch
 
 
 class _NoCluster(Exception):
@@ -1064,9 +1068,12 @@ def _leg(st: dict, rb: mesh.Ribbon, dem_sample, skirt: bool, others: np.ndarray)
     half = np.asarray(r["half_m"], float)
     sel = ribbon_rows
     cap_l, cap_r = side_caps(xy[sel], cl.normals(heading[sel]), others, REACH_M)
+    # A stub leaving a kerbed stretch (`core.kerbs`): its kerb runs on up its edges past the returns, then tapers off.
+    kerb = kerbs_core.stub_weights(ribbon_rows - ribbon_rows[0], True) if st.get("kerb") else None
+    path = kerbs_core.stub_ribbon(kerb) if kerb is not None else None
     sb = mesh.build_ribbon(xy[sel], z[sel], heading[sel], curv[sel], half[sel], half[sel],
                            (z[sel] - zl[sel]) / half[sel], (z[sel] - zr[sel]) / half[sel], dem_sample,
-                           skirt_cap_l=cap_l, skirt_cap_r=cap_r)
+                           skirt_cap_l=cap_l, skirt_cap_r=cap_r, path_l=path, path_r=path)
     material = st["style"]
     tile = textures.GRAVEL_TILE_M if st["surface"] == sec.UNSEALED else textures.ROAD_TILE_M
 
@@ -1077,10 +1084,17 @@ def _leg(st: dict, rb: mesh.Ribbon, dem_sample, skirt: bool, others: np.ndarray)
     uv = np.column_stack([np.tile(np.linspace(0, 1, nc), nr), np.repeat(ribbon_rows / tile, nc)])
     pieces = [(np.column_stack([e.ravel(), n.ravel(), h.ravel()]), uv, mesh._grid_triangles(nr, nc))]
     left, right = (sb.left_cols, sb.right_cols) if skirt else mesh._verge_strips(sb)
-    for cols in (left, right):
+    kerbed = None if kerb is None else (kerb[:-1] > 0) | (kerb[1:] > 0)
+    for side_, cols in (("L", left), ("R", right)):
         e, n, h = sb.e[:, cols], sb.n[:, cols], sb.h[:, cols]
         nr, nc = e.shape
-        pieces.append((np.column_stack([e.ravel(), n.ravel(), h.ravel()]), None, mesh._grid_triangles(nr, nc)))
+        tri = mesh._grid_triangles(nr, nc)
+        if kerbed is not None and kerbed.any():  # the kerb (`kerb_pieces`) in place of the verge there
+            gone = np.zeros((nr - 1, nc - 1), bool)
+            gone[:, nc - 2 if side_ == "L" else 0] = kerbed
+            keep = ~gone.ravel()
+            tri = tri[np.concatenate([keep, keep])]
+        pieces.append((np.column_stack([e.ravel(), n.ravel(), h.ravel()]), None, tri))
 
     # The throat: the mainline's edge vertices, the flares, the ribbon's first row, and the stub's own
     # cross-section inside it.
@@ -1120,7 +1134,7 @@ def _leg(st: dict, rb: mesh.Ribbon, dem_sample, skirt: bool, others: np.ndarray)
                 edge = zl[kk] if t > 0 else zr[kk]
                 inner_h.append(z[kk] + (edge - z[kk]) * abs(t))
     return _Leg(st, side, a, b, sb, material, tile, int(st["station_m"] // WINDOW_M), pieces, flares, across, ring,
-                ring_h, np.array(inner).reshape(-1, 2), np.asarray(inner_h, float), float(heading[first]))
+                ring_h, np.array(inner).reshape(-1, 2), np.asarray(inner_h, float), float(heading[first]), kerb)
 
 
 def _throat_uv(pts: np.ndarray, leg: _Leg) -> np.ndarray:
@@ -1135,9 +1149,12 @@ def _throat_uv(pts: np.ndarray, leg: _Leg) -> np.ndarray:
     return np.column_stack([u0 + (u1 - u0) * _tri_wave(lateral / band), along / leg.tile])
 
 
-def _flare_verge(leg: _Leg, rb: mesh.Ribbon, name: str):
+def _flare_verge(leg: _Leg, rb: mesh.Ribbon, name: str, main_kerb: tuple[float, float] | None = None):
     """A mown verge along a flare, from the mainline's verge to the stub's: (piece, its outline, its outer edge's
-    points and heights)."""
+    points and heights, and None). Where the flare's a kerb return (`main_kerb`: the mainline's kerb weight and paved
+    footpath width at the flare's row, or the stub kerbed), the piece is None and the last item the kerb's columns
+    (`kerbs.columns`) round it, from the mainline's kerb to the stub's: the footpath ends there (Q8), and behind the
+    kerb is grass at the kerb's height."""
     es, row, fxy, fh = leg.flares[name]
     edge_col = rb.road_cols.start if leg.side == "L" else rb.road_cols.stop - 1
     verge_col = edge_col - 1 if leg.side == "L" else edge_col + 1
@@ -1156,12 +1173,26 @@ def _flare_verge(leg: _Leg, rb: mesh.Ribbon, name: str):
     frac /= max(frac[-1], 1e-9)
     outer = fxy + perp * (w0 + (w1 - w0) * frac)[:, None]
     outer_h = fh - mesh.VERGE_M * mesh.VERGE_FALL
+    k_main, paved_main = main_kerb if main_kerb is not None else (0.0, 0.0)
+    k_stub = float(leg.kerb[0]) if leg.kerb is not None else 0.0
+    if k_main > 0 or k_stub > 0:
+        k = k_main + (k_stub - k_main) * frac
+        k[0], k[-1] = k_main, k_stub  # exactly the mainline's and the stub's own, so their vertices are shared
+        w = w0 + (w1 - w0) * frac
+        behind = kerbs_core.RAMP_RISE_M + kerbs_core.PATH_FALL * np.maximum(w - kerbs_core.KC_WIDTH_M, 0.0)
+        outer_h = fh + k * behind - (1 - k) * w * mesh.VERGE_FALL
     outer[0], outer_h[0] = outer_main, rb.h[row, verge_col]
     outer[-1], outer_h[-1] = outer_stub, leg.sb.h[0, col]
+    if k_main > 0 or k_stub > 0:
+        paved = np.zeros(len(fxy))
+        paved[0] = paved_main
+        cols = kerbs_core.columns(np.column_stack([fxy, fh]), np.column_stack([outer, outer_h]), k,
+                                  np.zeros(len(fxy)), paved)
+        return None, np.vstack([fxy, outer[::-1]]), (outer, outer_h), cols
     strip_xy = np.stack([fxy, outer], axis=1)  # (points, 2 columns, 2)
     strip_h = np.stack([fh, outer_h], axis=1)
     piece = (np.column_stack([strip_xy.reshape(-1, 2), strip_h.ravel()]), None, mesh._grid_triangles(len(fxy), 2))
-    return piece, np.vstack([fxy, outer[::-1]]), (outer, outer_h)
+    return piece, np.vstack([fxy, outer[::-1]]), (outer, outer_h), None
 
 
 def _cluster_throat(legs: list[_Leg], rb: mesh.Ribbon):
@@ -1231,7 +1262,7 @@ def _cluster_throat(legs: list[_Leg], rb: mesh.Ribbon):
 
 
 def build(stubs: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, dem_sample, *, skirt: bool,
-          main_xy: np.ndarray, name_tag: str = "") -> Built:
+          main_xy: np.ndarray, name_tag: str = "", kerbs: "kerbs_core.Kerbs | None" = None) -> Built:
     """The stubs' meshes, the mainline's cut and edge break, and the terrain's footprint, from the plan's stubs.
 
     `rb` is the mainline's ribbon (built with `mainline_caps`), `s` its stations, `main_xy` its centreline points.
@@ -1250,6 +1281,7 @@ def build(stubs: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
     roads: dict[tuple[str, int], list] = {}
     grass: dict[int, list] = {}
     ribbons, patches, edges = [], [], []
+    kerb_pieces, returns = kerbs_core.Pieces.empty(), [0]  # the kerb returns and the stubs' own kerbs (`core.kerbs`)
     centres = [_centre(st) for st in stubs]
     vertices, merged = 0, 0
     # A stub's skirt stops short of other stubs' ribbons, and of its cluster's other throats as well: their whole
@@ -1266,6 +1298,13 @@ def build(stubs: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
         groups.setdefault(key, []).append(leg)
 
     def drawn(leg: _Leg) -> None:
+        if leg.kerb is not None:  # its kerb up its edges past the returns (`core.kerbs`)
+            d = np.asarray(_ribbon_rows(leg.st), float)
+            q = (leg.kerb[:-1] > 0) | (leg.kerb[1:] > 0)
+            zero = np.zeros(len(leg.kerb))
+            for sd in "LR":
+                cols = kerbs_core.ribbon_columns(leg.sb, sd, leg.kerb, zero, zero)
+                kerbs_core.add_strip(kerb_pieces, cols, q, d, np.full(len(q), leg.window), np.zeros(len(q), bool))
         cut[leg.side][leg.a:leg.b] = True
         edge_break[leg.side][leg.a + 1:leg.b] = True
         ribbons.append(leg.sb)
@@ -1282,8 +1321,17 @@ def build(stubs: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
         patches.append(ring)
 
     def verge(leg: _Leg, name: str) -> None:
-        piece, patch, edge = _flare_verge(leg, rb, name)
-        grass.setdefault(leg.window, []).append(piece)
+        row = leg.flares[name][1]
+        main_kerb = (float(kerbs.k[leg.side][row]), float(kerbs.paved[leg.side][row])) if kerbs is not None else None
+        piece, patch, edge, cols = _flare_verge(leg, rb, name, main_kerb)
+        if cols is None:
+            grass.setdefault(leg.window, []).append(piece)
+        else:  # a kerb return (`core.kerbs`)
+            fxy = cols.lip[:, :2]
+            along = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(fxy, axis=0).T))])
+            q = np.ones(len(fxy) - 1, bool)
+            kerbs_core.add_strip(kerb_pieces, cols, q, along, np.full(len(q), leg.window), np.zeros(len(q), bool))
+            returns[0] += 1
         patches.append(patch)
         edges.append(edge)
 
@@ -1312,7 +1360,7 @@ def build(stubs: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
         for name in ("upstream", "downstream"):
             verge(leg, name)
 
-    meshes: list[Mesh] = []
+    meshes: list[Mesh] = kerbs_core.meshes(kerb_pieces, frame, tag=f"J{name_tag}")
     letter = {"road": "", "road_plain": "N", "gravel": "", "gravel_narrow": "N"}
     for (material, window), pieces in sorted(roads.items(), key=lambda kv: (kv[0][1], kv[0][0])):
         key = "1GRAVEL" if sec.is_unsealed(sec.STYLES.index(material)) else "1ROAD"
@@ -1328,6 +1376,8 @@ def build(stubs: list[dict], rb: mesh.Ribbon, s: np.ndarray, frame: LocalFrame, 
              "length_m": round(sum(st["length_m"] - st["ribbon_from_m"] for st in stubs), 1)}
     if merged:
         stats["clusters"] = merged
+    if returns[0]:
+        stats["kerb_returns"] = returns[0]
     return Built(meshes, cut, edge_break, mesh.Footprint(cut, ribbons, patches, edges), stats)
 
 

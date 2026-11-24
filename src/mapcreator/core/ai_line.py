@@ -459,8 +459,8 @@ def _exit_clearance(road: RoadModel, traced: "_Traced"):
     road it spans, and the room to keep from each edge of the road for them, per sample of the road:
     EXIT_CLEARANCE_M from the outside edge over each stretch and EXIT_EASE_M either side of it, 0 elsewhere."""
     a = np.interp(traced.arc_p, traced.arc_fine, traced.a_fine)
-    side_left = np.interp(traced.d_p, road.d, road.half_left) - a
-    side_right = np.interp(traced.d_p, road.d, road.half_right) + a
+    side_left = np.interp(traced.d_p, road.d, road.line_left) - a
+    side_right = np.interp(traced.d_p, road.d, road.line_right) + a
     found = []
     clear_left, clear_right = np.zeros(len(road.d)), np.zeros(len(road.d))
     for x in exit_stretches(traced.arc_p, radius_of(traced.curv_p), np.sign(traced.curv_p), traced.grade_p,
@@ -545,8 +545,8 @@ def _racing(road: RoadModel, centre: CubicSpline, first: float, last: float) -> 
     stretch is kept on the traced line (`exits`), marked short where the road was too narrow to give the room, for
     a hint there (`exit_hints`)."""
     def solve(margin, start=None, clearance=None):
-        return racing_line.offsets(road.d, road.e, road.n, road.heading, road.curvature, road.half_left,
-                                   road.half_right, hold_until=racing_line.HOLD_START_M,
+        return racing_line.offsets(road.d, road.e, road.n, road.heading, road.curvature, road.line_left,
+                                   road.line_right, hold_until=racing_line.HOLD_START_M,
                                    hold_from=finish_distance(road.length) - racing_line.HOLD_BEFORE_FINISH_M,
                                    margin=margin, start=start, clearance=clearance)
 
@@ -572,8 +572,8 @@ def _racing(road: RoadModel, centre: CubicSpline, first: float, last: float) -> 
         # The stretches are kept as found on the line before the room: on the line with it, there's no early apex.
         traced = _Traced(road, centre, solve(margin, traced.off, clearance), first, last)
         a = np.interp(traced.arc_p, traced.arc_fine, traced.a_fine)
-        room_left = np.interp(traced.d_p, road.d, road.half_left) - a
-        room_right = np.interp(traced.d_p, road.d, road.half_right) + a
+        room_left = np.interp(traced.d_p, road.d, road.line_left) - a
+        room_right = np.interp(traced.d_p, road.d, road.line_right) + a
         traced.exits = []
         for x, d0, d1 in found:
             span = np.flatnonzero((traced.d_p >= d0) & (traced.d_p <= d1))
@@ -625,8 +625,9 @@ def build(road: RoadModel, frame: LocalFrame, step: float = AI_POINT_SPACING_M, 
     extra[:, 1] = np.interp(arc, arc_p, gas_p)
     extra[:, 2] = np.interp(arc, arc_p, brake_p)
     extra[:, 4] = np.interp(arc, arc_p, radius_p)
-    extra[:, 5] = np.interp(d, road.d, road.half_left) - a  # from the line to the left edge
-    extra[:, 6] = np.interp(d, road.d, road.half_right) + a  # and to the right edge
+    # From the line to the left edge and the right: to the kerb face on a kerbed town stretch (`core.kerbs`).
+    extra[:, 5] = np.interp(d, road.d, road.face_left) - a
+    extra[:, 6] = np.interp(d, road.d, road.face_right) + a
     extra[:, 8] = np.sign(np.interp(arc, arc_p, curv_p))
     extra[:, 9:12] = normal
     extra[:, 12] = length_to_next
