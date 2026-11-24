@@ -54,6 +54,9 @@ class Region:
     # back edge on a kerbed town road (`core.kerbs`). Without them, footpaths take the standard widths.
     parcels: Callable[[tuple, Settings], list] | None = None
     parcels_attribution: Attribution | None = None
+    # The councils' own kerb lines for a list of bboxes (`providers.councils.kerb_lines.KerbLines`), or None: they set
+    # where a town road's kerb stands, where they have one (`core.kerbs`). The callable returns None without a mirror.
+    kerb_lines: Callable[[list, Settings], object] | None = None
     # A vegetation map for the corridor (`core.species.VegetationMap`, `SvtmMap` or `NvisMap`), by centreline and
     # reach; the callable may return None (no mirror configured). A map names the sources it used
     # (`attributions`); the region's is credited for one that doesn't.
@@ -115,6 +118,22 @@ def _tas_parcels_attribution() -> Attribution:
     return ATTRIBUTION
 
 
+def _tas_kerb_lines(boxes, settings: Settings):
+    """The councils' kerb lines (Hobart's, Glenorchy's) in the boxes, from the mirror `kerb_lines` names (or, in
+    development, `live` from their servers); None where it's not set."""
+    if not settings.kerb_lines:
+        return None
+    from mapcreator.providers.councils import kerb_lines as kl
+
+    out = kl.KerbLines()
+    for box in boxes:
+        got = (kl.live(box, settings.cache_dir, settings.user_agent) if settings.kerb_lines == "live"
+               else kl.read(settings.kerb_lines, box))
+        out.lines += got.lines
+        out.sources |= got.sources
+    return out
+
+
 def _tas_vegetation(centre_xy, reach_m: float, settings: Settings):
     from mapcreator.core.species import VegetationMap
     from mapcreator.providers.tas_list.tasveg import communities
@@ -167,6 +186,7 @@ TASMANIA = Region(
     power_attribution=_tas_power_attribution(),
     parcels=_tas_parcels,
     parcels_attribution=_tas_parcels_attribution(),
+    kerb_lines=_tas_kerb_lines,
     vegetation=_tas_vegetation,
     vegetation_attribution=_tas_vegetation_attribution(),
     grass=_tas_grass,

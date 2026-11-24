@@ -1,8 +1,9 @@
 """Kerbs and footpaths on town roads, phase 1: from rules, OSM's `sidewalk` tags and the land parcels beside the road.
 
 The kerbs and footpaths research (24 Nov 2026; every question answered "as proposed") measured Hobart's and Glenorchy's
-town roads against the councils' own kerb lines. This module draws what it proposed for phase 1; the councils' kerb
-lines (phase 2) and parking bays, parking signs along the kerb and pram ramps (phase 3) are later.
+town roads against the councils' own kerb lines. This module draws what it proposed for phase 1, and takes phase 2's
+data where it's mirrored: the councils' kerb lines (`council_sides`) set where a kerb stands. Phase 2's street trees,
+and parking bays, parking signs along the kerb and pram ramps (phase 3), are later.
 
 **A kerb is its own feature.** The road's centreline, profile, tags and routing stay OpenStreetMap's alone; a kerb and
 its footpath are drawn beside the road, like the buildings, and only set where the road's edge is drawn. Nothing here
@@ -114,6 +115,12 @@ RAMP_BLOCK_M = 100.0  # either side of where a slip ramp leaves the route (its t
 NEVER_CLASSES = frozenset({"motorway", "motorway_link"})
 FAST_TRUNK_KMH = 80.0
 # -- width ----------------------------------------------------------------------------------------------------------
+# -- the councils' own kerb lines (`providers.councils.kerb_lines`) -----------------------------------------------
+COUNCIL_NEAR_M = 2.5  # a kerb line nearer the centreline than this is an island's or a median's, not the edge's
+COUNCIL_REACH_M = 15.0  # and further than this, another road's
+COUNCIL_PARALLEL_DEG = 45.0
+COUNCIL_MIN_HALF_M = 2.0
+COUNCIL_EASE_M = 6.0  # a council's kerb follows the street's own changes of width (build-outs), smoothed this much
 LOCAL_KERB_TO_KERB_M = 8.9  # LGAT TSD-R06-v3 Table 1, a local through road
 PARKING_LANE_M = 2.3  # estimate
 CBD_KERB_TO_KERB_M = 12.5  # the CBD's measured median
@@ -334,7 +341,9 @@ def first_hits(origin: np.ndarray, direction: np.ndarray, geoms: list, start: fl
     if not len(origin) or not geoms:
         return out
     rays = shapely.linestrings(np.stack([origin + direction * start, origin + direction * reach], axis=1))
-    edges = shapely.boundary(np.asarray(geoms, dtype=object))
+    geoms = np.asarray(geoms, dtype=object)
+    polygonal = np.isin(shapely.get_type_id(geoms), (3, 6))  # a polygon's edge is its boundary; a line is its own
+    edges = np.where(polygonal, shapely.boundary(geoms), geoms)
     tree = shapely.STRtree(edges)
     ri, gi = tree.query(rays, predicate="intersects")
     if not len(ri):
@@ -380,6 +389,7 @@ class Plan:
     half: dict  # side -> the road's half width to the channel's lip, as drawn (the section's, widened)
     cbd: np.ndarray  # CBD-dense stations
     summary: dict
+    council: set = field(default_factory=set)  # the councils whose kerb lines were used (`providers.councils`)
 
     def any(self) -> bool:
         return bool(self.kerb["L"].any() or self.kerb["R"].any())
@@ -394,14 +404,17 @@ def none_plan(half_l: np.ndarray, half_r: np.ndarray, summary: dict | None = Non
 
 
 def plan(s, xy, heading, run, run_tags: list[dict], half_l, half_r, *, unsealed=None, blocked=None,
-         centroids=(), buildings=(), parcels=None, reversed_runs=None) -> Plan:
+         centroids=(), buildings=(), parcels=None, reversed_runs=None, council=None) -> Plan:
     """Kerbs and footpaths along the route (module notes). `run` is each station's OSM run, `run_tags` each run's
     tags and `reversed_runs` whether the route drives each against its drawn direction (for its sides). `half_l`,
     `half_r`: the road's half widths as they'd be without kerbs (the section's, eased, with the job's width option).
     `unsealed`: unsealed stations; `blocked`: stations never kerbed (bridges, tunnels, roundabouts, slip ramps: widened
     here by BLOCK_MARGIN_M). `centroids`: building footprints' centroids; `buildings` their polygons (a footpath stops
     at one standing over the reserve's edge); `parcels` the land parcels beside the road reserve, or None (footpaths
-    then take PATH_CBD_M or PATH_DEFAULT_M)."""
+    then take PATH_CBD_M or PATH_DEFAULT_M). `council`: a callable giving the councils' kerb lines for a list of boxes
+    (`providers.councils.kerb_lines.KerbLines`, or None where there are none to be had): where it has a kerb beside a
+    station, the station is kerbed and the kerb stands there; where it marks an edge unkerbed, that side isn't;
+    elsewhere the rule decides (`council_sides`)."""
     s, xy, heading = np.asarray(s, float), np.asarray(xy, float), np.asarray(heading, float)
     run = np.asarray(run, int)
     n = len(s)
@@ -417,9 +430,15 @@ def plan(s, xy, heading, run, run_tags: list[dict], half_l, half_r, *, unsealed=
         hard |= _dilate(np.asarray(blocked, bool), s, BLOCK_MARGIN_M)
     count = building_counts(xy, s, np.asarray(centroids, float).reshape(-1, 2))
     town = speed_ok & ~hard & (count >= TOWN_BUILDINGS)
+    rule_m = round(float(town.sum() * step), 1)
+    # The councils' own kerb lines, where there are any (phase 2's data): they say, and the rule fills in.
+    faces, bare, council_sources = _council(s, xy, heading, speed_ok & ~hard, council)
+    said = np.isfinite(faces["L"]) | np.isfinite(faces["R"])
+    unkerbed = bare["L"] & bare["R"]
+    town = (town & ~unkerbed) | said
     kerbed = stretches(town, s, hard=hard)
     if not kerbed.any():
-        return none_plan(half_l, half_r, {"kerbed_m": 0.0, "rule_m": round(float(town.sum() * step), 1)})
+        return none_plan(half_l, half_r, {"kerbed_m": 0.0, "rule_m": rule_m})
     if callable(parcels):  # fetched only now, for the kerbed stretches alone (None if they can't be had)
         parcels = parcels(stretch_boxes(xy, kerbed))
     # The reserve's edge and the first building wall out from the centreline, each side, every PATH_SAMPLE_M.
@@ -437,7 +456,8 @@ def plan(s, xy, heading, run, run_tags: list[dict], half_l, half_r, *, unsealed=
             wall = first_hits(xy[idx], sign * nrm[idx], list(buildings))
         rays[side] = (bound, wall)
     cbd = cbd_dense(s, idx, rays, kerbed)
-    k = ramp_in(kerbed, s, KERB_TAPER_M)
+    # A side the council marks unkerbed (an Edge of Formation, no kerb) gets none.
+    k = {side: ramp_in(kerbed & ~bare[side], s, KERB_TAPER_M) for side in "LR"}
     ease = ramp_in(kerbed, s, WIDTH_EASE_M)
     # Kerb to kerb, per run, plain and CBD-dense, then per station.
     today = half_l + half_r
@@ -453,10 +473,16 @@ def plan(s, xy, heading, run, run_tags: list[dict], half_l, half_r, *, unsealed=
     share_l = np.where(today > 0, half_l / np.maximum(today, 1e-9), 0.5)
     target_l = np.maximum(share_l * kk - CHANNEL_M, half_l)
     target_r = np.maximum((1 - share_l) * kk - CHANNEL_M, half_r)
+    # Where the council has the kerb, the road reaches its channel's lip, each side its own (Q6: the kerb sets where the
+    # road's edge is drawn; the centreline stays OSM's), never under COUNCIL_MIN_HALF_M.
+    target_l = np.where(np.isfinite(faces["L"]), np.maximum(faces["L"] - CHANNEL_M, COUNCIL_MIN_HALF_M), target_l)
+    target_r = np.where(np.isfinite(faces["R"]), np.maximum(faces["R"] - CHANNEL_M, COUNCIL_MIN_HALF_M), target_r)
     # A change of width within a stretch (from one OSM way to the next) eased over WIDTH_EASE_M too, as the road's own
     # changes are (`section.eased`), so the kerb never steps; never narrower than the road was.
-    target_l = np.maximum(sec.eased(s, target_l, WIDTH_EASE_M), half_l)
-    target_r = np.maximum(sec.eased(s, target_r, WIDTH_EASE_M), half_r)
+    floor_l = np.where(np.isfinite(faces["L"]), 0.0, half_l)  # a council's kerb may stand inside the road as mapped
+    floor_r = np.where(np.isfinite(faces["R"]), 0.0, half_r)
+    target_l = np.maximum(sec.eased(s, target_l, COUNCIL_EASE_M if council_sources else WIDTH_EASE_M), floor_l)
+    target_r = np.maximum(sec.eased(s, target_r, COUNCIL_EASE_M if council_sources else WIDTH_EASE_M), floor_r)
     new_l = half_l + (target_l - half_l) * ease
     new_r = half_r + (target_r - half_r) * ease
 
@@ -506,7 +532,82 @@ def plan(s, xy, heading, run, run_tags: list[dict], half_l, half_r, *, unsealed=
         "no_footpath_m": {side: round(float((kerbed & ~has[side]).sum() * step), 1) for side in "LR"},
         "concrete_m": {side: round(float((concrete[side] & (paved[side] > 0)).sum() * step), 1) for side in "LR"},
     }
-    return Plan({"L": k, "R": k.copy()}, path, paved, concrete, {"L": new_l, "R": new_r}, cbd, summary)
+    if council_sources:
+        summary["council"] = sorted(council_sources)
+        summary["council_m"] = {side: round(float((kerbed & np.isfinite(faces[side])).sum() * step), 1)
+                                for side in "LR"}
+        summary["council_bare_m"] = {side: round(float((kerbed & bare[side]).sum() * step), 1) for side in "LR"}
+    return Plan(k, path, paved, concrete, {"L": new_l, "R": new_r}, cbd, summary, council_sources)
+
+
+def _council(s, xy, heading, candidates: np.ndarray, council) -> tuple[dict, dict, set]:
+    """The councils' kerb faces (distance from the centreline, NaN where none) and unkerbed edges per side and station,
+    settled over PATH_WINDOW samples as the footpaths are, along `candidates` (the stations a kerb may stand on); and
+    the councils they came from. Nothing (all NaN, none bare) without council lines."""
+    n = len(s)
+    faces = {side: np.full(n, np.nan) for side in "LR"}
+    bare = {side: np.zeros(n, bool) for side in "LR"}
+    if council is None or not candidates.any():
+        return faces, bare, set()
+    got = council(stretch_boxes(xy, candidates))
+    if got is None or not got.lines:
+        return faces, bare, set()
+    step = float(s[1] - s[0]) if n > 1 else 1.0
+    every = max(int(round(PATH_SAMPLE_M / step)), 1)
+    idx = np.flatnonzero(candidates)[::every]
+    sides = council_sides(xy, heading, idx, got.kind("kerb"), got.kind("edge"))
+    for side, (face, edge) in sides.items():
+        settled, ok = _settled(face, np.isfinite(face))
+        sample = np.where(ok, settled, np.nan)
+        bare_share = uniform_filter1d(edge.astype(float), PATH_WINDOW, mode="nearest")
+        near = np.clip(np.round(np.interp(np.arange(n), idx, np.arange(len(idx)))).astype(int), 0, len(idx) - 1)
+        within = np.abs(idx[near] - np.arange(n)) <= every  # held only between samples, not past a candidate's end
+        faces[side] = np.where(candidates & within, sample[near], np.nan)
+        bare[side] = candidates & within & (bare_share[near] >= 0.5) & ~np.isfinite(faces[side])
+    return faces, bare, set(got.sources)
+
+
+def council_sides(xy: np.ndarray, heading: np.ndarray, idx: np.ndarray, kerb_lines: list,
+                  edge_lines: list) -> dict:
+    """Per side ("L", "R"), at stations `idx`: the distance from the centreline to a council's kerb face (the first
+    Top of Kerb line out, from COUNCIL_NEAR_M to COUNCIL_REACH_M, running within COUNCIL_PARALLEL_DEG of the road: a
+    kerb across it is a crossing's or an island's end, not its edge), NaN where none; and whether the council marks
+    that edge unkerbed instead (an Edge of Formation line found, nearer than any kerb)."""
+    xy, heading = np.asarray(xy, float), np.asarray(heading, float)
+    idx = np.asarray(idx, int)
+    nrm = np.column_stack([-np.sin(heading), np.cos(heading)])
+    out = {}
+    for side, sign in (("L", 1.0), ("R", -1.0)):
+        face = _parallel_hits(xy[idx], sign * nrm[idx], heading[idx], kerb_lines)
+        edge = _parallel_hits(xy[idx], sign * nrm[idx], heading[idx], edge_lines)
+        out[side] = (face, np.isfinite(edge) & ~(face < edge))
+    return out
+
+
+def _parallel_hits(origin: np.ndarray, direction: np.ndarray, heading: np.ndarray, lines: list) -> np.ndarray:
+    """`first_hits` on lines, counting only a line running within COUNCIL_PARALLEL_DEG of the road where it's hit."""
+    out = np.full(len(origin), np.nan)
+    if not len(origin) or not lines:
+        return out
+    lines = np.asarray(lines, dtype=object)
+    rays = shapely.linestrings(np.stack([origin + direction * COUNCIL_NEAR_M, origin + direction * COUNCIL_REACH_M],
+                                        axis=1))
+    ri, gi = shapely.STRtree(lines).query(rays, predicate="intersects")
+    if not len(ri):
+        return out
+    pts, which = shapely.get_coordinates(shapely.intersection(rays[ri], lines[gi]), return_index=True)
+    if not len(pts):
+        return out
+    ray, line = ri[which], lines[gi[which]]
+    at = shapely.line_locate_point(line, shapely.points(pts))
+    a = shapely.get_coordinates(shapely.line_interpolate_point(line, np.maximum(at - 0.5, 0.0)))
+    b = shapely.get_coordinates(shapely.line_interpolate_point(line, at + 0.5))
+    d = b - a
+    along = np.abs(d[:, 0] * np.cos(heading[ray]) + d[:, 1] * np.sin(heading[ray])) / np.maximum(np.hypot(*d.T), 1e-9)
+    keep = along >= np.cos(np.radians(COUNCIL_PARALLEL_DEG))
+    dist = np.hypot(*(pts[:, :2] - origin[ray]).T)
+    np.fmin.at(out, ray[keep], dist[keep])
+    return out
 
 
 def stretch_boxes(xy: np.ndarray, mask: np.ndarray, chunk_m: float = 600.0,
