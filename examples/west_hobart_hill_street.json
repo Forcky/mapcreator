@@ -1,0 +1,14 @@
+{
+  "track_id": "west_hobart_hill_street",
+  "waypoints": [
+    {
+      "lon": 147.3095,
+      "lat": -42.8776
+    },
+    {
+      "lon": 147.3162,
+      "lat": -42.8852
+    }
+  ],
+  "layouts": "forward"
+}

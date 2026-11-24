@@ -20,6 +20,7 @@ from mapcreator.core import junctions as junctions_core
 from mapcreator.core import rail_and_paths
 from mapcreator.core import ramps as ramps_core
 from mapcreator.core import signals as signals_core
+from mapcreator.core import signs as signs_core
 from mapcreator.core.centreline import cumulative
 from mapcreator.job import Job, Junctions
 from mapcreator.pipeline.workdir import WorkDir
@@ -47,6 +48,9 @@ DRIVEWAYS = "driveways.json"
 # The traffic signal sites along the route, from OSM's tagged road nodes (`core.signals`; the format is in
 # docs/ac-format.md).
 SIGNALS = "signals.json"
+# The regulatory signs (GIVE WAY and STOP where OSM tags them, ONE WAY and NO ENTRY from `oneway`, pedestrian crossing
+# signs) and zebra crossings along the route (`core.signs`; the format is in docs/ac-format.md).
+SIGNS = "signs.json"
 
 
 class RouteTooLong(osm_graph.RouteError):
@@ -378,45 +382,67 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
                                        **found_ramps})
         summary |= {"ramps": len(found_ramps["ramps"])}
         summary |= _write_driveways(data, route, region, settings, work)
-        summary |= _write_signals(data, g, route, region, settings, work, _bbox(job, 0.02))
+        road_nodes = _road_nodes(data, region, settings, _bbox(job, 0.02))
+        summary |= _write_signals(road_nodes, g, route, region, work)
+        summary |= _write_signs(road_nodes, g, route, region, work, found["junctions"])
     else:
         (work.stage(STAGE) / JUNCTIONS).unlink(missing_ok=True)  # built without them, as before they were found
         (work.stage(STAGE) / RAMPS).unlink(missing_ok=True)
         (work.stage(STAGE) / DRIVEWAYS).unlink(missing_ok=True)
         (work.stage(STAGE) / SIGNALS).unlink(missing_ok=True)
+        (work.stage(STAGE) / SIGNS).unlink(missing_ok=True)
     return summary
 
 
-def _write_signals(data: dict, g: osm_graph.RoadGraph, route: osm_graph.Route, region, settings: Settings, work: WorkDir,
-                   bbox: tuple[float, float, float, float]) -> dict:
-    """Write signals.json (`core.signals.find`): the traffic signal sites along the route, from the tagged nodes on
-    the roads in the same box the roads came from (the OSM index's `road_nodes`, or the roads query's own nodes from
-    Overpass, narrowed from the roads answer already in hand, `data`). Without them (an OSM index built before they were kept, or Overpass not answering) the file lists none
-    and says why, and the build goes on without signals."""
-    head = {"version": signals_core.FORMAT_VERSION, "crs": f"EPSG:{region.epsg}"}
+def _road_nodes(data: dict, region, settings: Settings,
+                bbox: tuple[float, float, float, float]) -> tuple[list | None, str | None]:
+    """The tagged nodes on the roads in the same box the roads came from (the OSM index's `road_nodes`, or the roads
+    query's own nodes from Overpass, narrowed from the roads answer already in hand, `data`), each `{"id", "xy",
+    "tags"}` in the region's CRS; or None and why not (an OSM index built before they were kept, or Overpass not
+    answering)."""
     try:
         found_nodes = (osm_roads.road_nodes_for_bbox(bbox, settings) if settings.osm_index
                        else osm_index.as_indexed_nodes(data))
     except osm_roads.INDEX_ERRORS:
-        why = "the OSM index was built before traffic signals and other tagged road nodes were kept: rebuild it"
+        return None, "the OSM index was built before traffic signals and other tagged road nodes were kept: rebuild it"
     except httpx.HTTPError:
-        why = "the Overpass server didn't answer"
-    else:
-        why = None
+        return None, "the Overpass server didn't answer"
+    elements = found_nodes["elements"]
+    to_xy = region.to_xy()
+    x, y = to_xy.transform([e["lon"] for e in elements], [e["lat"] for e in elements]) if elements else ([], [])
+    return [{"id": e["id"], "xy": (float(a), float(b)), "tags": e.get("tags") or {}}
+            for e, a, b in zip(elements, x, y)], None
+
+
+def _write_signals(road_nodes: tuple[list | None, str | None], g: osm_graph.RoadGraph, route: osm_graph.Route, region,
+                   work: WorkDir) -> dict:
+    """Write signals.json (`core.signals.find`): the traffic signal sites along the route, from the tagged road nodes
+    (`_road_nodes`). Without them the file lists none and says why, and the build goes on without signals."""
+    head = {"version": signals_core.FORMAT_VERSION, "crs": f"EPSG:{region.epsg}"}
+    nodes, why = road_nodes
     if why is not None:
         log.warning("no traffic signals: %s", why)
         work.write_json(STAGE, SIGNALS, {**head, "unavailable": why, "sites": [], "skipped": []})
         return {"signals": {"unavailable": why}}
-    elements = found_nodes["elements"]
-    to_xy = region.to_xy()
-    x, y = to_xy.transform([e["lon"] for e in elements], [e["lat"] for e in elements]) if elements else ([], [])
-    nodes = [{"id": e["id"], "xy": (float(a), float(b)), "tags": e.get("tags") or {}}
-             for e, a, b in zip(elements, x, y)]
     found = signals_core.find(g, route.xy, nodes, to_lonlat=region.to_lonlat())
     work.write_json(STAGE, SIGNALS, {**head, "version": found.pop("version"), **found})
     kinds = [st["kind"] for st in found["sites"]]
     return {"signals": {"junction": kinds.count("junction"), "mid_block": kinds.count("mid_block"),
                         "skipped": len(found["skipped"])}}
+
+
+def _write_signs(road_nodes: tuple[list | None, str | None], g: osm_graph.RoadGraph, route: osm_graph.Route, region,
+                 work: WorkDir, junctions: list[dict]) -> dict:
+    """Write signs.json (`core.signs.find`): the regulatory signs and zebra crossings along the route. ONE WAY and NO
+    ENTRY come from the roads' `oneway`, so they're found without the tagged road nodes too; GIVE WAY, STOP and the
+    crossings need them, and without them the file says why."""
+    nodes, why = road_nodes
+    found = signs_core.find(g, route.xy, nodes or [], junctions, to_lonlat=region.to_lonlat())
+    head = {"version": found.pop("version"), "crs": f"EPSG:{region.epsg}"}
+    work.write_json(STAGE, SIGNS, {**head, **({"unavailable": why} if why is not None else {}), **found})
+    kinds = [s["kind"] for s in found["signs"]]
+    return {"signs": {k: kinds.count(k) for k in sorted(set(kinds))} | {"zebras": len(found["zebras"]),
+                                                                       "skipped": len(found["skipped"])}}
 
 
 def _write_driveways(data: dict, route: osm_graph.Route, region, settings: Settings, work: WorkDir) -> dict:
@@ -592,6 +618,15 @@ def signals(work: WorkDir, job: Job) -> list[dict]:
     if job.junctions != Junctions.CLOSED or not path.exists():
         return []
     return work.read_json(STAGE, SIGNALS)["sites"]
+
+
+def signs(work: WorkDir, job: Job) -> dict:
+    """The regulatory signs and zebra crossings along the route (`core.signs.find`), as signs.json has them: none for
+    a job built without junctions, or a route stage run before signs were found."""
+    path = work.root / STAGE / SIGNS
+    if job.junctions != Junctions.CLOSED or not path.exists():
+        return {"signs": [], "zebras": []}
+    return work.read_json(STAGE, SIGNS)
 
 
 def ramps(work: WorkDir, job: Job) -> list[dict]:

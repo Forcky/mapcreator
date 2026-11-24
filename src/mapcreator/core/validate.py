@@ -44,7 +44,8 @@ GRID_CLEARANCE_M = 3.5  # grid spots closer than this would put two cars in one 
 TRUNK_SPAWN_CLEARANCE_M = 3.0  # a tree or pole collider nearer a spawn than this could be inside or touching the car
 SCENERY_COLLIDERS = (("tree", TRUNK_MESH), ("power", POWER_COLLIDER),  # invisible walls the scenery stage adds
                      ("pier", PIER_MESH), ("abutment", ABUTMENT_MESH),  # and a bridge over the route's (mesh stage)
-                     ("signal and blade post", "1WALL_SIGNAL_"))  # and the traffic signals' (`core.signals`)
+                     ("signal and blade post", "1WALL_SIGNAL_"),  # and the traffic signals' (`core.signals`)
+                     ("regulatory sign post", "1WALL_SIGN_"))  # and the regulatory signs' (`core.signs`)
 # Structures over the route, visual only (`core.rail_and_paths`): their decks clear the road under them by this.
 OVERHEAD_DECKS = ("FOOTBRIDGE_", "RAILBRIDGE_")
 OVERHEAD_CLEARANCE_M = 4.6
@@ -127,7 +128,10 @@ JUNCTION_CLEAR = (("guard rails", ("RAIL_", "1WALL_RAIL_"), "mouth"),
                   ("power colliders", (POWER_COLLIDER,), "road"),
                   # The traffic signals' and blades' posts stand at the corners, clear of the mouths; their lanterns
                   # and mast arms reach over the road, as the real ones do, so only the posts' colliders are checked.
-                  ("signal and blade post colliders", ("1WALL_SIGNAL_",), "mouth"))
+                  ("signal and blade post colliders", ("1WALL_SIGNAL_",), "mouth"),
+                  # The regulatory signs' posts: on the verge clear of the mouths, or beside a side road outside its
+                  # carriageway and stub (`core.signs`).
+                  ("regulatory sign post colliders", ("1WALL_SIGN_",), "mouth"))
 
 
 # The closures on the stubs (`core.stub_closures`): their visual meshes, and their colliders, which are solid (WALL).

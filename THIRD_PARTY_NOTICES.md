@@ -21,7 +21,7 @@ To update: download the same three files for the new version, delete the `source
 ### Overpass font (SemiBold), release 3.0.5
 
 - Where: `src/mapcreator/core/fonts/Overpass-SemiBold.ttf`, with its licence `OFL.txt` beside it (`core/lettering.py` loads it)
-- Used for: the lettering of the street-name blades (`core/signals.py`) and the speed signs' numerals (`core/furniture.py`), drawn into their textures. A built track carries the rendered letters, never the font file.
+- Used for: the lettering of the street-name blades (`core/signals.py`), the regulatory signs (`core/signs.py`) and the speed signs' numerals (`core/furniture.py`), drawn into their textures. A built track carries the rendered letters, never the font file.
 - Source: https://github.com/RedHatOfficial/Overpass, `fonts/ttf/Overpass-SemiBold.ttf` and `OFL.txt` at commit `c580d28bfab7f39013568e684a65eeb23eff588d`
 - Copyright 2021 The Overpass Project Authors (https://github.com/RedHatOfficial/Overpass)
 - Licence: SIL Open Font License 1.1, full text in `OFL.txt` beside the font. The OFL allows bundling and redistributing the font with software, unmodified, with its copyright notice and licence; the font declares no Reserved Font Name. Stored byte for byte (`.gitattributes`); nothing was changed.
@@ -54,6 +54,11 @@ The KN5, `fast_lane.ai`, Tree FX and track-folder writers in `src/mapcreator/cor
 - Where: `src/mapcreator/core/signals.py` (see `docs/ac-format.md`, "Traffic signals and street-name blades")
 - What: the signal posts, lanterns, target boards, mast arms, pedestrian lanterns, push buttons and street-name blades are drawn by our own code from written descriptions: sizes, colours, heights and placement rules from Tasmania's Department of State Growth Specification 730 and standard drawings SD-101-xxx, Austroads' Guide to Traffic Management Part 10, and the ACT's Municipal Infrastructure Standards 12 (blades). The pedestrian figures and the button's arrow are our own simple drawings. Nothing is traced or copied from AS 1742, AS 2144, AS 2353 or any drawing or image; no Google imagery was viewed.
 - The flashing amber follows the pattern of CSP's own track configs, `config/tracks/leipzig_stadtpark.ini` and `config/tracks/pudsey.ini` in https://github.com/ac-custom-shaders-patch/acc-extension-config (commit `68ecff9`): a condition with `FLASHING_*` keys and a `ksEmissive` material adjustment. The keys are CSP's documented configuration; no file's text is copied.
+
+### Regulatory signs and zebra crossings
+
+- Where: `src/mapcreator/core/signs.py` (see `docs/ac-format.md`, "Regulatory signs and zebra crossings")
+- What: the STOP, GIVE WAY, ONE WAY, NO ENTRY and pedestrian crossing faces are drawn by our own code from plain written descriptions of their shapes, colours and words, at estimated sizes, in Overpass; the walking figure is our own (the signals' pedestrian figure). Nothing is traced or copied from AS 1742, Wikimedia Commons or any drawing or image; no Google imagery was viewed. The zebra's stripes are plain white bars at estimated sizes.
 
 ### Police car liveries and crests
 
