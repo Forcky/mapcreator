@@ -33,6 +33,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from mapcreator.core import kerbs
 from mapcreator.core.scene import Dummy, LocalFrame
 
 GATE_FROM_END_M = 50.0  # the start gate, from the layout's start; also the shortest run-off
@@ -100,15 +101,42 @@ class RoadModel:
     slope_right: np.ndarray
     curvature: np.ndarray  # + = turning left in the direction of travel
     grade: np.ndarray  # dz/dd in the direction of travel
+    # A kerb's weight (0..1) each side, on a kerbed town stretch (`core.kerbs`); None for none.
+    kerb_left: np.ndarray | None = None
+    kerb_right: np.ndarray | None = None
 
     @classmethod
     def from_arrays(cls, s, xy, z, heading, curvature, grade, half_l, half_r, slope_l, slope_r,
-                    reverse: bool) -> "RoadModel":
+                    reverse: bool, kerb_l=None, kerb_r=None) -> "RoadModel":
         if not reverse:
-            return cls(s - s[0], xy[:, 0], xy[:, 1], z, heading, half_l, half_r, slope_l, slope_r, curvature, grade)
+            return cls(s - s[0], xy[:, 0], xy[:, 1], z, heading, half_l, half_r, slope_l, slope_r, curvature, grade,
+                       kerb_l, kerb_r)
         r = slice(None, None, -1)
         return cls(s[-1] - s[r], xy[r, 0], xy[r, 1], z[r], heading[r] + np.pi, half_r[r], half_l[r],
-                   slope_r[r], slope_l[r], -curvature[r], -grade[r])
+                   slope_r[r], slope_l[r], -curvature[r], -grade[r],
+                   kerb_r[r] if kerb_r is not None else None, kerb_l[r] if kerb_l is not None else None)
+
+    def _kerb(self, side: str) -> np.ndarray:
+        k = self.kerb_left if side == "L" else self.kerb_right
+        return np.zeros(len(self.d)) if k is None else np.asarray(k, float)
+
+    @property
+    def face_left(self) -> np.ndarray:
+        """From the centreline to the left edge the AI is told of: the kerb face where kerbed, else the road's edge."""
+        return self.half_left + kerbs.CHANNEL_M * self._kerb("L")
+
+    @property
+    def face_right(self) -> np.ndarray:
+        return self.half_right + kerbs.CHANNEL_M * self._kerb("R")
+
+    @property
+    def line_left(self) -> np.ndarray:
+        """The left edge the racing line keeps its margin from: the kerb face, less AI_EXTRA_M, where kerbed (Q11)."""
+        return self.half_left + (kerbs.CHANNEL_M - kerbs.AI_EXTRA_M) * self._kerb("L")
+
+    @property
+    def line_right(self) -> np.ndarray:
+        return self.half_right + (kerbs.CHANNEL_M - kerbs.AI_EXTRA_M) * self._kerb("R")
 
     @property
     def length(self) -> float:

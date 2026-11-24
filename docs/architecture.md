@@ -16,7 +16,8 @@ profile   02_profile   DEM sampling, smoothing with a grade-change limit and gra
                        coarse) found and warned about (dem_age.json)
 section   03_section   sealed or unsealed (OSM surface, short runs merged), width (OSM width → lanes × lane width →
                        narrow → class default, narrower on gravel; +15% / +30%), camber from the DEM (limited by
-                       width; crown only on bridges and tunnels), crown; the roundabouts the route drives (roundabouts.json), then the side roads'
+                       width; crown only on bridges and tunnels), crown; kerbs and footpaths on town stretches,
+                       the road kerb to kerb there (kerbs.json; building footprints and cadastral parcels); the roundabouts the route drives (roundabouts.json), then the side roads'
                        stubs (stubs.json), the slip ramps and the shallow forks' gore stubs (ramps.json) and the
                        roads crossing it (crossing_roads.json), planned
 mesh      04_mesh      road chunks (≤ 65,535 vertices each), verges, the side roads' 100 m stubs joined to the road by

@@ -43,6 +43,12 @@ class Junctions(StrEnum):
     NONE = "none"  # left out: the road is built as it was before junctions were found
 
 
+class Kerbs(StrEnum):
+    """Kerbs and footpaths on town roads (`core.kerbs`)."""
+    AUTO = "auto"  # where the town-road rule finds a town: kerbs, footpaths and the road kerb to kerb
+    NONE = "none"  # none anywhere: every road is built as it was before kerbs, for a comparison build
+
+
 class Waypoint(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -77,6 +83,8 @@ class Job(BaseModel):
     allow_tight_bends: bool = False
     # Side-road junctions (`core.junctions`): "none" builds without them, as before, for a comparison build.
     junctions: Junctions = Junctions.CLOSED
+    # Kerbs and footpaths on town roads (`core.kerbs`): "none" builds every road as before them.
+    kerbs: Kerbs = Kerbs.AUTO
 
     @field_validator("waypoints")
     @classmethod

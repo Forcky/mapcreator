@@ -19,7 +19,8 @@
 **What's drawn** (`build`, the mesh stage), after Tasmania's Specification 730 and standard drawings, adapted from
 VicRoads, and Austroads' AGTM Part 10 (the research's 4a):
 - **Corner posts:** "2T" posts, 114 mm galvanised tubes 3.5 m tall, `POST_OFFSET_M` beyond the road's edge on the
-  verge (Spec 730: at least 0.5 m behind the kerb; there is no kerb yet). A junction has a post at each of its four
+  verge (Spec 730: at least 0.5 m behind the kerb), or on a kerbed town stretch on the footpath, `kerbs.POST_BEHIND_M`
+  behind the kerb face (`_Road.place`, `core.kerbs`). A junction has a post at each of its four
   corners: on each side of the route, just before and just after the side roads' mouths (`core.junctions.mouths`). A T
   junction's far side has its two posts opposite the side road's mouth. Every post keeps out of side roads', ramps',
   roundabouts' and driveways' mouths and off the route's bridges, as the furniture does: one due in one moves away from
@@ -70,6 +71,7 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
+from mapcreator.core import kerbs as kerbs_core
 from mapcreator.core import lettering
 from mapcreator.core.centreline import cumulative
 from mapcreator.core.scene import MAX_VERTICES, Z_SIGN, LocalFrame, Mesh
@@ -801,11 +803,14 @@ class Built:
 class _Road:
     """The centreline's stations and what a post needs from them."""
 
-    def __init__(self, s, xy, z, heading, half_l, half_r, slope_l, slope_r):
+    def __init__(self, s, xy, z, heading, half_l, half_r, slope_l, slope_r, kerbs=None):
         self.s, self.xy, self.z = np.asarray(s, float), np.asarray(xy, float), np.asarray(z, float)
         self.heading = np.asarray(heading, float)
         self.half = {"L": np.asarray(half_l, float), "R": np.asarray(half_r, float)}
         self.slope = {"L": np.asarray(slope_l, float), "R": np.asarray(slope_r, float)}
+        # Kerbed town stretches (`core.kerbs.Kerbs`), or None: there every post stands on the footpath,
+        # `kerbs.POST_BEHIND_M` behind the kerb face, whatever it would stand at on a verge.
+        self.kerbs = kerbs
 
     def index(self, station: float) -> int:
         return int(np.clip(np.searchsorted(self.s, station), 0, len(self.s) - 1))
@@ -817,10 +822,20 @@ class _Road:
         return np.array([-math.sin(self.heading[i]), math.cos(self.heading[i])])
 
     def place(self, i: int, side: str, beyond: float) -> tuple[float, float, float]:
+        """A post's place `beyond` the road's edge on the verge at station i, and the ground's height there; on a
+        kerbed stretch, on the footpath `kerbs.POST_BEHIND_M` behind the kerb face instead (Q10)."""
         sign = 1.0 if side == "L" else -1.0
+        edge_h = self.z[i] - self.slope[side][i] * self.half[side][i]
+        kerbed = self.kerbs.offset(side, i, kerbs_core.POST_BEHIND_M) if self.kerbs is not None else None
+        if kerbed is not None:
+            beyond = kerbed
+            self.kerbs.placed.add((side, int(i)))
+            h = edge_h + self.kerbs.rise(side, i, beyond)
+        else:
+            h = edge_h - beyond * VERGE_FALL
         off = self.half[side][i] + beyond
         e, n = self.xy[i] + self.left(i) * sign * off
-        return float(e), float(n), float(self.z[i] - self.slope[side][i] * self.half[side][i] - beyond * VERGE_FALL)
+        return float(e), float(n), float(h)
 
 
 def corner_stations(station: float, mouths_here: dict, half_default: float) -> dict:

@@ -34,6 +34,7 @@ from mapcreator.config import Settings
 from mapcreator.core import mesh as base_mesh
 from mapcreator.core import junctions, power, reach, scenery, species, sprites, stubs, treefx
 from mapcreator.core import crossing_roads
+from mapcreator.core import kerbs as kerbs_core
 from mapcreator.core import ramps as ramps_core
 from mapcreator.core import roundabouts as rb_core
 from mapcreator.core.scene import Material, Scene
@@ -64,6 +65,13 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     centre = shapely.LineString(xy)
     half = float(max(sec["half_left"].max(), sec["half_right"].max()))
     road_clear = centre.buffer(half + base_mesh.VERGE_M + scenery.CLEAR_OF_VERGE_M)
+    building_clear = centre.buffer(half + scenery.BUILDING_CLEAR_M)
+    # Kerbed town stretches (`core.kerbs`): trees at the kerb or behind the footpath, buildings off the footpath.
+    kerbed = kerbs_core.Kerbs.from_section(sec)
+    if kerbed is not None:
+        road_clear, building_clear = kerbs_core.clear_zones(xy, c["heading"], sec["half_left"], sec["half_right"],
+                                                            kerbed, base_mesh.VERGE_M + scenery.CLEAR_OF_VERGE_M,
+                                                            scenery.BUILDING_CLEAR_M)
     attributions = []
     # Side roads (`core.junctions`): trees, buildings and power-line supports are kept off each for its first 100 m
     # as they are off the road, and off its stub, flares included (`core.stubs`). They're taken out after everything
@@ -105,7 +113,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
         except Exception as e:  # noqa: BLE001 - any source failure costs the buildings, not the track
             log.warning("building footprints unavailable (%s: %s); building without them", type(e).__name__, e)
             footprints, buildings_note = [], "unavailable"
-        footprints = scenery.select_buildings(footprints, xy, centre.buffer(half + scenery.BUILDING_CLEAR_M),
+        footprints = scenery.select_buildings(footprints, xy, building_clear,
                                               scenery.BUILDING_REACH_M)
         if footprints:
             attributions.append(region.buildings_attribution)

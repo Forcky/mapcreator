@@ -28,15 +28,16 @@ signs we can stand behind".
   road's `oneway`, which the router never does (it follows `oneway`), so that one is a safety net.
 - Side roads leaving under `MIN_ANGLE_DEG` (a divided road's other carriageway, a lane beside it) and links give no
   ONE WAY or NO ENTRY, as they give no blade (`signals.BLADE_MIN_ANGLE_DEG`).
-- Not here: Hobart's kerbside signs (Q9: not yet), turn bans, cycling (phase 3).
+- Not here: Hobart's parking signs along the kerb (Q9: not yet), turn bans, cycling (phase 3).
 
 **Where they stand** (`build`, the mesh stage): real signs where they really stand, on a closed road too. A sign
 on a side road (its GIVE WAY or STOP, its NO ENTRY, a crossing on it) faces the side road's traffic as in reality,
 so from the route you see its back beside the closure; a closure's own signs and props stay as they are.
-- **On the route's verge:** `SIGN_OFFSET_M` beyond the road's edge, on the left of the traffic it's for (ONE WAY: the
-  far side), kept out of side roads', ramps', roundabouts' and driveways' mouths and off bridges as the furniture and
-  the signal posts are; one due in one moves upstream (a crossing's either way) by at most `MAX_SHIFT_M`, or isn't
-  put up.
+- **On the route's verge:** `SIGN_OFFSET_M` beyond the road's edge (on a kerbed town stretch, on the footpath
+  `kerbs.POST_BEHIND_M` behind the kerb face, as the signal posts are: `signals._Road.place`), on the left of the
+  traffic it's for (ONE WAY: the far side), kept out of side roads', ramps', roundabouts' and driveways' mouths and off
+  bridges as the furniture and the signal posts are; one due in one moves upstream (a crossing's either way) by at
+  most `MAX_SHIFT_M`, or isn't put up.
 - **Beside a side road:** `SIDE_OFFSET_M` beyond its carriageway at the node (further out where its stub's paved
   edge is wider, by at most `SIDE_WIDER_M`), and outside its stub's paved outline, flares included, by
   `SIDE_CLEAR_M`, which keeps it clear of the closure's tape and boards (they reach `stub_closures.VERGE_SPAN_M` onto

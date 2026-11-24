@@ -113,7 +113,11 @@ def clear_mouths(masks: dict[str, np.ndarray], mouths: dict[str, np.ndarray], s:
 
 
 def guard_rails(s, xy, z, heading, half_l, half_r, slope_l, slope_r, dem_sample, frame: LocalFrame,
-                allowed: np.ndarray | None = None, masks: dict | None = None) -> tuple[list[Mesh], dict]:
+                allowed: np.ndarray | None = None, masks: dict | None = None,
+                behind: dict | None = None) -> tuple[list[Mesh], dict]:
+    """Guard rails where the ground drops beside the road (`rail_masks`, or `masks`). `behind`, per side: (metres
+    beyond the road's edge, height above it) per station where a rail stands elsewhere than RAIL_OFFSET_M out on the
+    verge (finite there): a kerbed town road's, behind its footpath (`core.kerbs`)."""
     nrm = np.column_stack([-np.sin(heading), np.cos(heading)])
     meshes: list[Mesh] = []
     stats = {}
@@ -137,9 +141,15 @@ def guard_rails(s, xy, z, heading, half_l, half_r, slope_l, slope_r, dem_sample,
             for p, start in enumerate(range(0, len(idx) - 1, MAX_RAIL_POINTS - 1)):
                 part = idx[start:start + MAX_RAIL_POINTS]
                 name = f"{side}{k:03d}" + (f"_{p}" if p else "")
-                off = (half[part] + RAIL_OFFSET_M) * sign
-                line = xy[part] + nrm[part] * off[:, None]
+                beyond = np.full(len(part), RAIL_OFFSET_M)
                 base = edge_h[part] - RAIL_OFFSET_M * VERGE_FALL
+                if behind is not None:
+                    b_off, b_h = (np.asarray(a, float)[part] for a in behind[side])
+                    use = np.isfinite(b_off)
+                    beyond = np.where(use, b_off, beyond)
+                    base = np.where(use, edge_h[part] + np.where(use, b_h, 0.0), base)
+                off = (half[part] + beyond) * sign
+                line = xy[part] + nrm[part] * off[:, None]
                 meshes.append(_rail_visual(f"RAIL_{name}", line, base, frame))
                 meshes.append(_collider(f"1WALL_RAIL_{name}", line, base, frame))
     return meshes, stats

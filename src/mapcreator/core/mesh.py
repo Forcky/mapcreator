@@ -135,21 +135,33 @@ def _side_limits(curvature: np.ndarray, full_m: float, step: float, cap_left=Non
 
 
 def build_ribbon(xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, dem_sample, *,
-                 skirt_cap_l=None, skirt_cap_r=None, verge_l=None, verge_r=None) -> Ribbon:
+                 skirt_cap_l=None, skirt_cap_r=None, verge_l=None, verge_r=None, path_l=None, path_r=None) -> Ribbon:
     """`skirt_cap_l`/`skirt_cap_r`, per station: how far from the centreline the skirt may reach on that side, where
     it shares the ground with something beside the road (a side road's stub, `core.stubs`). The skirt then stops
     there, but always reaches 0.5 m past the verge, and the verge keeps its width. Without them the ribbon is built
     as it always was.
     `verge_l`/`verge_r`: (width, rise) per station, where the width is finite: the verge's outer edge stands that far
     beyond the road's edge (never further than the verge would anyway) and that much above it (a bridge's kerb strip,
-    `core.bridges`). The skirt's columns stay where they were."""
+    `core.bridges`). The skirt's columns stay where they were.
+    `path_l`/`path_r`: (width, rise) per station, where the width is finite: a kerbed town road's kerb and footpath
+    (`core.kerbs`) in place of the verge, its outer edge that far beyond the road's edge (wider than a verge, but always
+    0.5 m short of how far the skirt may reach) and that much above it; the skirt's columns then run from there out to
+    where they'd reach anyway. Stations without one are built exactly as without it."""
     nrm = np.column_stack([-np.sin(heading), np.cos(heading)])  # left
     step = float(np.median(np.hypot(*np.diff(xy, axis=0).T))) if len(xy) > 1 else 1.0
     full = VERGE_M + SKIRT_STEPS_M[-1]
-    cap_l, cap_r = _neighbour_limits(np.asarray(xy, dtype=float), nrm, max(half_l.max(), half_r.max()) + full)
-    lim_l, lim_r = _side_limits(curvature, half_l.max() + full, step, cap_l, cap_r)
+    # The widest road the reaches are judged by: the plain stretches', where kerbed ones (`path_l`/`path_r`) are wider,
+    # so a town's kerbed width changes nothing along the rest of the road.
+    plain = np.ones(len(half_l), bool)
+    for path in (path_l, path_r):
+        if path is not None:
+            plain &= ~np.isfinite(np.asarray(path[0], dtype=float))
+    widest_l = half_l[plain].max() if plain.any() else half_l.max()
+    widest = max(widest_l, half_r[plain].max() if plain.any() else half_r.max())
+    cap_l, cap_r = _neighbour_limits(np.asarray(xy, dtype=float), nrm, widest + full)
+    lim_l, lim_r = _side_limits(curvature, widest_l + full, step, cap_l, cap_r)
 
-    def side(half, slope, lim, skirt_cap, override):
+    def side(half, slope, lim, skirt_cap, override, path):
         edge_h = z - slope * half
         verge_h = edge_h - VERGE_M * VERGE_FALL
         reach = np.clip(lim - half, VERGE_M + 0.5, full)  # how far past the road edge we may go
@@ -159,12 +171,21 @@ def build_ribbon(xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, de
             use = np.isfinite(width)
             verge = np.where(use, np.minimum(np.where(use, width, 0.0), verge), verge)
             verge_h = np.where(use, edge_h + np.where(use, rise, 0.0), verge_h)
+        wide = np.zeros(len(half), bool)
+        if path is not None:
+            width, rise = (np.asarray(a, dtype=float) for a in path)
+            wide = np.isfinite(width)
+            verge = np.where(wide, np.minimum(np.where(wide, width, 0.0), reach - 0.5), verge)
+            verge_h = np.where(wide, edge_h + np.where(wide, rise, 0.0), verge_h)
         offs = [half + verge]
         hs = [verge_h]
         if skirt_cap is None:
             for d in SKIRT_STEPS_M:
                 frac = (VERGE_M + d) / full
-                offs.append(half + reach * frac)
+                plain = half + reach * frac
+                if wide.any():  # from the footpath's back edge out to where the skirt reaches
+                    plain = np.where(wide, half + verge + (reach - verge) * (d / SKIRT_STEPS_M[-1]), plain)
+                offs.append(plain)
                 hs.append(None)  # from the DEM
             return offs, hs
         skirt = np.minimum(reach, np.maximum(np.asarray(skirt_cap, dtype=float) - half, verge + 0.5)) - verge
@@ -173,8 +194,8 @@ def build_ribbon(xy, z, heading, curvature, half_l, half_r, slope_l, slope_r, de
             hs.append(None)
         return offs, hs
 
-    lo, lh = side(half_l, slope_l, lim_l, skirt_cap_l, verge_l)
-    ro, rh = side(half_r, slope_r, lim_r, skirt_cap_r, verge_r)
+    lo, lh = side(half_l, slope_l, lim_l, skirt_cap_l, verge_l, path_l)
+    ro, rh = side(half_r, slope_r, lim_r, skirt_cap_r, verge_r, path_r)
 
     # Columns left (outermost) -> right (outermost). Offsets positive to the left.
     cols_off = [o for o in reversed(lo)] + [half_l, half_l / 2, np.zeros_like(half_l), -half_r / 2, -half_r] + \
