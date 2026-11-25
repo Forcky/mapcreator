@@ -17,13 +17,16 @@ MIN_STRETCH_M dropped. Never kerbed: unsealed road, motorways, trunk roads signe
 tunnels and the humps under crossing roads (they keep their own kerb strip or none), roundabouts and slip ramps, each
 with BLOCK_MARGIN_M either side. Both sides of a kerbed stretch get a kerb. The job's `kerbs: none` draws none.
 
-**Width** (Q5): kerb face to kerb face, where the run has no `width` tag, 8.9 m on local roads (LGAT's minimum for a
-local through road; Hobart measured 8.5-10.6 m), and on tertiary roads and above the traffic lanes (`lanes` x the lane
-width, as `core.section` sets it) plus two 2.3 m parking lanes (estimate); where it's CBD-dense (`cbd_dense`:
-buildings standing on the reserve's edge), at least 12.5 m (the CBD's measured median). Never narrower than the road
-as it was plus its two channels. The widening eases in over WIDTH_EASE_M from each end of a stretch; outside a stretch
-nothing changes. The road drawn as road (`half_left` and `half_right` in section.npz, and the ribbon) reaches the
-channel's lip, CHANNEL_M inside the kerb face: the 450 mm channel is drivable, part of kerb to kerb.
+**Width** (Q5): kerb face to kerb face, where the run has no `width` tag, its class's median as measured against the
+councils' kerb lines (25 Nov 2026, Hobart's and Glenorchy's town roads): 8.0 m on local roads, 10.0 m tertiary,
+12.8 m secondary, primary and trunk; at least 11.0 m on a two-way road with `lanes` tagged (marked lanes: LGAT's
+collector, and what those measured); 2.3 m less for each side OSM's `parking:*` says has no on-street parking; where
+it's CBD-dense (`cbd_dense`: buildings standing on the reserve's edge), at least 12.5 m (the CBD's measured median).
+Never narrower than the road as it was plus its two channels: a multi-lane road's `lanes` x the lane width (as
+`core.section` sets it) is its floor, and adds nothing more (`kerb_to_kerb`). The widening eases in over WIDTH_EASE_M
+from each end of a stretch; outside a stretch nothing changes. The road drawn as road (`half_left` and `half_right` in
+section.npz, and the ribbon) reaches the channel's lip, CHANNEL_M inside the kerb face: the 450 mm channel is drivable,
+part of kerb to kerb.
 
 **The kerb** (Q2): Tasmania's type KC (LGAT TSD-R14-v3), drawn from its dimensions: a 450 mm channel, a 150 mm face
 battered 40 mm and a 110 mm top falling 1 in 30, 600 mm overall, in grey concrete. No drawing is copied.
@@ -121,11 +124,17 @@ COUNCIL_REACH_M = 15.0  # and further than this, another road's
 COUNCIL_PARALLEL_DEG = 45.0
 COUNCIL_MIN_HALF_M = 2.0
 COUNCIL_EASE_M = 6.0  # a council's kerb follows the street's own changes of width (build-outs), smoothed this much
-LOCAL_KERB_TO_KERB_M = 8.9  # LGAT TSD-R06-v3 Table 1, a local through road
-PARKING_LANE_M = 2.3  # estimate
-CBD_KERB_TO_KERB_M = 12.5  # the CBD's measured median
+# -- kerb to kerb from the rule (`kerb_to_kerb`): calibrated 25 Nov 2026 against the councils' kerb lines on Hobart's
+# and Glenorchy's town roads (docs/known-issues.md, "Kerbs and footpaths"): each the median measured on a random 70%
+# of the streets, to 0.1 m, and tested on the other 30%
+LOCAL_KERB_TO_KERB_M = 8.0  # residential, unclassified, living_street, road (LGAT's new local road is 8.9)
+CLASS_KERB_TO_KERB_M = {"tertiary": 10.0, "secondary": 12.8, "primary": 12.8,
+                        "trunk": 12.8}  # secondary 12.76, primary 12.84; trunk as primary (none two-way in town)
+MARKED_KERB_TO_KERB_M = 11.0  # two-way with `lanes` tagged (marked lanes): LGAT TSD-R06-v3's collector, measured 11.0
+PARKING_LANE_M = 2.3  # off kerb to kerb for each side OSM's `parking:*` says has no on-street parking (estimate)
+NO_PARKING_VALUES = ("no", "separate")
+CBD_KERB_TO_KERB_M = 12.5  # at least this where CBD-dense: the CBD's measured median
 WIDTH_EASE_M = 30.0
-MAJOR_CLASSES = frozenset({"tertiary", "secondary", "primary", "trunk", "motorway"})
 # -- junctions and driveways ---------------------------------------------------------------------------------------
 RETURN_M = 5.0  # LGAT 2026 [B] 3.4.7: "a minimum kerb radii of 5m"
 RETURN_MAJOR_M = 8.0  # where either road is secondary or above
@@ -267,18 +276,44 @@ def building_counts(xy: np.ndarray, s: np.ndarray, centroids: np.ndarray, radius
 
 # -- width -------------------------------------------------------------------------------------------------------------
 
+def _lanes(tags: dict) -> int:
+    """`lanes` as `section.width_from_tags` reads it (1 to 6), or 0 where it's missing or can't be read."""
+    v = str(tags.get("lanes") or "").strip()
+    return int(v) if v.isdigit() and 1 <= int(v) <= 6 else 0
+
+
+def _oneway(tags: dict) -> bool:
+    return str(tags.get("oneway") or "") in ("yes", "true", "1", "-1")
+
+
+def no_parking_sides(tags: dict) -> int:
+    """How many sides OSM says have no on-street parking: `parking:both`, `parking:left`, `parking:right` (or the
+    older `parking:lane:*`) set to `no` or `separate` (parking off the street)."""
+    def v(side):
+        return str(tags.get(f"parking:{side}") or tags.get(f"parking:lane:{side}") or "").strip().lower()
+    if v("both") in NO_PARKING_VALUES:
+        return 2
+    return sum(v(side) in NO_PARKING_VALUES for side in ("left", "right"))
+
+
 def kerb_to_kerb(tags: dict, today_m: float, cbd: bool) -> float:
-    """A kerbed run's width, kerb face to kerb face (Q5): its `width` tag; else LOCAL_KERB_TO_KERB_M on a local road,
-    or the traffic lanes plus two parking lanes on a tertiary road or above; at least CBD_KERB_TO_KERB_M where it's
-    CBD-dense. Never under `today_m` (the road as it was, with the job's width option) plus two channels, nor over
-    `section.MAX_WIDTH`."""
+    """A kerbed run's width, kerb face to kerb face (Q5), calibrated against the councils' kerb lines (the constants'
+    notes). Its `width` tag where it has one; else its class's measured median (CLASS_KERB_TO_KERB_M on tertiary
+    roads and above, LOCAL_KERB_TO_KERB_M on the rest), at least MARKED_KERB_TO_KERB_M on a two-way road with `lanes`
+    tagged, less PARKING_LANE_M for each side tagged with no on-street parking; at least CBD_KERB_TO_KERB_M where it's
+    CBD-dense. Never under `today_m` (the road as it was, with the job's width option: on a multi-lane road, its
+    `lanes` x the lane width) plus two channels, nor over `section.MAX_WIDTH`. A road's extra lanes add nothing more:
+    the lanes tagged on Hobart's multi-lane streets take the room of the lanes by the kerb (fitted, an extra lane
+    added 0 m over the road's own width)."""
     w = sec._parse_metres(tags.get("width"))
     if w is not None and 0 < w <= sec.MAX_WIDTH:
         kk = w
-    elif _base_class(tags) in MAJOR_CLASSES:
-        kk = sec.width_from_tags(tags)[0] + 2 * PARKING_LANE_M
     else:
-        kk = LOCAL_KERB_TO_KERB_M
+        lanes = _lanes(tags)
+        kk = CLASS_KERB_TO_KERB_M.get(_base_class(tags), LOCAL_KERB_TO_KERB_M)
+        if lanes >= 2 and not _oneway(tags):
+            kk = max(kk, MARKED_KERB_TO_KERB_M)
+        kk -= no_parking_sides(tags) * PARKING_LANE_M
     if cbd:
         kk = max(kk, CBD_KERB_TO_KERB_M)
     return float(min(max(kk, today_m + 2 * CHANNEL_M), sec.MAX_WIDTH))

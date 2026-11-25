@@ -93,6 +93,19 @@ def test_without_council_lines_the_rule_kerbs_the_town_as_in_phase_1():
         assert np.array_equal(p.kerb["L"], rule.kerb["L"]) and np.allclose(p.half["L"], rule.half["L"])
 
 
+@pytest.mark.parametrize("tags", [{"highway": "residential"}, {"highway": "tertiary", "lanes": "2"},
+                                  {"highway": "primary"}, {"highway": "trunk", "lanes": "4", "oneway": "yes"},
+                                  {"highway": "secondary", "parking:both": "no"}])
+def test_council_lines_override_the_calibrated_rule_on_every_class(tags):
+    """Where a council has the kerb, it stands there, whatever the rule's class width (8.0 m to 14.9 m here)."""
+    p = plan_of(tags, council=lambda boxes: lines(kerb_y=(3.6, -3.9)), half=2.0)
+    assert p.half["L"][500] + kerbs.CHANNEL_M == pytest.approx(3.6, abs=0.05)
+    assert p.half["R"][500] + kerbs.CHANNEL_M == pytest.approx(3.9, abs=0.05)
+    rule = plan_of(tags, half=2.0)
+    assert (rule.half["L"][500] + rule.half["R"][500] + 2 * kerbs.CHANNEL_M ==
+            pytest.approx(kerbs.kerb_to_kerb(tags, 4.0, False)))
+
+
 def test_council_lines_far_from_the_road_or_across_it_aren_t_its_kerb():
     s, xy, heading = straight(11)
     far = kerbs.council_sides(xy, heading, np.arange(11), [shapely.LineString([(0, 20), (10, 20)])], [])
@@ -130,7 +143,7 @@ def test_without_the_mirror_a_road_in_a_council_s_area_gets_a_warning_and_the_ru
 
 
 def test_a_council_kerb_wider_than_the_rule_s_edge_and_a_bare_side_are_both_kept_clear_of_trees():
-    """A council's kerb 9 m out on the left (the rule would put it 4.45 m out) and its Edge of Formation on the right:
+    """A council's kerb 9 m out on the left (the rule would put it 4.0 m out) and its Edge of Formation on the right:
     every tree spot on either drawn road is cleared, as is the plain clearance past the bare side's edge."""
     p = plan_of(council=lambda boxes: lines(kerb_y=(9.0,), edge_y=(-4.0,)))
     assert p.kerb["L"][500] == 1.0 and p.kerb["R"][500] == 0.0

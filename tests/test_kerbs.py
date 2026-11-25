@@ -97,20 +97,82 @@ def test_a_bridge_and_its_margin_stay_bare_inside_a_town():
 
 # -- width -------------------------------------------------------------------------------------------------------------
 
-def test_kerb_to_kerb_by_class_and_never_narrower_than_before():
-    assert kerbs.kerb_to_kerb({"highway": "residential"}, 5.8, False) == pytest.approx(8.9)
-    assert kerbs.kerb_to_kerb({"highway": "residential"}, 5.8, True) == pytest.approx(12.5)
-    # tertiary: two 3.0 m lanes plus two 2.3 m parking lanes
-    assert kerbs.kerb_to_kerb({"highway": "tertiary"}, 6.0, False) == pytest.approx(10.6)
+def k2k(tags, cbd=False):
+    """The rule's kerb to kerb for a way with these tags, from the road as `core.section` maps it."""
+    return kerbs.kerb_to_kerb(tags, section.width_from_tags(tags)[0], cbd)
+
+
+@pytest.mark.parametrize("tags, cbd, expected", [
+    # each class's measured median (25 Nov 2026, the councils' kerb lines)
+    ({"highway": "residential"}, False, 8.0),
+    ({"highway": "unclassified"}, False, 8.0),
+    ({"highway": "living_street"}, False, 8.0),
+    ({"highway": "residential", "oneway": "yes"}, False, 8.0),
+    ({"highway": "tertiary"}, False, 10.0),
+    ({"highway": "secondary"}, False, 12.8),
+    ({"highway": "primary"}, False, 12.8),
+    ({"highway": "trunk", "maxspeed": "60"}, False, 12.8),
+    # marked lanes on a two-way road: at least a collector's 11.0 m; not on a one-way road
+    ({"highway": "residential", "lanes": "2"}, False, 11.0),
+    ({"highway": "tertiary", "lanes": "2"}, False, 11.0),
+    ({"highway": "secondary", "lanes": "2"}, False, 12.8),
+    ({"highway": "tertiary", "lanes": "2", "oneway": "yes"}, False, 10.0),
+    # a multi-lane road: its lanes x the lane width plus two channels, and no parking lanes on top (was 18.6 m)
+    ({"highway": "trunk", "lanes": "4", "oneway": "yes"}, False, 4 * 3.5 + 0.9),
+    ({"highway": "trunk", "lanes": "3", "oneway": "yes"}, False, 12.8),
+    ({"highway": "primary", "lanes": "4"}, False, 4 * 3.4 + 0.9),
+    # no on-street parking, by side; never narrower than the road plus its channels
+    ({"highway": "secondary", "parking:both": "no"}, False, 12.8 - 2 * 2.3),
+    ({"highway": "secondary", "parking:left": "separate"}, False, 12.8 - 2.3),
+    ({"highway": "secondary", "parking:lane:right": "no"}, False, 12.8 - 2.3),
+    ({"highway": "secondary", "parking:both": "lane"}, False, 12.8),
+    ({"highway": "residential", "parking:both": "no"}, False, 2 * 2.9 + 0.9),
+    # CBD-dense: at least 12.5 m
+    ({"highway": "residential"}, True, 12.5),
+    ({"highway": "primary"}, True, 12.8),
+    # a `width` tag wins: the road is drawn that wide (`core.section`), and its channels are outside it
+    ({"highway": "residential", "width": "11"}, False, 11.0 + 0.9),
+    ({"highway": "trunk", "lanes": "4", "width": "15"}, False, 15.0 + 0.9),
+])
+def test_kerb_to_kerb_by_class_and_tags(tags, cbd, expected):
+    assert k2k(tags, cbd) == pytest.approx(expected)
+
+
+def test_kerb_to_kerb_is_never_narrower_than_the_road_was():
     assert kerbs.kerb_to_kerb({"highway": "residential", "width": "11"}, 5.8, False) == pytest.approx(11.0)
     assert kerbs.kerb_to_kerb({"highway": "residential"}, 9.0, False) == pytest.approx(9.9)  # 9 m plus two channels
+    assert kerbs.kerb_to_kerb({"highway": "residential"}, 25.0, False) == pytest.approx(section.MAX_WIDTH)
+
+
+def test_the_rule_meets_the_held_out_streets_measured_medians():
+    """The calibration's hold-out: the 30% of streets left out of the fit (tests/data/README.md). Each class with 5 km
+    or more of them comes within 0.7 m of its measured median; primary and trunk roads have one street each there."""
+    import json
+    from pathlib import Path
+
+    data = json.loads((Path(__file__).parent / "data" / "kerb_widths_holdout.json").read_text())
+    by_class = {}
+    for g in data["groups"]:
+        hw = g["tags"]["highway"]
+        c = hw if hw in data["classes"] else "local"
+        by_class.setdefault(c, []).append((k2k(g["tags"], g["cbd"]), g["metres"]))
+    tested = 0
+    for c, v in data["classes"].items():
+        if v["metres"] < 5000:
+            continue
+        kk, m = np.array(by_class[c]).T
+        order = np.argsort(kk)
+        median = kk[order][np.searchsorted(np.cumsum(m[order]), m.sum() / 2)]
+        assert abs(median - v["measured_median"]) <= 0.7, (c, median, v["measured_median"])
+        tested += 1
+    assert tested == 3  # local, tertiary, secondary
 
 
 def test_the_road_widens_to_kerb_to_kerb_easing_in_and_is_unchanged_outside():
     p = plan_of()
     lip = p.half["L"]
     assert lip[0] == 3.0 and lip[-1] == 3.0  # outside the stretch, as it was
-    assert (lip[400:600] + kerbs.CHANNEL_M) * 2 == pytest.approx(8.9)  # kerb face to kerb face
+    assert (lip[400:600] + kerbs.CHANNEL_M) * 2 == pytest.approx(kerbs.LOCAL_KERB_TO_KERB_M)  # kerb face to kerb face
     a = int(np.flatnonzero(p.kerb["L"] > 0)[0])
     assert lip[a + 5] < lip[a + 40]  # easing in over WIDTH_EASE_M
     assert np.abs(np.diff(lip)).max() < 0.2  # no step
@@ -136,13 +198,14 @@ def parcels_beside(back_m, x0=0.0, x1=1000.0):
 
 
 def test_the_footpath_reaches_the_parcels_boundary_and_a_wide_suburban_verge_is_a_path_and_grass():
-    p = plan_of(parcels=parcels_beside(4.45 + 2.5))  # 2.5 m behind an 8.9 m road's kerb face
+    face = kerbs.LOCAL_KERB_TO_KERB_M / 2
+    p = plan_of(parcels=parcels_beside(face + 2.5))  # 2.5 m behind a local road's kerb face
     assert p.path["L"][500] == pytest.approx(2.5, abs=0.05)
     assert p.paved["L"][500] == pytest.approx(2.5, abs=0.05)
-    p = plan_of(parcels=parcels_beside(4.45 + 4.0))
+    p = plan_of(parcels=parcels_beside(face + 4.0))
     assert p.path["L"][500] == pytest.approx(4.0, abs=0.05)
     assert p.paved["L"][500] == pytest.approx(kerbs.PATH_DEFAULT_M)  # a 1.5 m path at the kerb, grass behind
-    p = plan_of(parcels=parcels_beside(4.45 + 9.0))  # too far to be the footpath's
+    p = plan_of(parcels=parcels_beside(face + 9.0))  # too far to be the footpath's
     assert p.path["L"][500] == pytest.approx(kerbs.PATH_DEFAULT_M)
 
 

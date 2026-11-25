@@ -1,0 +1,341 @@
+{
+ "about": "Kerb to kerb (kerb face to kerb face, metres) measured every 2 m along OSM town roads against the councils' kerb lines, on the 30% of streets held out of the rule's fit (25 Nov 2026). Aggregates only. Derived from City of Hobart Road Formation (CC BY 4.0), Glenorchy City Council Kerbs (CC BY 3.0 AU), OpenStreetMap (ODbL) and theLIST's building footprints and parcels (CC BY 3.0 AU).",
+ "classes": {
+  "local": {
+   "metres": 73500.0,
+   "measured_median": 8.13
+  },
+  "tertiary": {
+   "metres": 8400.0,
+   "measured_median": 10.52
+  },
+  "secondary": {
+   "metres": 5400.0,
+   "measured_median": 12.48
+  },
+  "primary": {
+   "metres": 300.0,
+   "measured_median": 8.51
+  },
+  "trunk": {
+   "metres": 100.0,
+   "measured_median": 7.89
+  }
+ },
+ "groups": [
+  {
+   "tags": {
+    "highway": "residential"
+   },
+   "cbd": false,
+   "metres": 64840.0
+  },
+  {
+   "tags": {
+    "highway": "tertiary"
+   },
+   "cbd": false,
+   "metres": 4570.0
+  },
+  {
+   "tags": {
+    "highway": "residential",
+    "oneway": "no"
+   },
+   "cbd": false,
+   "metres": 3868.0
+  },
+  {
+   "tags": {
+    "highway": "tertiary",
+    "lanes": "2"
+   },
+   "cbd": false,
+   "metres": 2704.0
+  },
+  {
+   "tags": {
+    "highway": "residential",
+    "parking:both": "lane"
+   },
+   "cbd": false,
+   "metres": 1842.0
+  },
+  {
+   "tags": {
+    "highway": "secondary",
+    "lanes": "2"
+   },
+   "cbd": false,
+   "metres": 1366.0
+  },
+  {
+   "tags": {
+    "highway": "residential",
+    "oneway": "yes"
+   },
+   "cbd": false,
+   "metres": 1202.0
+  },
+  {
+   "tags": {
+    "highway": "secondary",
+    "lanes": "2",
+    "oneway": "no"
+   },
+   "cbd": false,
+   "metres": 1046.0
+  },
+  {
+   "tags": {
+    "highway": "secondary",
+    "oneway": "no"
+   },
+   "cbd": false,
+   "metres": 1014.0
+  },
+  {
+   "tags": {
+    "highway": "tertiary",
+    "oneway": "no"
+   },
+   "cbd": false,
+   "metres": 532.0
+  },
+  {
+   "tags": {
+    "highway": "residential",
+    "lanes": "2",
+    "oneway": "no"
+   },
+   "cbd": false,
+   "metres": 504.0
+  },
+  {
+   "tags": {
+    "highway": "secondary",
+    "lanes": "2",
+    "oneway": "yes"
+   },
+   "cbd": false,
+   "metres": 366.0
+  },
+  {
+   "tags": {
+    "highway": "secondary",
+    "lanes": "2",
+    "oneway": "yes"
+   },
+   "cbd": true,
+   "metres": 338.0
+  },
+  {
+   "tags": {
+    "highway": "tertiary",
+    "lanes": "2",
+    "oneway": "no"
+   },
+   "cbd": false,
+   "metres": 332.0
+  },
+  {
+   "tags": {
+    "highway": "unclassified",
+    "oneway": "no"
+   },
+   "cbd": false,
+   "metres": 286.0
+  },
+  {
+   "tags": {
+    "highway": "secondary",
+    "lanes": "2",
+    "oneway": "no"
+   },
+   "cbd": true,
+   "metres": 274.0
+  },
+  {
+   "tags": {
+    "highway": "unclassified"
+   },
+   "cbd": true,
+   "metres": 246.0
+  },
+  {
+   "tags": {
+    "highway": "secondary"
+   },
+   "cbd": false,
+   "metres": 238.0
+  },
+  {
+   "tags": {
+    "highway": "secondary",
+    "lanes": "3",
+    "oneway": "yes"
+   },
+   "cbd": true,
+   "metres": 216.0
+  },
+  {
+   "tags": {
+    "highway": "residential"
+   },
+   "cbd": true,
+   "metres": 200.0
+  },
+  {
+   "tags": {
+    "highway": "tertiary"
+   },
+   "cbd": true,
+   "metres": 198.0
+  },
+  {
+   "tags": {
+    "highway": "primary",
+    "lanes": "2",
+    "oneway": "yes"
+   },
+   "cbd": false,
+   "metres": 198.0
+  },
+  {
+   "tags": {
+    "highway": "residential",
+    "lanes": "2"
+   },
+   "cbd": false,
+   "metres": 190.0
+  },
+  {
+   "tags": {
+    "highway": "secondary",
+    "lanes": "3",
+    "oneway": "yes"
+   },
+   "cbd": false,
+   "metres": 182.0
+  },
+  {
+   "tags": {
+    "highway": "trunk",
+    "lanes": "2",
+    "oneway": "yes"
+   },
+   "cbd": false,
+   "metres": 126.0
+  },
+  {
+   "tags": {
+    "highway": "secondary",
+    "lanes": "1",
+    "oneway": "yes"
+   },
+   "cbd": false,
+   "metres": 124.0
+  },
+  {
+   "tags": {
+    "highway": "unclassified",
+    "oneway": "yes"
+   },
+   "cbd": true,
+   "metres": 102.0
+  },
+  {
+   "tags": {
+    "highway": "unclassified",
+    "oneway": "no"
+   },
+   "cbd": true,
+   "metres": 84.0
+  },
+  {
+   "tags": {
+    "highway": "primary",
+    "lanes": "2",
+    "oneway": "yes"
+   },
+   "cbd": true,
+   "metres": 82.0
+  },
+  {
+   "tags": {
+    "highway": "secondary",
+    "oneway": "yes"
+   },
+   "cbd": true,
+   "metres": 78.0
+  },
+  {
+   "tags": {
+    "highway": "secondary",
+    "lanes": "2"
+   },
+   "cbd": true,
+   "metres": 76.0
+  },
+  {
+   "tags": {
+    "highway": "living_street",
+    "oneway": "yes"
+   },
+   "cbd": false,
+   "metres": 48.0
+  },
+  {
+   "tags": {
+    "highway": "unclassified",
+    "lanes": "2"
+   },
+   "cbd": false,
+   "metres": 46.0
+  },
+  {
+   "tags": {
+    "highway": "secondary",
+    "lanes": "3",
+    "oneway": "no"
+   },
+   "cbd": false,
+   "metres": 38.0
+  },
+  {
+   "tags": {
+    "highway": "unclassified",
+    "lanes": "2",
+    "oneway": "no"
+   },
+   "cbd": false,
+   "metres": 34.0
+  },
+  {
+   "tags": {
+    "highway": "tertiary",
+    "lanes": "3",
+    "oneway": "yes"
+   },
+   "cbd": false,
+   "metres": 26.0
+  },
+  {
+   "tags": {
+    "highway": "secondary",
+    "oneway": "yes"
+   },
+   "cbd": false,
+   "metres": 26.0
+  },
+  {
+   "tags": {
+    "highway": "trunk",
+    "lanes": "1",
+    "oneway": "yes"
+   },
+   "cbd": false,
+   "metres": 22.0
+  }
+ ]
+}
