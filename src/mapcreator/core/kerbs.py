@@ -1035,7 +1035,10 @@ def clear_zones(xy, heading, half_l, half_r, kerbs: Kerbs, tree_beyond: float,
     kerbs: the road's widest half there plus `tree_beyond` or `building_beyond`, round the centreline. On them, per
     side: trees TREE_BEHIND_M or more behind the kerb face, and none from TREE_INTO_PATH_M behind it to the footpath's
     back edge (a street tree stands at the kerb, and the footpath stays walkable); buildings off the footpath, give or
-    take BUILDING_SLACK_M (in the CBD half the walls stand on the reserve's edge)."""
+    take BUILDING_SLACK_M (in the CBD half the walls stand on the reserve's edge). A side with no kerb where the other
+    side has one (a council's Edge of Formation, a taper) is kept clear as a plain road's is, from its own edge: that
+    edge is the one drawn, which a council's kerb line or the kerb-to-kerb width may have moved well past the plain
+    stretches' widest."""
     xy, heading = np.asarray(xy, float), np.asarray(heading, float)
     half = {"L": np.asarray(half_l, float), "R": np.asarray(half_r, float)}
     kerbed = (kerbs.k["L"] > 0.5) | (kerbs.k["R"] > 0.5)
@@ -1058,4 +1061,7 @@ def clear_zones(xy, heading, half_l, half_r, kerbs: Kerbs, tree_beyond: float,
         trees.append(band(xy, heading, on, side, zero, face + TREE_BEHIND_M))
         trees.append(band(xy, heading, on, side, face + TREE_INTO_PATH_M, np.maximum(back, face + TREE_INTO_PATH_M)))
         buildings.append(band(xy, heading, on, side, zero, back - BUILDING_SLACK_M))
+        bare = kerbed & ~on  # this side unkerbed, the other kerbed: the plain clearance, from this side's own edge
+        trees.append(band(xy, heading, bare, side, zero, half[side] + tree_beyond))
+        buildings.append(band(xy, heading, bare, side, zero, half[side] + building_beyond))
     return shapely.union_all(trees), shapely.union_all(buildings)

@@ -360,6 +360,25 @@ def test_trees_keep_to_the_kerb_or_behind_the_footpath_and_buildings_off_it():
     assert buildings.contains(shapely.Point(200, face + 2.8)) and not buildings.contains(shapely.Point(200, face + 3.0))
 
 
+def test_a_side_with_no_kerb_beside_a_kerbed_one_is_kept_clear_from_its_own_wider_edge():
+    """The CBD's failing trunk (24 Nov): kerbed on the right, a council's Edge of Formation on the left, whose drawn
+    edge (8.85 m out) is far past the plain stretches' widest (4 m). A tree 7.7 m out stood on the road."""
+    n = 401
+    s, xy, heading = straight(n)
+    k_l, k_r = np.zeros(n), np.zeros(n)
+    k_r[100:300] = 1.0
+    half_l = np.full(n, 4.0)
+    half_l[100:300] = 8.85
+    kb = kerbs.Kerbs({"L": k_l, "R": k_r}, {"L": np.full(n, 1.5), "R": np.full(n, 3.0)},
+                     {"L": np.full(n, 1.5), "R": np.full(n, 3.0)}, {"L": np.zeros(n, bool), "R": np.zeros(n, bool)})
+    trees, buildings = kerbs.clear_zones(xy, heading, half_l, np.full(n, 4.0), kb, 4.0, 2.0)
+    assert trees.contains(shapely.Point(200, 7.7))  # on the road: cleared
+    assert trees.contains(shapely.Point(200, 8.85 + 3.9))  # and the plain clearance past its own edge
+    assert not trees.contains(shapely.Point(200, 8.85 + 4.2))
+    assert buildings.contains(shapely.Point(200, 8.85 + 1.9)) and not buildings.contains(shapely.Point(200, 8.85 + 2.2))
+    assert not trees.contains(shapely.Point(200, -(4.45 + 0.9)))  # the kerbed side keeps its street-tree place
+
+
 # -- the FOOTWAY surface -----------------------------------------------------------------------------------------------
 
 def test_footway_is_road_s_grip_and_not_valid_track_written_only_when_used():
@@ -426,3 +445,69 @@ def test_no_footprints_means_no_kerbs_and_the_build_goes_on(tmp_path, caplog):
     assert not p.any() and p.summary["off"] == "buildings_unavailable"
     assert "no kerbs" in caplog.text
     assert not _section_kerbs(tmp_path, _Region(), "none").any()
+
+
+# -- the safety net before validation ----------------------------------------------------------------------------------
+
+def _road_square(frame, x0=0.0, x1=40.0, y0=-4.0, y1=4.0):
+    from mapcreator.core.scene import Mesh
+
+    pos = frame.to_ac(np.array([x0, x1, x1, x0]), np.array([y0, y0, y1, y1]), np.zeros(4))
+    return Mesh("1ROAD_000", "road", pos.astype(np.float32), np.tile([0, 1, 0], (4, 1)).astype(np.float32),
+                np.zeros((4, 2), np.float32), np.array([[0, 1, 2], [0, 2, 3]]))
+
+
+def test_a_tree_or_post_collider_on_the_road_is_dropped_and_the_rest_kept(tmp_path, caplog):
+    from mapcreator.core import scenery
+    from mapcreator.core.scene import LocalFrame, Scene
+    from mapcreator.pipeline import track_stage
+
+    frame = LocalFrame(0.0, 0.0, 0.0)
+    road = _road_square(frame)
+    xy = np.array([[10.0, 1.0], [20.0, 9.0], [30.0, -3.95]])  # on the road; well off it; its edge over the road's
+    (trunks,) = scenery.trunk_colliders(xy, np.zeros(3), np.full(3, 0.2), np.zeros(3), np.zeros(3), frame)
+    kept, dropped = validate.drop_colliders_on_road([road, trunks], [road])
+    assert [d["what"] for d in dropped] == ["tree", "tree"]
+    assert sorted(round(d["x"]) for d in dropped) == [10, 30]
+    (left,) = [m for m in kept if m.name == trunks.name]
+    assert len(left.positions) == len(trunks.positions) // 3 and left.triangles.max() < len(left.positions)
+    nodes = validate.mesh_nodes(kept)["nodes"]
+    surface = validate.RoadSurface(nodes)
+    assert not surface.covers(left.positions[:, [0, 2]]).any()  # the validator's own check now passes
+    # A post's box the same way; a mesh with nothing left goes.
+    from mapcreator.core.scene import Mesh
+
+    box = Mesh("1WALL_SIGNAL_0", "x", trunks.positions[:16], trunks.normals[:16], trunks.uvs[:16],
+               trunks.triangles[np.all(trunks.triangles < 16, axis=1)])
+    kept, dropped = validate.drop_colliders_on_road([road, box], [road])
+    assert [d["what"] for d in dropped] == ["signal and blade post"] and [m.name for m in kept] == ["1ROAD_000"]
+    # The track stage logs each, and its tree leaves the Tree FX list.
+    scene = Scene(frame=frame, meshes=[road, trunks])
+    with caplog.at_level("WARNING"):
+        out = track_stage._drop_colliders_on_road([scene])
+    assert len(out) == 2 and "tree collider dropped: it stood on the road" in caplog.text and "MGA" in caplog.text
+    from mapcreator.pipeline import scenery_stage
+    from mapcreator.pipeline.workdir import WorkDir
+
+    work = WorkDir(tmp_path)
+    fx = work.stage(scenery_stage.STAGE) / "treefx"
+    fx.mkdir(parents=True)
+    (fx / "t.bin").write_bytes(b"")
+    pos = frame.to_ac(xy[:, 0], xy[:, 1], np.zeros(3))
+    np.savez(fx / "placement.npz", pos=pos, model=np.zeros(3, np.int64), size=np.ones(3), angle=np.zeros(3),
+             width=np.ones(3), names=np.array(["t"]))
+    ext = tmp_path / "ext"
+    ext.mkdir()
+    assert track_stage._write_tree_fx(work, ext, without=[(d["x"], d["z"]) for d in out])[1] == 1
+
+
+def test_nothing_is_dropped_when_every_collider_is_off_the_road():
+    from mapcreator.core import scenery
+    from mapcreator.core.scene import LocalFrame
+
+    frame = LocalFrame(0.0, 0.0, 0.0)
+    road = _road_square(frame)
+    (trunks,) = scenery.trunk_colliders(np.array([[20.0, 9.0]]), np.zeros(1), np.full(1, 0.2), np.zeros(1),
+                                        np.zeros(1), frame)
+    kept, dropped = validate.drop_colliders_on_road([road, trunks], [road])
+    assert not dropped and kept[1] is trunks
