@@ -127,3 +127,18 @@ def test_without_the_mirror_a_road_in_a_council_s_area_gets_a_warning_and_the_ru
                              np.full(n, 3.0), np.zeros(n, bool))
     assert p.any() and not p.council and p.summary["council_lines"] == "not_configured"
     assert "no councils' kerb lines configured" in caplog.text
+
+
+def test_a_council_kerb_wider_than_the_rule_s_edge_and_a_bare_side_are_both_kept_clear_of_trees():
+    """A council's kerb 9 m out on the left (the rule would put it 4.45 m out) and its Edge of Formation on the right:
+    every tree spot on either drawn road is cleared, as is the plain clearance past the bare side's edge."""
+    p = plan_of(council=lambda boxes: lines(kerb_y=(9.0,), edge_y=(-4.0,)))
+    assert p.kerb["L"][500] == 1.0 and p.kerb["R"][500] == 0.0
+    assert p.half["L"][500] + kerbs.CHANNEL_M == pytest.approx(9.0, abs=0.05)
+    s, xy, heading = straight(len(p.half["L"]))
+    kb = kerbs.Kerbs.from_section(kerbs.arrays(p))
+    trees, buildings = kerbs.clear_zones(xy, heading, p.half["L"], p.half["R"], kb, 4.0, 2.0)
+    for y in np.arange(-p.half["R"][500] - 3.9, 9.0 + 0.7, 0.25):  # the bare side's clearance to just short of the
+        assert trees.contains(shapely.Point(500, y)), y  # kerbed side's street-tree place
+    assert not trees.contains(shapely.Point(500, 9.0 + 0.9))
+    assert buildings.contains(shapely.Point(500, -p.half["R"][500] - 1.9))

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import shutil
 import zipfile
 from collections import Counter
@@ -26,6 +27,8 @@ from mapcreator.pipeline import mesh_stage, profile_stage, route_stage, scenery_
 from mapcreator.pipeline.workdir import WorkDir
 from mapcreator.providers.osm import roads as osm_roads
 from mapcreator.regions import job_region
+
+log = logging.getLogger(__name__)
 
 STAGE = "05_track"
 # Material values for the base surfaces follow a generator whose tracks pass an in-game load test.
@@ -172,6 +175,9 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     scenes = [scene]
     if (work.root / scenery_stage.STAGE / "scene.json").exists():
         scenes.append(Scene.load(work.root / scenery_stage.STAGE))
+    # The safety net: a tree's or a post's collider that stands on the road is dropped, with its tree, and logged, so a
+    # build never fails validation on one (the scenery and mesh stages keep them off it; this catches a miss).
+    dropped = _drop_colliders_on_road(scenes)
     tex, mats, mat_index = _materials_and_textures(work, scenes)
     # Tangents once, shared by every layout's KN5 (the meshes are the same; only the dummies differ).
     meshes = [kn5.Kn5Mesh(m.name, mat_index[m.material], m.positions, m.normals, m.uvs, m.triangles,
@@ -190,7 +196,7 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
 
     ext = track_dir / "extension"
     ext.mkdir()
-    tree_list = _write_tree_fx(work, ext)
+    tree_list = _write_tree_fx(work, ext, without=[(d["x"], d["z"]) for d in dropped if d["what"] == "tree"])
 
     width = sec["half_left"] + sec["half_right"]
     unsealed = _unsealed(sec)
@@ -203,6 +209,8 @@ def run(job: Job, settings: Settings, work: WorkDir) -> dict:
     layouts = layouts_for(job.layouts.value)
     multi = len(layouts) > 1
     summary = {"title": title, "unsealed_m": round(unsealed_m, 1), "layouts": {}}
+    if dropped:  # off the road by the safety net (`_drop_colliders_on_road`)
+        summary["colliders_dropped"] = dropped
     # Side roads' mouths, their stubs' flares included: no timing gate stands in one (`layout.gate_distances`).
     plan = mesh_stage.built_stubs(work, job)  # as built: less any the mesh stage left out
     mouths = junctions.mouths(route_stage.junctions(work, job), c["s"], c["xy"], c["heading"], sec["half_left"],
@@ -401,13 +409,21 @@ def _write_grass_atlas(work: WorkDir, ext) -> float:
     return round(out.stat().st_size / 1e6, 2)
 
 
-def _write_tree_fx(work: WorkDir, ext) -> tuple[str, int] | None:
-    """Copy the 3D tree models into extension/trees and write their list. Returns (list path, trees)."""
+def _write_tree_fx(work: WorkDir, ext, without: list[tuple[float, float]] = ()) -> tuple[str, int] | None:
+    """Copy the 3D tree models into extension/trees and write their list. Returns (list path, trees). `without`: AC x/z
+    of trunks whose colliders were dropped off the road (`_drop_colliders_on_road`): their trees go too."""
     fx = work.root / scenery_stage.STAGE / "treefx"
     placement = fx / "placement.npz"
     if not placement.exists():
         return None
-    p = np.load(placement)
+    p = dict(np.load(placement))
+    if len(without) and len(p["model"]):
+        from scipy.spatial import cKDTree
+
+        gap = cKDTree(np.asarray(without, float)).query(p["pos"][:, [0, 2]])[0]
+        keep = gap > DROPPED_TREE_M
+        for key in ("pos", "model", "angle", "size", "width"):
+            p[key] = p[key][keep]
     if not len(p["model"]):
         return None
     names = [str(n) for n in p["names"]]
@@ -417,6 +433,25 @@ def _write_tree_fx(work: WorkDir, ext) -> tuple[str, int] | None:
         shutil.copyfile(fx / f"{name}.bin", out / f"{name}.bin")
     _write_text(out / "trees.txt", treefx.trees_txt(names, p["model"], p["pos"], p["angle"], p["size"], p["width"]))
     return "trees/trees.txt", int(len(p["model"]))
+
+
+DROPPED_TREE_M = 0.5  # a tree this near a trunk collider dropped off the road is that trunk's tree
+
+
+def _drop_colliders_on_road(scenes: list[Scene]) -> list[dict]:
+    """`validate.drop_colliders_on_road` over every scene, against the mesh stage's road; each piece dropped logged as a
+    warning with its mesh and place (AC x/z, and MGA easting and northing). Returns their records."""
+    road = [m for m in scenes[0].meshes if validate.is_road_mesh(m.name)]
+    out = []
+    for s in scenes:
+        s.meshes, dropped = validate.drop_colliders_on_road(s.meshes, road)
+        for d in dropped:
+            e, n, _ = s.frame.from_ac(np.array([d["x"], d["y"], d["z"]]))
+            d |= {"e": round(float(e), 1), "n": round(float(n), 1)}
+            log.warning("%s collider dropped: it stood on the road (%s, AC x/z %.1f %.1f, MGA %.1f %.1f)",
+                        d["what"], d["mesh"], d["x"], d["z"], d["e"], d["n"])
+        out += dropped
+    return out
 
 
 def _write_attribution(track_dir, attributions, title: str, *, power_geojson: bool = False,

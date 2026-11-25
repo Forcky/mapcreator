@@ -860,6 +860,61 @@ def stub_check(st: dict, s, xy, heading, half_l, half_r, frame) -> StubCheck:
     return StubCheck(paved, ac(centre), ac(seams.reshape(-1, 2)).reshape(-1, 2, 2))
 
 
+# The safety net before validation (`drop_colliders_on_road`): the scenery's colliders a misplaced placement can put on
+# the road, as the validator names them. A bridge's piers and abutments aren't among them: their places are planned
+# round the road, and one on it is a fault to fix, not to hide.
+NET_COLLIDERS = (("tree", TRUNK_MESH), ("power", POWER_COLLIDER), ("signal and blade post", "1WALL_SIGNAL_"),
+                 ("regulatory sign post", "1WALL_SIGN_"))
+
+
+def _components(tri: np.ndarray, n: int) -> np.ndarray:
+    """Each vertex's connected piece of a mesh (vertices joined by triangles), as a label per vertex."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    tri = np.asarray(tri, np.int64).reshape(-1, 3)
+    a = np.concatenate([tri[:, 0], tri[:, 1], tri[:, 2]])
+    b = np.concatenate([tri[:, 1], tri[:, 2], tri[:, 0]])
+    graph = coo_matrix((np.ones(len(a)), (a, b)), shape=(n, n))
+    return connected_components(graph, directed=False)[1]
+
+
+def drop_colliders_on_road(meshes: list, road_meshes: list) -> tuple[list, list[dict]]:
+    """A safety net before validation, so a public build never fails on a misplaced tree or post: `meshes` (scene
+    meshes, AC axes) less every piece of a scenery collider (`NET_COLLIDERS`: one trunk's prism, one post's box) with a
+    corner over the drivable road (`road_meshes`' road surfaces, as `RoadSurface` reads them), the check the validator
+    makes. Returns the meshes, a mesh with nothing left dropped, and a record of each piece dropped: what it was, its
+    mesh and its centre (AC x, y, z)."""
+    road = RoadSurface(mesh_nodes(road_meshes)["nodes"])
+    if road.tree is None:
+        return list(meshes), []
+    out, dropped = [], []
+    for m in meshes:
+        what = next((w for w, prefix in NET_COLLIDERS if m.name.startswith(prefix)), None)
+        if what is None or not len(m.triangles):
+            out.append(m)
+            continue
+        pos = np.asarray(m.positions, float)
+        label = _components(m.triangles, len(pos))
+        over = road.covers(pos[:, [0, 2]])
+        bad = np.unique(label[over])
+        if not len(bad):
+            out.append(m)
+            continue
+        for k in bad.tolist():
+            centre = pos[label == k].mean(axis=0)
+            dropped.append({"what": what, "mesh": m.name, "x": round(float(centre[0]), 2),
+                            "y": round(float(centre[1]), 2), "z": round(float(centre[2]), 2)})
+        keep_tri = ~np.isin(label[np.asarray(m.triangles)[:, 0]], bad)
+        if not keep_tri.any():
+            continue
+        tri = np.asarray(m.triangles)[keep_tri]
+        used, local = np.unique(tri, return_inverse=True)
+        out.append(type(m)(m.name, m.material, m.positions[used], m.normals[used], m.uvs[used],
+                           local.reshape(tri.shape), m.renderable))
+    return out, dropped
+
+
 def mesh_nodes(meshes) -> dict:
     """Scene meshes (`core.scene.Mesh`, in AC axes) as a KN5's nodes read back (`kn5.read`), for the checks that read
     one: the mesh stage checks its stubs with them before anything is written."""
