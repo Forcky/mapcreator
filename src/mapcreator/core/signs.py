@@ -540,17 +540,23 @@ def _divided(net: _Net, k: int) -> bool:
                  if 0 <= i < len(net.route_xy) - 1 and net.on_node[i] and net.on_node[i + 1]), None)
     if pair is None:
         return False
-    tags = net.tags(*pair)
+    return divided_at(net.g, net.route_xy[k], net.route_tangent(k), net.tags(*pair))
+
+
+def divided_at(g, p, travel, tags: dict, reach: float = DIVIDED_M) -> bool:
+    """Is a road with these `tags`, driven along `travel` at the point `p`, one carriageway of a divided road: is
+    there a road of the same name (or ref) in the graph `g` (`osm_graph.RoadGraph`), one-way the other way, within
+    `reach`? Its ONE WAY signs (`_divided`) and its kerbs' width (`divided_carriageway`, `core.kerbs`) both ask."""
     keys = {(key, tags[key]) for key in ("name", "ref") if tags.get(key)}
-    if not keys:
+    if not keys or not len(g.seg_a):
         return False
-    p = net.route_xy[k]
-    t = net.route_tangent(k)
-    g = net.g
-    pa, pb = net.xy[g.seg_a], net.xy[g.seg_b]
+    p = np.asarray(p, float)
+    t = _unit(travel)
+    xy = np.asarray(g.xy, float)
+    pa, pb = xy[g.seg_a], xy[g.seg_b]
     ab = pb - pa
     tt = np.clip(((p - pa) * ab).sum(axis=1) / np.maximum((ab * ab).sum(axis=1), 1e-12), 0.0, 1.0)
-    near = np.flatnonzero(np.hypot(*(pa + ab * tt[:, None] - p).T) <= DIVIDED_M)
+    near = np.flatnonzero(np.hypot(*(pa + ab * tt[:, None] - p).T) <= reach)
     for j in near.tolist():
         wt = g.ways[int(g.seg_way[j])]["tags"] or {}
         if not any(wt.get(key) == value for key, value in keys):
@@ -562,6 +568,36 @@ def _divided(net: _Net, k: int) -> bool:
         if float(drive @ t) < -0.5:
             return True
     return False
+
+
+DIVIDED_STEP_M = 20.0  # a way is asked about every this far along it (`divided_carriageway`)
+DIVIDED_END_M = 15.0  # but not this near its ends, where it meets its junctions
+
+
+def divided_carriageway(g, xy, tags: dict) -> bool:
+    """Is a way with these `tags`, drawn by `xy` in the order it's driven, one carriageway of a divided road along
+    most of it: tagged one-way (not a roundabout), and `divided_at` at half or more of the points DIVIDED_STEP_M
+    apart along it (DIVIDED_END_M in from each end, where it's long enough)?"""
+    if str(tags.get("oneway") or "") not in ("yes", "true", "1", "-1") or tags.get("junction") in (
+            "roundabout", "circular"):
+        return False
+    xy = np.asarray(xy, float)
+    if len(xy) < 2:
+        return False
+    s = cumulative(xy)
+    length = float(s[-1])
+    if length <= 0:
+        return False
+    end = DIVIDED_END_M if length > 2 * DIVIDED_END_M + DIVIDED_STEP_M else 0.0
+    count = max(int((length - 2 * end) // DIVIDED_STEP_M) + 1, 1)
+    at = np.linspace(end, length - end, count) if count > 1 else np.array([length / 2])
+    votes = 0
+    for m in at.tolist():
+        i = int(np.clip(np.searchsorted(s, m, side="right") - 1, 0, len(xy) - 2))
+        f = (m - s[i]) / max(s[i + 1] - s[i], 1e-9)
+        p = xy[i] + (xy[i + 1] - xy[i]) * f
+        votes += divided_at(g, p, xy[i + 1] - xy[i], tags)
+    return 2 * votes >= len(at)
 
 
 def _repeaters(net: _Net, length: float, out: dict) -> None:

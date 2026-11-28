@@ -1,0 +1,9 @@
+{
+  "track_id": "sandy_bay_road_divided",
+  "waypoints": [
+    {"lon": 147.32584, "lat": -42.89303},
+    {"lon": 147.32936, "lat": -42.89824},
+    {"lon": 147.33129, "lat": -42.90016}
+  ],
+  "layouts": "forward"
+}

@@ -19,9 +19,12 @@ with BLOCK_MARGIN_M either side. Both sides of a kerbed stretch get a kerb. The 
 
 **Width** (Q5): kerb face to kerb face, where the run has no `width` tag, its class's median as measured against the
 councils' kerb lines (25 Nov 2026, Hobart's and Glenorchy's town roads): 8.0 m on local roads, 10.0 m tertiary,
-12.8 m secondary, primary and trunk; at least 11.0 m on a two-way road with `lanes` tagged (marked lanes: LGAT's
+12.8 m secondary, primary and trunk, 7.3 m on a one-way local street, and 8.3 m on one carriageway of a divided road
+whatever its class (outer kerb to the median's, 28 Nov 2026; `divided`, the route stage's, by the ONE WAY signs' own
+test, `core.signs.divided_carriageway`); at least 11.0 m on a two-way road with `lanes` tagged (marked lanes: LGAT's
 collector, and what those measured); 2.3 m less for each side OSM's `parking:*` says has no on-street parking; where
-it's CBD-dense (`cbd_dense`: buildings standing on the reserve's edge), at least 12.5 m (the CBD's measured median).
+it's CBD-dense (`cbd_dense`: buildings standing on the reserve's edge), at least 12.5 m (the CBD's measured median),
+but not on a divided road's carriageway. The section stage logs the plan's summary in one line (`summary_line`).
 Never narrower than the road as it was plus its two channels: a multi-lane road's `lanes` x the lane width (as
 `core.section` sets it) is its floor, and adds nothing more (`kerb_to_kerb`). The widening eases in over WIDTH_EASE_M
 from each end of a stretch; outside a stretch nothing changes. The road drawn as road (`half_left` and `half_right` in
@@ -134,6 +137,9 @@ MARKED_KERB_TO_KERB_M = 11.0  # two-way with `lanes` tagged (marked lanes): LGAT
 PARKING_LANE_M = 2.3  # off kerb to kerb for each side OSM's `parking:*` says has no on-street parking (estimate)
 NO_PARKING_VALUES = ("no", "separate")
 CBD_KERB_TO_KERB_M = 12.5  # at least this where CBD-dense: the CBD's measured median
+# Calibrated 28 Nov 2026 on the same streets and the same 70/30 split (docs/known-issues.md, "Kerbs and footpaths"):
+DIVIDED_KERB_TO_KERB_M = 8.3  # one carriageway of a divided road, outer kerb to the median's (`divided`), any class
+ONE_WAY_LOCAL_KERB_TO_KERB_M = 7.3  # a one-way local street (not a divided road's carriageway)
 WIDTH_EASE_M = 30.0
 # -- junctions and driveways ---------------------------------------------------------------------------------------
 RETURN_M = 5.0  # LGAT 2026 [B] 3.4.7: "a minimum kerb radii of 5m"
@@ -296,25 +302,33 @@ def no_parking_sides(tags: dict) -> int:
     return sum(v(side) in NO_PARKING_VALUES for side in ("left", "right"))
 
 
-def kerb_to_kerb(tags: dict, today_m: float, cbd: bool) -> float:
+def kerb_to_kerb(tags: dict, today_m: float, cbd: bool, divided: bool = False) -> float:
     """A kerbed run's width, kerb face to kerb face (Q5), calibrated against the councils' kerb lines (the constants'
     notes). Its `width` tag where it has one; else its class's measured median (CLASS_KERB_TO_KERB_M on tertiary
-    roads and above, LOCAL_KERB_TO_KERB_M on the rest), at least MARKED_KERB_TO_KERB_M on a two-way road with `lanes`
-    tagged, less PARKING_LANE_M for each side tagged with no on-street parking; at least CBD_KERB_TO_KERB_M where it's
-    CBD-dense. Never under `today_m` (the road as it was, with the job's width option: on a multi-lane road, its
-    `lanes` x the lane width) plus two channels, nor over `section.MAX_WIDTH`. A road's extra lanes add nothing more:
-    the lanes tagged on Hobart's multi-lane streets take the room of the lanes by the kerb (fitted, an extra lane
-    added 0 m over the road's own width)."""
+    roads and above, LOCAL_KERB_TO_KERB_M on the rest; ONE_WAY_LOCAL_KERB_TO_KERB_M on a one-way local street), at
+    least MARKED_KERB_TO_KERB_M on a two-way road with `lanes` tagged, less PARKING_LANE_M for each side tagged with no
+    on-street parking; at least CBD_KERB_TO_KERB_M where it's CBD-dense. On one carriageway of a divided road
+    (`divided`: `core.signs.divided_carriageway`, found by the route stage) DIVIDED_KERB_TO_KERB_M whatever its class,
+    and no CBD floor: the carriageway, outer kerb to the median's, not the road. Never under `today_m` (the road as it
+    was, with the job's width option: on a multi-lane road, its `lanes` x the lane width) plus two channels, nor over
+    `section.MAX_WIDTH`. A road's extra lanes add nothing more: the lanes tagged on Hobart's multi-lane streets take
+    the room of the lanes by the kerb (fitted, an extra lane added 0 m over the road's own width)."""
     w = sec._parse_metres(tags.get("width"))
     if w is not None and 0 < w <= sec.MAX_WIDTH:
         kk = w
     else:
         lanes = _lanes(tags)
-        kk = CLASS_KERB_TO_KERB_M.get(_base_class(tags), LOCAL_KERB_TO_KERB_M)
+        cls = _base_class(tags)
+        if divided:
+            kk = DIVIDED_KERB_TO_KERB_M
+        elif _oneway(tags) and cls not in CLASS_KERB_TO_KERB_M:
+            kk = ONE_WAY_LOCAL_KERB_TO_KERB_M
+        else:
+            kk = CLASS_KERB_TO_KERB_M.get(cls, LOCAL_KERB_TO_KERB_M)
         if lanes >= 2 and not _oneway(tags):
             kk = max(kk, MARKED_KERB_TO_KERB_M)
         kk -= no_parking_sides(tags) * PARKING_LANE_M
-    if cbd:
+    if cbd and not divided:
         kk = max(kk, CBD_KERB_TO_KERB_M)
     return float(min(max(kk, today_m + 2 * CHANNEL_M), sec.MAX_WIDTH))
 
@@ -439,9 +453,10 @@ def none_plan(half_l: np.ndarray, half_r: np.ndarray, summary: dict | None = Non
 
 
 def plan(s, xy, heading, run, run_tags: list[dict], half_l, half_r, *, unsealed=None, blocked=None,
-         centroids=(), buildings=(), parcels=None, reversed_runs=None, council=None) -> Plan:
+         centroids=(), buildings=(), parcels=None, reversed_runs=None, council=None, divided_runs=None) -> Plan:
     """Kerbs and footpaths along the route (module notes). `run` is each station's OSM run, `run_tags` each run's
-    tags and `reversed_runs` whether the route drives each against its drawn direction (for its sides). `half_l`,
+    tags, `reversed_runs` whether the route drives each against its drawn direction (for its sides) and `divided_runs`
+    whether each is one carriageway of a divided road (for its width, `kerb_to_kerb`). `half_l`,
     `half_r`: the road's half widths as they'd be without kerbs (the section's, eased, with the job's width option).
     `unsealed`: unsealed stations; `blocked`: stations never kerbed (bridges, tunnels, roundabouts, slip ramps: widened
     here by BLOCK_MARGIN_M). `centroids`: building footprints' centroids; `buildings` their polygons (a footpath stops
@@ -455,6 +470,7 @@ def plan(s, xy, heading, run, run_tags: list[dict], half_l, half_r, *, unsealed=
     n = len(s)
     half_l, half_r = np.asarray(half_l, float), np.asarray(half_r, float)
     reversed_runs = list(reversed_runs) if reversed_runs is not None else [False] * len(run_tags)
+    divided_runs = [bool(v) for v in divided_runs] if divided_runs is not None else [False] * len(run_tags)
     step = float(s[1] - s[0]) if n > 1 else 1.0
     speed_ok = np.array([town_speed(t) for t in run_tags], bool)[run]
     never = np.array([never_kerbed(t) for t in run_tags], bool)[run]
@@ -502,7 +518,7 @@ def plan(s, xy, heading, run, run_tags: list[dict], half_l, half_r, *, unsealed=
         for dense in (False, True):
             sel = on & (cbd == dense)
             if sel.any():
-                kk[sel] = [kerb_to_kerb(run_tags[r], float(t), dense) for t in today[sel]]
+                kk[sel] = [kerb_to_kerb(run_tags[r], float(t), dense, divided_runs[r]) for t in today[sel]]
     kk = np.where(kerbed, kk, today + 2 * CHANNEL_M)
     # Each half as drawn (to the lip): the same share of the new width as of the old, never narrower than it was.
     share_l = np.where(today > 0, half_l / np.maximum(today, 1e-9), 0.5)
@@ -567,6 +583,9 @@ def plan(s, xy, heading, run, run_tags: list[dict], half_l, half_r, *, unsealed=
         "no_footpath_m": {side: round(float((kerbed & ~has[side]).sum() * step), 1) for side in "LR"},
         "concrete_m": {side: round(float((concrete[side] & (paved[side] > 0)).sum() * step), 1) for side in "LR"},
     }
+    on_divided = kerbed & np.array(divided_runs, bool)[run] if len(run_tags) else np.zeros(n, bool)
+    if on_divided.any():  # kerbed on one carriageway of a divided road (DIVIDED_KERB_TO_KERB_M)
+        summary["divided_m"] = round(float(on_divided.sum() * step), 1)
     if council_sources:
         summary["council"] = sorted(council_sources)
         summary["council_m"] = {side: round(float((kerbed & np.isfinite(faces[side])).sum() * step), 1)
@@ -683,6 +702,30 @@ def cbd_dense(s: np.ndarray, idx: np.ndarray, rays: dict, kerbed: np.ndarray) ->
     gap = max(int(round(PATH_SAMPLE_M / step)), 1)
     hit = binary_dilation(hit, structure=np.ones(2 * gap + 1, bool)) & kerbed
     return stretches(hit, s, CBD_MIN_M, CBD_MIN_M) & kerbed
+
+
+def summary_line(summary: dict) -> str:
+    """The kerb plan's summary (kerbs.json) as one line for the build's log, e.g. "kerbs: kerbed 2287 m, kerb to kerb
+    median 15.8 m (p10 12.1, p90 18.9), council hobart (ok), bare L 104 m / R 0 m, footpath sides from parcels 2724 m,
+    standard widths 1056 m (parcels ok)". A track with none says why: "kerbs: kerbed 0 m (off: job)", or "(no town
+    stretch)" where the rule found none."""
+    kerbed = float(summary.get("kerbed_m") or 0.0)
+    if kerbed <= 0:
+        return f"kerbs: kerbed 0 m ({'off: ' + str(summary['off']) if summary.get('off') else 'no town stretch'})"
+    parts = [f"kerbs: kerbed {kerbed:.0f} m"]
+    kk = summary.get("kerb_to_kerb_m") or {}
+    if kk:
+        parts.append(f"kerb to kerb median {kk['median']:.1f} m (p10 {kk['p10']:.1f}, p90 {kk['p90']:.1f})")
+    if summary.get("divided_m"):
+        parts.append(f"divided carriageways {summary['divided_m']:.0f} m")
+    parts.append(f"council {', '.join(summary.get('council') or ['none'])} ({summary.get('council_lines', 'none')})")
+    bare = summary.get("council_bare_m")
+    if bare:
+        parts.append(f"bare L {bare.get('L', 0.0):.0f} m / R {bare.get('R', 0.0):.0f} m")
+    src = summary.get("footpath_source_m") or {}
+    parts.append(f"footpath sides from parcels {src.get('parcels', 0.0):.0f} m, standard widths "
+                 f"{src.get('standard', 0.0):.0f} m (parcels {summary.get('parcels', 'none')})")
+    return ", ".join(parts)
 
 
 def _stats(a: np.ndarray) -> dict:
