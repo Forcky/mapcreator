@@ -313,7 +313,8 @@ def _bbox(job: Job, margin_deg: float) -> tuple[float, float, float, float]:
 def runs(route: osm_graph.Route, g: osm_graph.RoadGraph | None = None) -> list[dict]:
     """Consecutive stretches of the route on the same OSM way, with distances and kept tags. With the graph `g`, a run
     whose tags say which side of the way something is on (`sidewalk=left`, `sidewalk:right=...`) also says whether
-    the route drives the way against its drawn direction (`reversed`), so the side can be turned round."""
+    the route drives the way against its drawn direction (`reversed`), so the side can be turned round; and a run on
+    one carriageway of a divided road says so (`divided`, `core.signs.divided_carriageway`), for its kerbs' width."""
     s = cumulative(route.xy)
     out: list[dict] = []
     start = 0
@@ -329,6 +330,8 @@ def runs(route: osm_graph.Route, g: osm_graph.RoadGraph | None = None) -> list[d
             })
             if order is not None and _sided(out[-1]["tags"]):
                 out[-1]["reversed"] = _reversed(route, order, start, i)
+            if g is not None and signs_core.divided_carriageway(g, route.xy[start:i + 1], way["tags"]):
+                out[-1]["divided"] = True  # one carriageway of a divided road: its kerbs' width (`core.kerbs`)
             start = i
     return out
 

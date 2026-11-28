@@ -476,6 +476,13 @@ def is_road_mesh(name: str) -> bool:
     return name[:1].isdigit() and any(k in name for k in ROAD_KEYS)
 
 
+# A point's road triangle is looked for among the 16 whose centroids are nearest it, then, where none of those holds
+# it, among 256. A large triangle's centroid can be further from a point it holds than 16 smaller triangles' are: on a
+# road one half of which is far wider than the other (a council's kerb found across a divided road's median), a point
+# 1 m off the AI line, under a 5.5 m triangle of the wide half, read as off the road (28 Nov 2026).
+NEAR_TRIANGLES = (16, 256)
+
+
 class RoadSurface:
     """Height of the road (1ROAD and 1GRAVEL meshes) under arbitrary X/Z points. Where two road surfaces overlap in plan
     (a road drawn under the route's bridge, `core.crossing_roads`, and the deck, `core.bridges`), `height` takes the
@@ -495,7 +502,18 @@ class RoadSurface:
         (5 cm of slack), and with `within` too no lower than `below - within`; None where there's none."""
         if self.tree is None:
             return None
-        _, idx = self.tree.query([x, z], k=min(16, len(self.tri)))
+        found = []
+        for k in NEAR_TRIANGLES:
+            found = self._heights(x, z, min(k, len(self.tri)))
+            if found or k >= len(self.tri):
+                break
+        if below is not None:
+            found = [h for h in found if h <= below + 0.05 and (within is None or h >= below - within)]
+        return max(found) if found else None
+
+    def _heights(self, x: float, z: float, k: int) -> list[float]:
+        """The heights of the road surfaces at x/z among the k triangles whose centroids are nearest."""
+        _, idx = self.tree.query([x, z], k=k)
         found = []
         for i in np.atleast_1d(idx):
             a, b, c = self.tri[i][:, [0, 2]]
@@ -508,9 +526,7 @@ class RoadSurface:
             if u >= -1e-6 and v >= -1e-6 and u + v <= 1 + 1e-6:
                 ya, yb, yc = self.tri[i][:, 1]
                 found.append(float(ya + u * (yc - ya) + v * (yb - ya)))
-        if below is not None:
-            found = [h for h in found if h <= below + 0.05 and (within is None or h >= below - within)]
-        return max(found) if found else None
+        return found
 
     def covers(self, xz: np.ndarray, batch: int = 8192) -> np.ndarray:
         """Whether each X/Z point is over the road: `height` for many points at once."""
@@ -518,20 +534,30 @@ class RoadSurface:
         out = np.zeros(len(xz), dtype=bool)
         if self.tree is None:
             return out
-        k = min(16, len(self.tri))
-        for start in range(0, len(xz), batch):
-            pts = xz[start:start + batch]
-            _, idx = self.tree.query(pts, k=k, workers=cpus.count())
-            t = self.tri[np.asarray(idx).reshape(len(pts), k)][..., [0, 2]]
-            a = t[..., 0, :]
-            v0, v1, v2 = t[..., 2, :] - a, t[..., 1, :] - a, pts[:, None, :] - a
-            den = v0[..., 0] * v1[..., 1] - v1[..., 0] * v0[..., 1]
-            ok = np.abs(den) > 1e-12
-            den = np.where(ok, den, 1.0)
-            u = (v2[..., 0] * v1[..., 1] - v1[..., 0] * v2[..., 1]) / den
-            v = (v0[..., 0] * v2[..., 1] - v2[..., 0] * v0[..., 1]) / den
-            out[start:start + batch] = (ok & (u >= -1e-6) & (v >= -1e-6) & (u + v <= 1 + 1e-6)).any(axis=1)
+        todo = np.arange(len(xz))
+        for k in NEAR_TRIANGLES:
+            k = min(k, len(self.tri))
+            step = max(batch * NEAR_TRIANGLES[0] // k, 1)  # the same memory per batch whatever k
+            for start in range(0, len(todo), step):
+                i = todo[start:start + step]
+                out[i] = self._inside(xz[i], k)
+            todo = todo[~out[todo]]
+            if not len(todo) or k >= len(self.tri):
+                break
         return out
+
+    def _inside(self, pts: np.ndarray, k: int) -> np.ndarray:
+        """Whether each point is inside one of the k triangles whose centroids are nearest it."""
+        _, idx = self.tree.query(pts, k=k, workers=cpus.count())
+        t = self.tri[np.asarray(idx).reshape(len(pts), k)][..., [0, 2]]
+        a = t[..., 0, :]
+        v0, v1, v2 = t[..., 2, :] - a, t[..., 1, :] - a, pts[:, None, :] - a
+        den = v0[..., 0] * v1[..., 1] - v1[..., 0] * v0[..., 1]
+        ok = np.abs(den) > 1e-12
+        den = np.where(ok, den, 1.0)
+        u = (v2[..., 0] * v1[..., 1] - v1[..., 0] * v2[..., 1]) / den
+        v = (v0[..., 0] * v2[..., 1] - v2[..., 0] * v0[..., 1]) / den
+        return (ok & (u >= -1e-6) & (v >= -1e-6) & (u + v <= 1 + 1e-6)).any(axis=1)
 
 
 def undefined_surfaces(mesh_names: list[str], surfaces_ini: str) -> list[str]:

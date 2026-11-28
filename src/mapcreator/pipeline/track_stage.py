@@ -451,6 +451,11 @@ def _drop_colliders_on_road(scenes: list[Scene]) -> list[dict]:
             log.warning("%s collider dropped: it stood on the road (%s, AC x/z %.1f %.1f, MGA %.1f %.1f)",
                         d["what"], d["mesh"], d["x"], d["z"], d["e"], d["n"])
         out += dropped
+    if out:  # the count in one line too, as the build's summary has it (`colliders_dropped`)
+        kinds = {}
+        for d in out:
+            kinds[d["what"]] = kinds.get(d["what"], 0) + 1
+        log.info("colliders dropped: %d (%s)", len(out), ", ".join(f"{k} {v}" for k, v in sorted(kinds.items())))
     return out
 
 

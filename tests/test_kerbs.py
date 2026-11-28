@@ -107,7 +107,8 @@ def k2k(tags, cbd=False):
     ({"highway": "residential"}, False, 8.0),
     ({"highway": "unclassified"}, False, 8.0),
     ({"highway": "living_street"}, False, 8.0),
-    ({"highway": "residential", "oneway": "yes"}, False, 8.0),
+    ({"highway": "residential", "oneway": "yes"}, False, 7.3),  # a one-way local street (28 Nov 2026)
+    ({"highway": "tertiary", "oneway": "yes"}, False, 10.0),  # one-way tertiary and above: the class's
     ({"highway": "tertiary"}, False, 10.0),
     ({"highway": "secondary"}, False, 12.8),
     ({"highway": "primary"}, False, 12.8),
@@ -138,6 +139,18 @@ def test_kerb_to_kerb_by_class_and_tags(tags, cbd, expected):
     assert k2k(tags, cbd) == pytest.approx(expected)
 
 
+@pytest.mark.parametrize("tags, cbd, expected", [
+    # one carriageway of a divided road: 8.3 m whatever its class (was its class's, 12.8 m on a primary road)
+    ({"highway": "primary", "lanes": "2", "oneway": "yes"}, False, 8.3),
+    ({"highway": "residential", "oneway": "yes"}, False, 8.3),
+    ({"highway": "secondary", "lanes": "1", "oneway": "yes"}, True, 8.3),  # no CBD floor: the carriageway's own
+    ({"highway": "trunk", "lanes": "3", "oneway": "yes", "maxspeed": "60"}, False, 3 * 3.5 + 0.9),  # its lanes' floor
+    ({"highway": "primary", "oneway": "yes", "width": "9"}, False, 9.0 + 0.9),  # a `width` tag still wins
+])
+def test_one_carriageway_of_a_divided_road_is_drawn_as_the_carriageway(tags, cbd, expected):
+    assert kerbs.kerb_to_kerb(tags, section.width_from_tags(tags)[0], cbd, divided=True) == pytest.approx(expected)
+
+
 def test_kerb_to_kerb_is_never_narrower_than_the_road_was():
     assert kerbs.kerb_to_kerb({"highway": "residential", "width": "11"}, 5.8, False) == pytest.approx(11.0)
     assert kerbs.kerb_to_kerb({"highway": "residential"}, 9.0, False) == pytest.approx(9.9)  # 9 m plus two channels
@@ -166,6 +179,90 @@ def test_the_rule_meets_the_held_out_streets_measured_medians():
         assert abs(median - v["measured_median"]) <= 0.7, (c, median, v["measured_median"])
         tested += 1
     assert tested == 3  # local, tertiary, secondary
+
+
+@pytest.mark.parametrize("subset", ["divided_carriageway", "one_way_local"])
+def test_the_rule_meets_the_held_out_carriageways_and_one_way_streets(subset):
+    """The held-out divided carriageways (where the median's kerb was measured, not the far carriageway's) and one-way
+    local streets (28 Nov 2026): the rule's median within 1.0 m of the measured, where the old rule was 5.0 and 1.6 m
+    off. Under a kilometre each, so a looser bound than the classes'."""
+    import json
+    from pathlib import Path
+
+    data = json.loads((Path(__file__).parent / "data" / "kerb_widths_holdout.json").read_text())["subsets"][subset]
+    kk, m = np.array([(kerbs.kerb_to_kerb(g["tags"], section.width_from_tags(g["tags"])[0], g["cbd"],
+                                          data["divided"]), g["metres"]) for g in data["groups"]]).T
+    order = np.argsort(kk)
+    median = kk[order][np.searchsorted(np.cumsum(m[order]), m.sum() / 2)]
+    assert abs(median - data["measured_median"]) <= 1.0, (median, data["measured_median"])
+
+
+def test_a_divided_run_is_kerbed_at_the_carriageways_width():
+    tags = {"highway": "primary", "lanes": "2", "oneway": "yes", "name": "Long Road"}
+    plain, divided = plan_of(tags), plan_of(tags, divided_runs=[True])
+    assert (divided.half["L"][500] + kerbs.CHANNEL_M) * 2 == pytest.approx(kerbs.DIVIDED_KERB_TO_KERB_M)
+    assert (plain.half["L"][500] + kerbs.CHANNEL_M) * 2 == pytest.approx(12.8)
+    assert divided.summary["divided_m"] == divided.summary["kerbed_m"] and "divided_m" not in plain.summary
+
+
+def _carriageways(other: str | None = "opposite", gap_deg: float = 0.00018, name: str = "Long Road",
+                  two_way: bool = False):
+    """Long Road one way east for 1 km, and its other carriageway 20 m north: one way west (`opposite`), east
+    (`same`), or none."""
+    from pyproj import Transformer
+
+    from mapcreator.providers.osm import graph
+
+    to_xy = Transformer.from_crs(4326, 28355, always_xy=True)
+    lat = -42.8
+    nodes = [{"type": "node", "id": i, "lon": 147.300 + 0.001 * i, "lat": lat} for i in range(13)]
+    ways = [{"type": "way", "id": 1, "nodes": list(range(13)),
+             "tags": {"highway": "primary", "name": "Long Road", **({} if two_way else {"oneway": "yes"})}}]
+    if other:
+        nodes += [{"type": "node", "id": 100 + i, "lon": 147.300 + 0.001 * i, "lat": lat + gap_deg} for i in range(13)]
+        order = [100 + i for i in (reversed(range(13)) if other == "opposite" else range(13))]
+        ways.append({"type": "way", "id": 2, "nodes": order,
+                     "tags": {"highway": "primary", "name": name, "oneway": "yes"}})
+    g = graph.build({"elements": nodes + ways}, to_xy)
+    route = graph.route(g, np.column_stack(to_xy.transform([147.3005, 147.3115], [lat, lat])))
+    return g, route
+
+
+@pytest.mark.parametrize("kw, expected", [
+    ({}, True),  # the same name, one way the other way, 20 m off
+    ({"other": "same"}, False),  # one way the same way: two one-way streets, or a slip lane
+    ({"other": None}, False),  # a one-way street
+    ({"name": "Short Road"}, False),  # another road's
+    ({"gap_deg": 0.0006}, False),  # 67 m off: further than DIVIDED_M
+    ({"two_way": True}, False),  # the route's own road two-way: not a carriageway
+])
+def test_a_divided_roads_carriageway_is_found_by_the_route_stage(kw, expected):
+    from mapcreator.core import signs
+    from mapcreator.pipeline import route_stage
+
+    g, route = _carriageways(**kw)
+    tags = route.ways[int(route.seg_way[0])]["tags"]
+    assert signs.divided_carriageway(g, route.xy, tags) is expected
+    (run,) = route_stage.runs(route, g)
+    assert run.get("divided", False) is expected
+
+
+# -- the build's log ---------------------------------------------------------------------------------------------------
+
+def test_the_kerb_summary_is_one_line_for_the_log():
+    summary = {"kerbed_m": 2287.0, "kerb_to_kerb_m": {"median": 15.8, "p10": 12.1, "p90": 18.9},
+               "council": ["hobart"], "council_lines": "ok", "council_bare_m": {"L": 104.0, "R": 0.0},
+               "footpath_source_m": {"parcels": 2724.0, "standard": 1056.0}, "parcels": "ok", "divided_m": 310.0}
+    assert kerbs.summary_line(summary) == (
+        "kerbs: kerbed 2287 m, kerb to kerb median 15.8 m (p10 12.1, p90 18.9), divided carriageways 310 m, council "
+        "hobart (ok), bare L 104 m / R 0 m, footpath sides from parcels 2724 m, standard widths 1056 m (parcels ok)")
+    rules = {"kerbed_m": 400.0, "kerb_to_kerb_m": {"median": 8.0, "p10": 8.0, "p90": 8.0}, "council_lines": "none",
+             "footpath_source_m": {"parcels": 0.0, "standard": 800.0}, "parcels": "none"}
+    assert kerbs.summary_line(rules) == (
+        "kerbs: kerbed 400 m, kerb to kerb median 8.0 m (p10 8.0, p90 8.0), council none (none), footpath sides from "
+        "parcels 0 m, standard widths 800 m (parcels none)")
+    assert kerbs.summary_line({"kerbed_m": 0.0, "off": "job"}) == "kerbs: kerbed 0 m (off: job)"
+    assert kerbs.summary_line({"kerbed_m": 0.0, "rule_m": 0.0}) == "kerbs: kerbed 0 m (no town stretch)"
 
 
 def test_the_road_widens_to_kerb_to_kerb_easing_in_and_is_unchanged_outside():
@@ -510,7 +607,37 @@ def test_no_footprints_means_no_kerbs_and_the_build_goes_on(tmp_path, caplog):
     assert not _section_kerbs(tmp_path, _Region(), "none").any()
 
 
+def test_the_section_stage_logs_the_kerb_summary_in_one_info_line(tmp_path, caplog):
+    houses = [shapely.box(x, 15, x + 8, 25) for x in np.arange(300, 700, 12)]
+    with caplog.at_level("INFO", logger="mapcreator.pipeline.section_stage"):
+        p = _section_kerbs(tmp_path, _Region(buildings=lambda b, st: houses))
+    lines = [r for r in caplog.records if r.getMessage().startswith("kerbs: ")]
+    assert len(lines) == 1 and lines[0].levelname == "INFO"
+    assert lines[0].getMessage() == kerbs.summary_line(p.summary)
+    assert lines[0].getMessage().startswith(f"kerbs: kerbed {p.summary['kerbed_m']:.0f} m, kerb to kerb median 8.0 m")
+    assert "council none (none)" in lines[0].getMessage() and "(parcels none)" in lines[0].getMessage()
+    caplog.clear()
+    with caplog.at_level("INFO", logger="mapcreator.pipeline.section_stage"):
+        _section_kerbs(tmp_path, _Region(), "none")
+    assert [r.getMessage() for r in caplog.records] == ["kerbs: kerbed 0 m (off: job)"]
+
+
 # -- the safety net before validation ----------------------------------------------------------------------------------
+
+def test_a_point_under_a_large_road_triangle_crowded_by_small_ones_is_on_the_road():
+    """A large triangle's centroid can be further from a point it holds than 16 small triangles' are (a wide half
+    beside a narrow one): the road surface looks further (`validate.NEAR_TRIANGLES`)."""
+    big = np.array([[0.0, 1.0, 0.0], [100.0, 1.0, 0.0], [0.0, 1.0, 100.0]], np.float32)
+    small = np.array([[[3.0 + 0.2 * i, 1.0, 3.0], [3.1 + 0.2 * i, 1.0, 3.0], [3.0 + 0.2 * i, 1.0, 3.1]]
+                      for i in range(30)], np.float32)
+    nodes = [{"class": 2, "name": "1ROAD_000", "vertices": {"pos": big}, "indices": np.array([0, 1, 2])},
+             {"class": 2, "name": "1ROAD_001", "vertices": {"pos": small.reshape(-1, 3)},
+              "indices": np.arange(90)}]
+    road = validate.RoadSurface(nodes)
+    assert road._inside(np.array([[2.0, 2.0]]), 16).tolist() == [False]  # the 16 nearest are the small ones
+    assert road.covers(np.array([[2.0, 2.0], [200.0, 200.0]])).tolist() == [True, False]
+    assert road.height(2.0, 2.0) == pytest.approx(1.0)
+
 
 def _road_square(frame, x0=0.0, x1=40.0, y0=-4.0, y1=4.0):
     from mapcreator.core.scene import Mesh
@@ -546,9 +673,12 @@ def test_a_tree_or_post_collider_on_the_road_is_dropped_and_the_rest_kept(tmp_pa
     assert [d["what"] for d in dropped] == ["signal and blade post"] and [m.name for m in kept] == ["1ROAD_000"]
     # The track stage logs each, and its tree leaves the Tree FX list.
     scene = Scene(frame=frame, meshes=[road, trunks])
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("INFO"):
         out = track_stage._drop_colliders_on_road([scene])
     assert len(out) == 2 and "tree collider dropped: it stood on the road" in caplog.text and "MGA" in caplog.text
+    warned = [r for r in caplog.records if r.levelname == "WARNING"]
+    counted = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+    assert len(warned) == 2 and counted == ["colliders dropped: 2 (tree 2)"]  # a warning each, and the count
     from mapcreator.pipeline import scenery_stage
     from mapcreator.pipeline.workdir import WorkDir
 

@@ -256,6 +256,17 @@ ATTRIBUTIONS = "attributions.json"
 
 def _kerbs(job: Job, settings: Settings, region, work: WorkDir, c, runs: list[dict], half: np.ndarray,
            unsealed: np.ndarray) -> kerbs_core.Plan:
+    """`_plan_kerbs`, and its summary in one INFO line of the build's log (`core.kerbs.summary_line`): the work folder
+    holding kerbs.json is deleted when a production job ends, and its log is kept."""
+    import logging
+
+    p = _plan_kerbs(job, settings, region, work, c, runs, half, unsealed)
+    logging.getLogger(__name__).info("%s", kerbs_core.summary_line(p.summary))
+    return p
+
+
+def _plan_kerbs(job: Job, settings: Settings, region, work: WorkDir, c, runs: list[dict], half: np.ndarray,
+                unsealed: np.ndarray) -> kerbs_core.Plan:
     """The town stretches' kerbs and footpaths (`core.kerbs.plan`), from the region's building footprints and land
     parcels. Writes kerbs.json and the sources' credits (attributions.json). Without footprints (none for the region, or
     they can't be read) there's no telling a town, so nothing is kerbed; without parcels, footpaths take the standard
@@ -335,7 +346,8 @@ def _kerbs(job: Job, settings: Settings, region, work: WorkDir, c, runs: list[di
 
     p = kerbs_core.plan(c["s"], c["xy"], c["heading"], c["run"], [r["tags"] for r in runs], half, half,
                         unsealed=unsealed, blocked=blocked, centroids=centroids, buildings=footprints,
-                        parcels=parcels, reversed_runs=[bool(r.get("reversed")) for r in runs], council=council)
+                        parcels=parcels, reversed_runs=[bool(r.get("reversed")) for r in runs], council=council,
+                        divided_runs=[bool(r.get("divided")) for r in runs])
     p.summary["parcels"] = state["parcels"]
     p.summary["council_lines"] = state.get("council", "none")
     if p.council:

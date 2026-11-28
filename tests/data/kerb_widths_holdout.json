@@ -1,5 +1,5 @@
 {
- "about": "Kerb to kerb (kerb face to kerb face, metres) measured every 2 m along OSM town roads against the councils' kerb lines, on the 30% of streets held out of the rule's fit (25 Nov 2026). Aggregates only. Derived from City of Hobart Road Formation (CC BY 4.0), Glenorchy City Council Kerbs (CC BY 3.0 AU), OpenStreetMap (ODbL) and theLIST's building footprints and parcels (CC BY 3.0 AU).",
+ "about": "Kerb to kerb (kerb face to kerb face, metres) measured every 2 m along OSM town roads against the councils' kerb lines, on the 30% of streets held out of the rule's fit (25 Nov 2026). Aggregates only. Derived from City of Hobart Road Formation (CC BY 4.0), Glenorchy City Council Kerbs (CC BY 3.0 AU), OpenStreetMap (ODbL) and theLIST's building footprints and parcels (CC BY 3.0 AU). `subsets` (28 Nov 2026): the held-out stations on one carriageway of a divided road (core.signs.divided_carriageway) where the median's kerb was found before the other carriageway's centreline, and on one-way local streets.",
  "classes": {
   "local": {
    "metres": 73500.0,
@@ -337,5 +337,90 @@
    "cbd": false,
    "metres": 22.0
   }
- ]
+ ],
+ "subsets": {
+  "divided_carriageway": {
+   "divided": true,
+   "metres": 894.0,
+   "measured_median": 7.79,
+   "groups": [
+    {
+     "tags": {
+      "highway": "residential",
+      "oneway": "yes"
+     },
+     "cbd": false,
+     "metres": 410.0
+    },
+    {
+     "tags": {
+      "highway": "primary",
+      "lanes": "2",
+      "oneway": "yes"
+     },
+     "cbd": false,
+     "metres": 130.0
+    },
+    {
+     "tags": {
+      "highway": "trunk",
+      "lanes": "2",
+      "oneway": "yes"
+     },
+     "cbd": false,
+     "metres": 126.0
+    },
+    {
+     "tags": {
+      "highway": "secondary",
+      "lanes": "1",
+      "oneway": "yes"
+     },
+     "cbd": false,
+     "metres": 124.0
+    },
+    {
+     "tags": {
+      "highway": "primary",
+      "lanes": "2",
+      "oneway": "yes"
+     },
+     "cbd": true,
+     "metres": 82.0
+    },
+    {
+     "tags": {
+      "highway": "trunk",
+      "lanes": "1",
+      "oneway": "yes"
+     },
+     "cbd": false,
+     "metres": 22.0
+    }
+   ]
+  },
+  "one_way_local": {
+   "divided": false,
+   "metres": 674.0,
+   "measured_median": 6.44,
+   "groups": [
+    {
+     "tags": {
+      "highway": "residential",
+      "oneway": "yes"
+     },
+     "cbd": false,
+     "metres": 626.0
+    },
+    {
+     "tags": {
+      "highway": "living_street",
+      "oneway": "yes"
+     },
+     "cbd": false,
+     "metres": 48.0
+    }
+   ]
+  }
+ }
 }
